@@ -427,6 +427,12 @@ async function repairAgentManagerHarnessSchema(client: QueryableClient) {
     )
   `);
   await client.query('CREATE INDEX IF NOT EXISTS lead_outbox_status_next_attempt_idx ON lead_outbox(status, next_attempt_at)');
+  await client.query(`ALTER TABLE lead_outbox
+    ADD COLUMN IF NOT EXISTS lease_token uuid,
+    ADD COLUMN IF NOT EXISTS leased_until timestamptz,
+    ADD COLUMN IF NOT EXISTS first_attempt_at timestamptz,
+    ADD COLUMN IF NOT EXISTS request_snapshot jsonb,
+    ADD COLUMN IF NOT EXISTS provider_operation_id text`);
   await client.query('ALTER TABLE leads ADD COLUMN IF NOT EXISTS client_lead_id uuid');
   await client.query('ALTER TABLE leads ADD COLUMN IF NOT EXISTS client_request_hash text');
   await client.query(`

@@ -191,14 +191,23 @@ function leadText(
   return lines.join('\n');
 }
 
-export async function sendLeadEmail(
+export interface LeadEmailRequestSnapshot {
+  version: 1;
+  url: string;
+  method: string;
+  body: string;
+  idempotencyKey: string;
+  provider: 'resend' | 'other';
+}
+
+export function prepareLeadEmailRequest(
   lead: Lead,
   context: {
     session?: ConversationSession | null;
     messages?: Message[];
     handoff?: EmailHandoffContext | null;
   } = {}
-): Promise<EmailResult> {
+): LeadEmailRequestSnapshot | EmailResult {
   if (!config.EMAIL_HTTP_URL) {
     return { ok: false, skipped: true, error: 'EMAIL_HTTP_URL is not configured' };
   }
@@ -209,19 +218,10 @@ export async function sendLeadEmail(
     return { ok: false, error: 'EMAIL_FROM and LEADS_TO_EMAIL are required' };
   }
 
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), config.EMAIL_HTTP_TIMEOUT_MS);
-  const headers: Record<string, string> = {
-    'content-type': 'application/json',
-    'Idempotency-Key': `bakaut-lead-${lead.id}`
-  };
-
-  if (config.EMAIL_HTTP_AUTH_HEADER) {
-    const [name, ...valueParts] = config.EMAIL_HTTP_AUTH_HEADER.split(':');
-    if (name && valueParts.length) headers[name.trim()] = valueParts.join(':').trim();
+  const destination = new URL(config.EMAIL_HTTP_URL);
+  if (destination.username || destination.password || destination.search) {
+    return { ok: false, error: 'Email destination must not embed credentials or query parameters' };
   }
-
-  try {
     const conversation = context.session
       ? {
           id: context.session.id,
@@ -257,11 +257,30 @@ export async function sendLeadEmail(
           text
         };
 
-    const response = await fetch(config.EMAIL_HTTP_URL, {
-      method: config.EMAIL_HTTP_METHOD,
+  return {version: 1, url: config.EMAIL_HTTP_URL, method: config.EMAIL_HTTP_METHOD,
+    body: JSON.stringify(body), idempotencyKey: `bakaut-lead-${lead.id}`,
+    provider: isResendEndpoint(config.EMAIL_HTTP_URL) ? 'resend' : 'other'};
+}
+
+export async function sendPreparedLeadEmail(snapshot: LeadEmailRequestSnapshot): Promise<EmailResult> {
+  // A changed destination requires reconciliation, not forwarding current credentials
+  // to the old endpoint or silently changing an already attempted request.
+  if (snapshot.url !== config.EMAIL_HTTP_URL || snapshot.method !== config.EMAIL_HTTP_METHOD) {
+    return {ok: false, skipped: true, error: 'email_destination_changed'};
+  }
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), config.EMAIL_HTTP_TIMEOUT_MS);
+  const headers: Record<string, string> = {'content-type': 'application/json', 'Idempotency-Key': snapshot.idempotencyKey};
+  if (config.EMAIL_HTTP_AUTH_HEADER) {
+    const [name, ...valueParts] = config.EMAIL_HTTP_AUTH_HEADER.split(':');
+    if (name && valueParts.length) headers[name.trim()] = valueParts.join(':').trim();
+  }
+  try {
+    const response = await fetch(snapshot.url, {
+      method: snapshot.method,
       headers,
       signal: controller.signal,
-      body: JSON.stringify(body)
+      body: snapshot.body
     });
     const textResponse = await response.text();
     let parsed: unknown = textResponse;
@@ -276,4 +295,9 @@ export async function sendLeadEmail(
   } finally {
     clearTimeout(timeout);
   }
+}
+
+export async function sendLeadEmail(lead: Lead, context: Parameters<typeof prepareLeadEmailRequest>[1] = {}): Promise<EmailResult> {
+  const prepared = prepareLeadEmailRequest(lead, context);
+  return 'version' in prepared ? sendPreparedLeadEmail(prepared) : prepared;
 }

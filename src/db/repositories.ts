@@ -518,6 +518,11 @@ export interface LeadOutboxItem {
   payload: Record<string, unknown>;
   status: string;
   attemptCount: number;
+  leaseToken?: string | null;
+  leasedUntil?: string | null;
+  firstAttemptAt?: string | null;
+  requestSnapshot?: import('../email/httpEmail.js').LeadEmailRequestSnapshot | null;
+  providerOperationId?: string | null;
   nextAttemptAt?: string | null;
   lastError?: string | null;
   createdAt: string;
@@ -534,6 +539,11 @@ function mapLeadOutboxItem(row: QueryResultRow): LeadOutboxItem {
     payload: row.payload ?? {},
     status: row.status,
     attemptCount: Number(row.attempt_count ?? 0),
+    leaseToken: row.lease_token ?? null,
+    leasedUntil: row.leased_until ? isoTimestamp(row.leased_until) : null,
+    firstAttemptAt: row.first_attempt_at ? isoTimestamp(row.first_attempt_at) : null,
+    requestSnapshot: row.request_snapshot ?? null,
+    providerOperationId: row.provider_operation_id ?? null,
     nextAttemptAt: row.next_attempt_at ? row.next_attempt_at.toISOString() : null,
     lastError: row.last_error ?? null,
     createdAt: row.created_at.toISOString(),
@@ -4377,7 +4387,7 @@ export class LeadRepository {
              AND (next_attempt_at IS NULL OR next_attempt_at <= now())
            ) OR (
              status = 'sending'
-             AND updated_at < now() - interval '15 minutes'
+             AND COALESCE(leased_until, updated_at + interval '15 minutes') <= now()
            )
          ORDER BY created_at ASC
          LIMIT $1
@@ -4385,6 +4395,8 @@ export class LeadRepository {
        )
        UPDATE lead_outbox o
        SET status = 'sending',
+           lease_token = gen_random_uuid(),
+           leased_until = now() + interval '15 minutes',
            attempt_count = o.attempt_count + 1,
            updated_at = now()
        FROM due
@@ -4395,30 +4407,52 @@ export class LeadRepository {
     return result.rows.map(mapLeadOutboxItem);
   }
 
-  async markLeadOutboxSent(id: string) {
+  async prepareLeadOutboxDispatch(input: {
+    id: string; leaseToken: string;
+    snapshot: import('../email/httpEmail.js').LeadEmailRequestSnapshot;
+  }) {
+    const result = await this.db.query(`UPDATE lead_outbox
+      SET request_snapshot = COALESCE(request_snapshot, $3::jsonb),
+          first_attempt_at = COALESCE(first_attempt_at, now()), updated_at = now()
+      WHERE id = $1 AND lease_token = $2 AND status = 'sending' AND leased_until > now()
+      RETURNING *`, [input.id, input.leaseToken, JSON.stringify(input.snapshot)]);
+    return result.rowCount ? mapLeadOutboxItem(result.rows[0]) : null;
+  }
+
+  async markLeadOutboxSent(id: string, leaseToken: string, providerResponse: Record<string, unknown> = {}) {
     const result = await this.db.query(
-      `UPDATE lead_outbox
+      `WITH completed AS (UPDATE lead_outbox
        SET status = 'sent',
+           provider_operation_id = $3::jsonb->'response'->>'id',
            last_error = NULL,
            next_attempt_at = NULL,
+           leased_until = NULL,
            updated_at = now()
-       WHERE id = $1
-       RETURNING *`,
-      [id]
+       WHERE id = $1 AND lease_token = $2 AND status = 'sending' AND leased_until > now()
+       RETURNING *), updated_lead AS (
+         UPDATE leads SET status = 'sent_email', email_provider_response = $3::jsonb,
+           sent_at = COALESCE(sent_at, now())
+         FROM completed WHERE leads.id = completed.lead_id RETURNING leads.id
+       ) SELECT completed.* FROM completed JOIN updated_lead ON updated_lead.id = completed.lead_id`,
+      [id, leaseToken, JSON.stringify(providerResponse)]
     );
     return result.rowCount ? mapLeadOutboxItem(result.rows[0]) : null;
   }
 
-  async markLeadOutboxFailed(input: { id: string; error: string; nextAttemptAt?: string | null; dead?: boolean }) {
+  async markLeadOutboxFailed(input: { id: string; leaseToken: string; error: string; nextAttemptAt?: string | null; dead?: boolean }) {
     const result = await this.db.query(
-      `UPDATE lead_outbox
+      `WITH completed AS (UPDATE lead_outbox
        SET status = $2,
            last_error = $3,
            next_attempt_at = $4::timestamptz,
+           leased_until = NULL,
            updated_at = now()
-       WHERE id = $1
-       RETURNING *`,
-      [input.id, input.dead ? 'dead' : 'failed', input.error, input.nextAttemptAt ?? null]
+       WHERE id = $1 AND lease_token = $5 AND status = 'sending' AND leased_until > now()
+       RETURNING *), updated_lead AS (
+         UPDATE leads SET status = CASE WHEN leads.status = 'sent_email' THEN leads.status ELSE 'email_failed' END
+         FROM completed WHERE leads.id = completed.lead_id RETURNING leads.id
+       ) SELECT completed.* FROM completed JOIN updated_lead ON updated_lead.id = completed.lead_id`,
+      [input.id, input.dead ? 'dead' : 'failed', input.error, input.nextAttemptAt ?? null, input.leaseToken]
     );
     return result.rowCount ? mapLeadOutboxItem(result.rows[0]) : null;
   }
@@ -4430,9 +4464,10 @@ export class LeadRepository {
          count(*) FILTER (WHERE status = 'sending')::int AS sending,
          count(*) FILTER (WHERE status = 'failed')::int AS failed,
          count(*) FILTER (WHERE status = 'dead')::int AS dead,
+         count(*) FILTER (WHERE status = 'dead' AND last_error LIKE 'reconciliation_required:%')::int AS reconciliation_required,
          count(*) FILTER (
            WHERE status = 'sending'
-             AND updated_at < now() - interval '15 minutes'
+             AND COALESCE(leased_until, updated_at + interval '15 minutes') <= now()
          )::int AS stale_sending,
          min(created_at) FILTER (WHERE status IN ('pending', 'failed', 'sending')) AS oldest_backlog_at,
          max(updated_at) FILTER (WHERE status = 'sent') AS last_sent_at
@@ -4450,6 +4485,7 @@ export class LeadRepository {
       sending,
       failed,
       dead,
+      reconciliationRequired: Number(row.reconciliation_required ?? 0),
       staleSending,
       oldestBacklogAt: row.oldest_backlog_at ? isoTimestamp(row.oldest_backlog_at) : null,
       lastSentAt: row.last_sent_at ? isoTimestamp(row.last_sent_at) : null
