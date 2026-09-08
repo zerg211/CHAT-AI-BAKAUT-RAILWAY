@@ -5,6 +5,20 @@ import type {VerifiedSitePrice} from '../src/catalog/currentSitePrice';
 const product:Product={id:'fixture',name:'Model A',sourceUrl:'https://fixture.invalid/a',technicalVersion:'v1',price:10,specs:{}};
 const proof:VerifiedSitePrice={productId:product.id,productName:product.name,previousPrice:10,price:12,currency:'RUB',sourceUrl:product.sourceUrl!,observedAt:'2026-09-08T12:00:00Z',evidence:'12 RUB'};
 describe('concurrent price verification',()=>{
+  it('reuses only fresh exact proofs without sliding their verification timestamp',async()=>{
+    let now=Date.parse(proof.observedAt);
+    const read=vi.fn(async()=>({...proof,observedAt:new Date(now).toISOString()}));
+    const broker=singleflightPriceReader(read,()=>'',{ttlMs:10_000,now:()=>now});
+    const initial=await broker(product);now+=9000;
+    expect((await broker(product)).observedAt).toBe(initial.observedAt);expect(read).toHaveBeenCalledTimes(1);
+    now+=1000;await broker(product);expect(read).toHaveBeenCalledTimes(2);
+    await broker({...product,sourceContentHash:'new'});expect(read).toHaveBeenCalledTimes(3);
+  });
+  it.each(['not-a-date','2099-01-01T00:00:00Z'])('does not cache invalid or future verification time: %s',async observedAt=>{
+    const read=vi.fn(async()=>({...proof,observedAt}));
+    const broker=singleflightPriceReader(read,()=>'',{ttlMs:10_000,now:()=>Date.parse(proof.observedAt)});
+    await broker(product);await broker(product);expect(read).toHaveBeenCalledTimes(2);
+  });
   it('shares the network read without letting one subscriber cancel another',async()=>{
     let release!:(value:VerifiedSitePrice)=>void;
     const read=vi.fn(()=>new Promise<VerifiedSitePrice>(resolve=>{release=resolve;}));

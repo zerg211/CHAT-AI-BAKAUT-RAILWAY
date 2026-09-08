@@ -57,4 +57,4 @@ async function fetchCurrentSitePrice(product: Product): Promise<VerifiedSitePric
   return price;
 }
 
-export const readCurrentSitePrice=singleflightPriceReader(fetchCurrentSitePrice,()=>config.CATALOG_BASE_URL);
+export const readCurrentSitePrice=singleflightPriceReader(fetchCurrentSitePrice,()=>config.CATALOG_BASE_URL,{ttlMs:10_000});
