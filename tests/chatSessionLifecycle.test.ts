@@ -205,6 +205,28 @@ describe('session-scoped chat route capability', () => {
     }));
   });
 
+  it('does not replay an action-bearing generation when a later stage fails', async () => {
+    const { app, conversations, assistant } = await buildApp();
+    conversations.updateTurn.mockResolvedValue(null);
+    conversations.createTurnWithUserMessage.mockResolvedValue({
+      id: turnId, deadlineAt: new Date(Date.now() + 60_000).toISOString()
+    });
+    let committedActions = 0;
+    assistant.generateAnswer.mockImplementation(async () => {
+      committedActions += 1;
+      throw new Error('provider timeout after action commit');
+    });
+    const response = await app.inject({
+      method: 'POST', url: `/api/chat/sessions/${sessionId}/messages`,
+      headers: { 'x-bakaut-visitor-id': visitorId }, payload: { message: 'Продолжить согласованное действие' }
+    });
+    expect(response.statusCode).toBe(200);
+    expect(committedActions).toBe(1);
+    expect(assistant.generateAnswer).toHaveBeenCalledTimes(1);
+    expect(assistant.recoverTurn).not.toHaveBeenCalled();
+    expect(response.body).toContain('event: error');
+  });
+
   it('returns the same non-disclosing 404 when atomic message acceptance loses the session race', async () => {
     const { app, conversations, assistant } = await buildApp();
     conversations.createTurnWithUserMessage.mockRejectedValue(new ConversationSessionUnavailableError());
