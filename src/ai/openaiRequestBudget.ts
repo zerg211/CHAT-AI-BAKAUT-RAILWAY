@@ -82,6 +82,8 @@ export function estimateProviderUsageCostUsd(input: {
   outputTokens: number | null | undefined;
   hostedToolCostUsd?: number;
 }) {
+  // Missing provider usage is unknown, not a zero-token response.
+  if (input.inputTokens == null || input.outputTokens == null) return null;
   const inputTokens = Number(input.inputTokens);
   const outputTokens = Number(input.outputTokens);
   if (!Number.isFinite(inputTokens) || !Number.isFinite(outputTokens) || inputTokens < 0 || outputTokens < 0) {

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   extractOpenAIUsage,
+  estimateRecordedUsageCost,
   requestSourceFromContext,
   runWithOpenAIUsageContext,
   currentOpenAIUsageContext
@@ -42,9 +43,26 @@ describe('OpenAI usage guard', () => {
       }
     })).toEqual({
       inputTokens: 100,
+      cachedInputTokens: null,
       outputTokens: 40,
       reasoningTokens: 12,
       totalTokens: 140
     });
+  });
+
+  it('records standard cached-token pricing separately from reservation ceilings', () => {
+    expect(estimateRecordedUsageCost('gpt-5.6-luna', {
+      service_tier: 'default',
+      usage: { input_tokens: 1000, input_tokens_details: { cached_tokens: 500 }, output_tokens: 100 }
+    })).toMatchObject({ costUsd: 0.00023, costBasis: 'standard_token_rate_estimate', cachedInputTokens: 500 });
+  });
+
+  it('does not invent standard prices for missing usage, missing cache or unsupported tiers', () => {
+    for (const response of [ {}, { usage: { input_tokens: null, output_tokens: 0 } },
+      { service_tier: 'default', usage: { input_tokens: 100, output_tokens: 10 } },
+      { service_tier: 'priority', usage: { input_tokens: 100, input_tokens_details: { cached_tokens: 0 }, output_tokens: 10 } }
+    ]) expect(estimateRecordedUsageCost('gpt-5.6-luna', response).costUsd).toBeNull();
+    expect(extractOpenAIUsage({usage: {input_tokens: null, output_tokens: -1, total_tokens: false}}))
+      .toMatchObject({inputTokens: null, outputTokens: null, totalTokens: null});
   });
 });

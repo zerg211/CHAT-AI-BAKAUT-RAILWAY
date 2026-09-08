@@ -124,6 +124,18 @@ describe('OpenAI request budget estimation', () => {
     })).toThrowError(new ProviderBudgetEstimationError('provider_pricing_unknown'));
   });
 
+  it.each([null, undefined])('keeps missing usage (%s) distinct from zero cost', (missing) => {
+    expect(estimateProviderUsageCostUsd({
+      model: 'gpt-5.6-luna', inputTokens: missing, outputTokens: 0
+    })).toBeNull();
+    expect(estimateProviderUsageCostUsd({
+      model: 'gpt-5.6-luna', inputTokens: 0, outputTokens: missing
+    })).toBeNull();
+    expect(estimateProviderUsageCostUsd({
+      model: 'gpt-5.6-luna', inputTokens: 0, outputTokens: 0
+    })).toBe(0);
+  });
+
   it.each([
     ['missing', undefined],
     ['zero', 0],
