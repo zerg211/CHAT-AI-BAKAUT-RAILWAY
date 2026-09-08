@@ -6,6 +6,7 @@ export interface QualityAuditTurn {
   resolutionStatus?:'resolved'|'unresolved'|'unknown';
   recoveryAttempts?:number|null; serverAnswerMs?:number|null; knowledgeReuseHits?:number|null;
   firstUsefulContentMs?:number|null;
+  autonomyObservations?:Array<{eventType:string;round?:number|null;action?:string|null;stopReason?:string|null}>;
   tools:Array<{tool:string;status:string;priceUnavailable?:boolean}>; reviewIssues:string[];
 }
 
@@ -58,12 +59,40 @@ export function buildDialogueQualityAudit(rows:QualityAuditTurn[],input:{hours:n
     return {sampleCount:present.length,turnDenominator:rows.length,total:present.length?present.reduce((sum,n)=>sum+n,0):null};};
   const answerTimes=rows.map(row=>finiteNumber(row.serverAnswerMs)).filter((n):n is number=>n!==null&&n>=0).sort((a,b)=>a-b);
   const deliveryTimes=rows.map(row=>finiteNumber(row.firstUsefulContentMs)).filter((n):n is number=>n!==null&&n>=0&&n<=600_000).sort((a,b)=>a-b);
+  const stopCodes=new Set(['continuation_requires_read_only','continuation_round_limit','continuation_budget_reserve',
+    'answer_time_reserve','invalid_continuation','observation_failed','wall_time_budget_exceeded',
+    'model_call_budget_exceeded','provider_call_budget_exceeded','tool_call_budget_exceeded','web_call_budget_exceeded',
+    'tool_result_budget_exceeded','provider_input_token_budget_exceeded','provider_output_token_budget_exceeded',
+    'provider_total_token_budget_exceeded','estimated_cost_budget_exceeded']);
+  let observedTurnCount=0,decisionRoundCount=0,stoppedTurnCount=0,roundLimitTurnCount=0;
+  const stops=new Map<string,number>();
+  for(const row of rows){
+    const observations=(row.autonomyObservations??[]).filter(item=>
+      item.eventType==='autonomy_decision'||item.eventType==='observation_cycle_stopped');
+    if(!observations.length)continue;
+    observedTurnCount++;
+    const rounds=new Set<number>(),reasons=new Set<string>();
+    for(const item of observations){
+      if(item.eventType==='autonomy_decision'&&typeof item.round==='number'&&Number.isSafeInteger(item.round)&&item.round>0)rounds.add(item.round);
+      if(item.stopReason)reasons.add(stopCodes.has(item.stopReason)?item.stopReason:'unclassified');
+      else if(item.eventType==='observation_cycle_stopped')reasons.add('unclassified');
+    }
+    decisionRoundCount+=rounds.size;
+    if(reasons.size)stoppedTurnCount++;
+    if(reasons.has('continuation_round_limit'))roundLimitTurnCount++;
+    for(const reason of reasons)stops.set(reason,(stops.get(reason)??0)+1);
+  }
   return {schemaVersion:'dialogue-quality-audit-v1',generatedAt:now.toISOString(),windowHours:input.hours,limit:input.limit,
     possiblyTruncated:rows.length>=input.limit,turnCount:rows.length,answerCount:rows.filter(r=>r.hasAnswer).length,
     latency:{sampleCount:durations.length,medianMs:percentile(durations,.5),p95Ms:percentile(durations,.95)},
     outcomes:{confirmedDenominator:resolvedConversationCount+unresolvedConversationCount,
       resolvedRate:resolvedConversationCount+unresolvedConversationCount?resolvedConversationCount/(resolvedConversationCount+unresolvedConversationCount):null},
     operations:{recoveryAttempts:measured(rows.map(row=>finiteNumber(row.recoveryAttempts))),
+      autonomy:{observedTurnCount,turnDenominator:rows.length,unobservedTurnCount:rows.length-observedTurnCount,
+        decisionRoundCount:observedTurnCount?decisionRoundCount:null,stoppedTurnCount:observedTurnCount?stoppedTurnCount:null,
+        roundLimitTurnCount:observedTurnCount?roundLimitTurnCount:null,
+        stopReasons:[...stops].map(([reason,turnCount])=>({reason,turnCount})),
+        basis:'observed_trace_rounds_deduplicated_per_turn; missing_traces_not_zero; stops_not_outcome_labels'},
       recoveredTurns:rows.filter(row=>row.recovered).length,turnDenominator:rows.length,
       toolCalls:measured(rows.map(row=>row.tools.length)),
       knowledgeReuse:measured(rows.map(row=>finiteNumber(row.knowledgeReuseHits))),

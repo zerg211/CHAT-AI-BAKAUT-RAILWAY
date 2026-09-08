@@ -702,6 +702,10 @@ export class ConversationRepository {
        CASE WHEN m.id IS NOT NULL THEN extract(epoch FROM (m.created_at-t.created_at))*1000 ELSE NULL END AS "serverAnswerMs",
        (SELECT count(*) FROM agent_traces trace WHERE trace.turn_id=t.id AND trace.event_type='verified_fact_memory_used'
          AND trace.payload->>'attributesCovered'='true') AS "knowledgeReuseHits",
+       coalesce((SELECT jsonb_agg(jsonb_build_object('eventType',trace.event_type,
+         'round',trace.payload->'round','action',trace.payload->'selectedAction','stopReason',trace.payload->'stopReason'))
+         FROM agent_traces trace WHERE trace.turn_id=t.id AND trace.session_id=t.session_id
+           AND trace.event_type IN ('autonomy_decision','observation_cycle_stopped')),'[]'::jsonb) AS "autonomyObservations",
       (SELECT rating FROM assistant_feedback_events WHERE turn_id=t.id ORDER BY created_at DESC LIMIT 1) AS rating,
       coalesce((SELECT jsonb_agg(jsonb_build_object('tool',item->>'tool','status',item->>'status',
         'priceUnavailable',jsonb_path_exists(item,'$.payload.priceVerifications[*] ? (@.status == "unavailable")')))

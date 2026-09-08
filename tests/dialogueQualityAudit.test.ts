@@ -5,6 +5,18 @@ const row=(id:string,overrides:Partial<QualityAuditTurn>={}):QualityAuditTurn=>(
   createdAt:'2026-09-07T11:00:00Z',deadlineAt:'2026-09-07T11:03:00Z',hasAnswer:true,errorCode:null,errorClass:null,
   buildCommit:null,wallTimeMs:40000,modelCalls:4,recovered:false,rating:null,tools:[],reviewIssues:[],...overrides});
 describe('automatic execution audit review queue',()=>{
+  it('counts observed continuation rounds and stopped turns without replay inflation or invented zero coverage',()=>{
+    const decision={eventType:'autonomy_decision',round:2,action:'continue',stopReason:'continuation_round_limit'};
+    const report=buildDialogueQualityAudit([row('a',{autonomyObservations:[decision,decision,
+      {eventType:'observation_cycle_stopped',stopReason:'continuation_round_limit'}]}),row('b'),
+      row('c',{autonomyObservations:[{eventType:'observation_cycle_stopped',stopReason:'private buyer text'}]})],{hours:24,limit:500,now});
+    expect(report.operations.autonomy).toMatchObject({observedTurnCount:2,turnDenominator:3,unobservedTurnCount:1,
+      decisionRoundCount:1,stoppedTurnCount:2,roundLimitTurnCount:1});
+    expect(report.operations.autonomy.stopReasons).toContainEqual({reason:'continuation_round_limit',turnCount:1});
+    expect(JSON.stringify(report)).not.toContain('private buyer text');
+    expect(buildDialogueQualityAudit([row('missing')],{hours:24,limit:500,now}).operations.autonomy.stoppedTurnCount).toBeNull();
+    expect(report.qualityVerdict).toBe('NOT_PROVEN');
+  });
   it('reports client delivery coverage without substituting server duration or missing values',()=>{
     const report=buildDialogueQualityAudit([row('a',{firstUsefulContentMs:1000}),row('b',{firstUsefulContentMs:3000}),row('c')],{hours:24,limit:500,now});
     expect(report.operations.firstUsefulContentMs).toMatchObject({sampleCount:2,turnDenominator:3,medianMs:3000,p95Ms:3000});

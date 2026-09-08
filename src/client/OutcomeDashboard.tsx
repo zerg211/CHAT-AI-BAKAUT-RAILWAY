@@ -37,6 +37,9 @@ export function OutcomeDashboard({baseUrl,token}:{baseUrl:string;token:string}) 
         <tr><th scope="row">Первый полезный текст в видимом виджете, p95</th><td>{number(report.operations.firstUsefulContentMs.p95Ms,' мс')}; измерено {report.operations.firstUsefulContentMs.sampleCount} из {report.operations.firstUsefulContentMs.turnDenominator} ходов</td></tr>
         <tr><th scope="row">Попытки восстановления</th><td>{number(report.operations.recoveryAttempts.total)}</td></tr>
         <tr><th scope="row">Восстановленные ответы</th><td>{report.operations.recoveredTurns} из {report.operations.turnDenominator} ходов</td></tr>
+        <tr><th scope="row">Остановки дополнительной проверки</th><td>{number(report.operations.autonomy.stoppedTurnCount)}; наблюдалось {report.operations.autonomy.observedTurnCount} из {report.operations.autonomy.turnDenominator} ходов</td></tr>
+        <tr><th scope="row">Достигнут предел циклов проверки</th><td>{number(report.operations.autonomy.roundLimitTurnCount)}; это сигнал для разбора, не оценка ответа</td></tr>
+        <tr><th scope="row">Причины остановки проверки</th><td>{report.operations.autonomy.stopReasons.map(item=>`${item.reason}: ${item.turnCount}`).join('; ') || 'Нет наблюдаемых причин'}</td></tr>
         <tr><th scope="row">Использование сохранённых знаний</th><td>{number(report.operations.knowledgeReuse.total)}; измерено ходов: {report.operations.knowledgeReuse.sampleCount}</td></tr>
         <tr><th scope="row">Наблюдаемые дубли отправок</th><td>{number(report.operations.duplicateBusinessActions?.observedDuplicateOperations)}; операций: {number(report.operations.duplicateBusinessActions?.operationDenominator)}; неизвестный исход: {number(report.operations.duplicateBusinessActions?.unknownOperations)}</td></tr>
         <tr><th scope="row">Дубли на 100 операций с полным наблюдением</th><td>{number(report.operations.duplicateBusinessActions?.duplicatesPer100Operations)}</td></tr>

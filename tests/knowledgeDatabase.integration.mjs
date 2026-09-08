@@ -55,6 +55,19 @@ try {
    assert.equal(await conversations.recordAnswerDelivery({sessionId,messageId,firstUsefulContentMs:999}),true);
    const delivered=(await conversations.listQualityAuditTurns(1,500)).find(t=>t.turnId===completeId);
    assert.equal(delivered.firstUsefulContentMs,123);
+   for(const event of ['autonomy_decision','autonomy_decision','observation_cycle_stopped']) {
+    await pool.query(`INSERT INTO agent_traces(session_id,turn_id,phase,event_type,payload)
+      VALUES($1,$2,'tools',$3,$4::jsonb)`,[sessionId,completeId,event,JSON.stringify({round:2,selectedAction:'continue',
+        stopReason:'continuation_round_limit',rationale:'private fixture reasoning'})]);
+   }
+   const traced=(await conversations.listQualityAuditTurns(1,500)).filter(t=>t.sessionId===sessionId);
+   assert.equal(traced.find(t=>t.turnId===completeId).autonomyObservations.length,3);
+   assert.ok(!JSON.stringify(traced).includes('private fixture reasoning'));
+   const autonomy=buildDialogueQualityAudit(traced,{hours:1,limit:500}).operations.autonomy;
+   assert.equal(autonomy.observedTurnCount,1);
+   assert.equal(autonomy.decisionRoundCount,1);
+   assert.equal(autonomy.stoppedTurnCount,1);
+   assert.equal(autonomy.roundLimitTurnCount,1);
   } finally {await pool.query('DELETE FROM conversation_sessions WHERE id=$1',[sessionId]);}
  });
  await run('TECHNICAL_FACT_PUBLISHED_WITH_ORIGINAL_VERIFICATION_TIME',async()=>{
