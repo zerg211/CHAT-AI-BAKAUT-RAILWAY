@@ -3028,6 +3028,7 @@ describe('AgentManager comparison research flow', () => {
 
   it('uses reusable exact web facts before spending another web research call', async () => {
     researchProductComparisonFacts.mockClear();
+    extractCatalogProductComparisonFacts.mockClear();
     const now = new Date(Date.now() - 60 * 60 * 1000).toISOString(); // fresh: inside 90d fact TTL
     class MemoryProducts extends FakeProducts {
       constructor() {
@@ -3159,6 +3160,7 @@ describe('AgentManager comparison research flow', () => {
     });
 
     expect(researchProductComparisonFacts).not.toHaveBeenCalled();
+    expect(extractCatalogProductComparisonFacts).not.toHaveBeenCalled();
     expect(fakeProducts.usedVerifiedFactIds).toEqual(expect.arrayContaining(['fact-button', 'fact-recoil']));
     expect(fakeProducts.usedVerifiedFactIds).not.toContain('legacy-name-only-button');
   });
