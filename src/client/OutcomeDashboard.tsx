@@ -38,7 +38,9 @@ export function OutcomeDashboard({baseUrl,token}:{baseUrl:string;token:string}) 
         <tr><th scope="row">Попытки восстановления</th><td>{number(report.operations.recoveryAttempts.total)}</td></tr>
         <tr><th scope="row">Восстановленные ответы</th><td>{report.operations.recoveredTurns} из {report.operations.turnDenominator} ходов</td></tr>
         <tr><th scope="row">Использование сохранённых знаний</th><td>{number(report.operations.knowledgeReuse.total)}; измерено ходов: {report.operations.knowledgeReuse.sampleCount}</td></tr>
-        <tr><th scope="row">Дубли действий в работе</th><td>Нет подтверждённого измерения</td></tr>
+        <tr><th scope="row">Наблюдаемые дубли отправок</th><td>{number(report.operations.duplicateBusinessActions?.observedDuplicateOperations)}; операций: {number(report.operations.duplicateBusinessActions?.operationDenominator)}; неизвестный исход: {number(report.operations.duplicateBusinessActions?.unknownOperations)}</td></tr>
+        <tr><th scope="row">Дубли на 100 операций с полным наблюдением</th><td>{number(report.operations.duplicateBusinessActions?.duplicatesPer100Operations)}</td></tr>
+        <tr><th scope="row">Повторные попытки отправки</th><td>{number(report.operations.duplicateBusinessActions?.retryCount)} из {number(report.operations.duplicateBusinessActions?.attemptCount)} попыток</td></tr>
       </tbody></table>
       <p>Расход рассчитан по данным использования и тарифам; это не счёт провайдера. Полученный ответ сам по себе не подтверждает решение вопроса. Время первого текста сообщает браузер при первоначальной отправке; восстановление после перезагрузки в эту выборку не входит.{report.possiblyTruncated?' Выборка ограничена; агрегаты неполные.':''}</p>
     </>:null}

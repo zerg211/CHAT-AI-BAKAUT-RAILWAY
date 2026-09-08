@@ -14,7 +14,8 @@ function finiteNumber(value:unknown){if(value===null||value===undefined||value==
 function percentile(values:number[],fraction:number){return values.length?values[Math.min(values.length-1,Math.floor(values.length*fraction))]:null;}
 
 /** Execution signals create a review queue; absence of a signal never certifies answer quality. */
-export function buildDialogueQualityAudit(rows:QualityAuditTurn[],input:{hours:number;limit:number;now?:Date}){
+export function buildDialogueQualityAudit(rows:QualityAuditTurn[],input:{hours:number;limit:number;now?:Date;
+  delivery?:{operationDenominator:number;attemptCount:number;retryCount:number;observedDuplicateOperations:number;unknownOperations:number;legacyOperations:number;duplicatesPer100Operations:number|null;basis:string}}){
   const now=input.now??new Date();
   const groups=new Map<string,{reason:string;count:number;turns:Array<{sessionId:string;turnId:string;buildCommit:string|null}>}>();
   const turns=rows.map(row=>{
@@ -66,7 +67,7 @@ export function buildDialogueQualityAudit(rows:QualityAuditTurn[],input:{hours:n
       recoveredTurns:rows.filter(row=>row.recovered).length,turnDenominator:rows.length,
       toolCalls:measured(rows.map(row=>row.tools.length)),
       knowledgeReuse:measured(rows.map(row=>finiteNumber(row.knowledgeReuseHits))),
-      duplicateBusinessActions:{value:null,basis:'not_instrumented_in_production; use controlled fault evidence'},
+      duplicateBusinessActions:input.delivery??null,
       firstUsefulContentMs:{sampleCount:deliveryTimes.length,turnDenominator:rows.length,medianMs:percentile(deliveryTimes,.5),p95Ms:percentile(deliveryTimes,.95),basis:'client_reported_visible_render_opportunity; initial_submit_only'},
       serverAnswerLatency:{sampleCount:answerTimes.length,medianMs:percentile(answerTimes,.5),p95Ms:percentile(answerTimes,.95)}},
     cost:{currency:'USD',basis:'estimated_token_rate',turnCostSampleCount:rows.filter(row => finiteNumber(row.estimatedCostUsd)!==null).length,

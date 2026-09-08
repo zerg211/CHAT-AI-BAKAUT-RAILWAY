@@ -20,6 +20,8 @@ try {
  assert.deepEqual(prepared.requestSnapshot,snapshot);assert.ok(prepared.firstAttemptAt);
  const attemptedMutation=await repo.prepareLeadOutboxDispatch({id,leaseToken:first.leaseToken,snapshot:{...snapshot,body:'changed'}});
  assert.deepEqual(attemptedMutation.requestSnapshot,snapshot);assert.equal(attemptedMutation.firstAttemptAt,prepared.firstAttemptAt);
+ assert.equal((await repo.getLeadDeliveryMetrics(1)).attemptCount,1);
+ assert.equal((await repo.getLeadDeliveryMetrics(1)).duplicatesPer100Operations,null);
  const accepted=new Map();let businessSends=0;
  function provider(request){if(!accepted.has(request.idempotencyKey)){accepted.set(request.idempotencyKey,request.body);businessSends++;}
    assert.equal(accepted.get(request.idempotencyKey),request.body);return {ok:true,response:{id:'isolated-provider-operation'}};}
@@ -36,6 +38,16 @@ try {
  const final=(await pool.query('SELECT o.status,o.provider_operation_id,l.status AS lead_status FROM lead_outbox o JOIN leads l ON l.id=o.lead_id WHERE o.id=$1',[id])).rows[0];
  assert.deepEqual(final,{status:'sent',provider_operation_id:'isolated-provider-operation',lead_status:'sent_email'});
  assert.equal(await repo.markLeadOutboxFailed({id,leaseToken:first.leaseToken,error:'late failure'}),null);
+ const unknown=await repo.getLeadDeliveryMetrics(1);
+ assert.equal(unknown.retryCount,1);assert.equal(unknown.unknownOperations,1);assert.equal(unknown.observedDuplicateOperations,0);
+ // A late receipt is useful evidence, but cannot grant the stale worker commit authority.
+ assert.equal(await repo.markLeadOutboxSent(id,first.leaseToken,{ok:true,response:{id:'isolated-provider-operation'}}),null);
+ const replayMetrics=await repo.getLeadDeliveryMetrics(1);
+ assert.equal(replayMetrics.unknownOperations,0);assert.equal(replayMetrics.duplicatesPer100Operations,0);
+ // Mutate only this isolated receipt to simulate a provider actually creating a second operation.
+ await pool.query('UPDATE lead_delivery_attempts SET provider_operation_id=$3 WHERE outbox_id=$1 AND lease_token=$2',[id,first.leaseToken,'isolated-duplicate-operation']);
+ assert.equal((await repo.getLeadDeliveryMetrics(1)).observedDuplicateOperations,1);
+ assert.equal((await pool.query('SELECT status FROM leads WHERE id=$1',[lead])).rows[0].status,'sent_email');
  console.log('PASS competing claims, immutable snapshot, post-acceptance crash replay, stale-owner fencing, atomic lead/outbox completion');
 } finally {
  await pool.query('DELETE FROM leads WHERE id=$1',[lead]);

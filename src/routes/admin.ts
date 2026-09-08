@@ -221,7 +221,8 @@ export async function registerAdminRoutes(app: FastifyInstance) {
     const input=z.object({hours:z.coerce.number().int().min(1).max(168).default(24),
       limit:z.coerce.number().int().min(1).max(5000).default(500)}).parse(request.query);
     const rows=await conversations.listQualityAuditTurns(input.hours,input.limit);
-    return buildDialogueQualityAudit(rows as QualityAuditTurn[],input);
+    const delivery=await leads.getLeadDeliveryMetrics(input.hours);
+    return buildDialogueQualityAudit(rows as QualityAuditTurn[],{...input,delivery});
   });
 
   app.get('/api/admin/feedback', async (request) => {

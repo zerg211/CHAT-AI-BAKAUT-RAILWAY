@@ -4440,17 +4440,24 @@ export class LeadRepository {
     id: string; leaseToken: string;
     snapshot: import('../email/httpEmail.js').LeadEmailRequestSnapshot;
   }) {
-    const result = await this.db.query(`UPDATE lead_outbox
+    const result = await this.db.query(`WITH prepared AS (UPDATE lead_outbox
       SET request_snapshot = COALESCE(request_snapshot, $3::jsonb),
           first_attempt_at = COALESCE(first_attempt_at, now()), updated_at = now()
       WHERE id = $1 AND lease_token = $2 AND status = 'sending' AND leased_until > now()
-      RETURNING *`, [input.id, input.leaseToken, JSON.stringify(input.snapshot)]);
+      RETURNING *), recorded AS (
+        INSERT INTO lead_delivery_attempts(outbox_id,lease_token)
+        SELECT id,lease_token FROM prepared ON CONFLICT DO NOTHING RETURNING outbox_id
+      ) SELECT prepared.* FROM prepared`, [input.id, input.leaseToken, JSON.stringify(input.snapshot)]);
     return result.rowCount ? mapLeadOutboxItem(result.rows[0]) : null;
   }
 
   async markLeadOutboxSent(id: string, leaseToken: string, providerResponse: Record<string, unknown> = {}) {
     const result = await this.db.query(
-      `WITH completed AS (UPDATE lead_outbox
+      `WITH receipt AS (
+        UPDATE lead_delivery_attempts SET received_at=coalesce(received_at,now()),
+          provider_operation_id=coalesce(provider_operation_id,left($3::jsonb->'response'->>'id',300))
+        WHERE outbox_id=$1 AND lease_token=$2 RETURNING outbox_id
+       ), completed AS (UPDATE lead_outbox
        SET status = 'sent',
            provider_operation_id = $3::jsonb->'response'->>'id',
            last_error = NULL,
@@ -4484,6 +4491,27 @@ export class LeadRepository {
       [input.id, input.dead ? 'dead' : 'failed', input.error, input.nextAttemptAt ?? null, input.leaseToken]
     );
     return result.rowCount ? mapLeadOutboxItem(result.rows[0]) : null;
+  }
+
+  async getLeadDeliveryMetrics(hours:number) {
+    const result=await this.db.query(`WITH operations AS (
+      SELECT o.id,o.attempt_count,count(a.lease_token)::int AS attempts,
+        count(a.lease_token) FILTER (WHERE a.provider_operation_id IS NULL)::int AS unknown_attempts,
+        count(DISTINCT a.provider_operation_id)::int AS provider_operations
+      FROM lead_outbox o LEFT JOIN lead_delivery_attempts a ON a.outbox_id=o.id
+      WHERE o.created_at>=now()-make_interval(hours=>$1) GROUP BY o.id
+    ) SELECT count(*)::int AS operations,coalesce(sum(attempts),0)::int AS attempts,
+      coalesce(sum(greatest(attempts-1,0)),0)::int AS retries,
+      count(*) FILTER (WHERE provider_operations>1)::int AS duplicates,
+      count(*) FILTER (WHERE attempts=0 AND attempt_count>0)::int AS legacy,
+      count(*) FILTER (WHERE unknown_attempts>0 OR attempts=0)::int AS unknown
+      FROM operations`,[hours]);
+    const row=result.rows[0];
+    const operations=Number(row.operations),unknown=Number(row.unknown),duplicates=Number(row.duplicates);
+    return {operationDenominator:operations,attemptCount:Number(row.attempts),retryCount:Number(row.retries),
+      observedDuplicateOperations:duplicates,unknownOperations:unknown,legacyOperations:Number(row.legacy),
+      duplicatesPer100Operations:operations>0&&unknown===0?duplicates*100/operations:null,
+      basis:'distinct provider receipt IDs per outbox operation; entire lifecycle of operations created in window'};
   }
 
   async getLeadOutboxHealth() {
