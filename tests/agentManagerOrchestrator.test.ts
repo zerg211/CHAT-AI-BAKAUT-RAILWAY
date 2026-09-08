@@ -1249,8 +1249,44 @@ describe('observation-driven catalog continuation', () => {
       model({ planTurn: async () => structuredGeneratorCatalogIntent(), assessObservations }));
     const payload = await orchestrator.generateAnswer({ sessionId, turnId, userMessage: 'Покажите генераторы.' });
     expect(leads.created).toEqual([]);
+    expect(assessObservations).toHaveBeenCalledTimes(1);
     expect(payload.metadata?.continuation).toMatchObject({ status: 'stopped', stopReason: 'invalid_continuation', candidateProductIds: [] });
     expect(conversations.toolArtifacts).not.toEqual(expect.arrayContaining([expect.objectContaining({ toolName: 'lead.capture' })]));
+  });
+
+  it('repairs an invalid read proposal once using validation feedback without executing rejected tools', async () => {
+    const conversations = new FakeConversations();
+    const discovered = generatorProductWithPower('discovered', 'Generator R7000', 5);
+    const searches: string[] = [];
+    const products = { async searchProducts(query: string) { searches.push(query); return query.includes('refined') ? [discovered] : []; } };
+    const rejected = { ...ready, action: 'continue' as const, toolRequests: [{ ...refinedRequest,
+      id: 'rejected-read', tool: 'web.researchProductFacts' as const, args: { productNames: ['Unverified accessory'], canonicalProductIntent: 'plateAccessory' as const } }] };
+    const assessObservations = vi.fn(async (input) => {
+      if (input.toolResults.some((result: ToolResult) => result.requestId === refinedRequest.id)) return ready;
+      if (!input.validationFeedback) return rejected;
+      expect(input.validationFeedback.rejectedDecision).toEqual(rejected);
+      expect(input.validationFeedback.issues).toContain('continuation_ungrounded_product_name:Unverified accessory');
+      expect(input.intent.selectionPolicy.canonicalProductClass).toBe('generator');
+      return { ...ready, action: 'continue' as const, toolRequests: [refinedRequest] };
+    });
+    const orchestrator = new AgentManagerOrchestrator(conversations as never, products as never, new FakeLeads() as never,
+      model({ planTurn: async () => structuredGeneratorCatalogIntent(), assessObservations }));
+    await orchestrator.generateAnswer({ sessionId, turnId, userMessage: 'Подберите генератор.' });
+    expect(assessObservations).toHaveBeenCalledTimes(3);
+    expect(searches.filter(query => query.includes('refined'))).toHaveLength(1);
+    expect(conversations.toolArtifacts).not.toEqual(expect.arrayContaining([expect.objectContaining({ toolRequestId: 'rejected-read' })]));
+    expect(conversations.toolArtifacts).toEqual(expect.arrayContaining([expect.objectContaining({ toolRequestId: refinedRequest.id })]));
+  });
+
+  it.each([false, true])('bounds invalid-read correction across recovery (previous reservation=%s)', async (reserved) => {
+    const conversations = new FakeConversations();
+    if (reserved) conversations.checkpoints.push({ checkpoint: 'observation_repair_reserved', status: 'succeeded', payload: { round: 1 } });
+    const assessObservations = vi.fn(async () => ({ ...ready, candidateProductIds: ['invented'] }));
+    const orchestrator = new AgentManagerOrchestrator(conversations as never, new FakeProducts() as never, new FakeLeads() as never,
+      model({ planTurn: async () => structuredGeneratorCatalogIntent(), assessObservations }));
+    const payload = await orchestrator.generateAnswer({ sessionId, turnId, userMessage: 'Покажите генераторы.' });
+    expect(assessObservations).toHaveBeenCalledTimes(reserved ? 1 : 2);
+    expect(payload.metadata?.continuation).toMatchObject({ status: 'stopped', stopReason: 'invalid_continuation', candidateProductIds: [] });
   });
 
   it.each(['product_selection', 'technical_answer'] as const)('continues %s for model-specific missing evidence without inventing selection requirements', async (taskType) => {

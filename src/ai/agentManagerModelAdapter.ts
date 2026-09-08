@@ -116,6 +116,7 @@ export interface AgentManagerAnswerInput extends AgentManagerModelInput {
 export interface AgentManagerObservationInput extends AgentManagerAnswerInput {
   round: number;
   remainingBudget: ReturnType<AgentManagerTurnBudget['snapshot']>;
+  validationFeedback?: { issues: string[]; rejectedDecision: ContinuationDecision };
 }
 
 export interface AnswerProductRejectionReason {
@@ -2414,6 +2415,8 @@ export class OpenAIAgentManagerModel implements AgentManagerModel {
           'verifiedProductFacts содержит актуальные сохраненные факты точных моделей независимо от текущего web policy. Сам сопоставь смысл исходных attribute/value вопросу покупателя; отсутствие того же имени атрибута в каталоге не отменяет сохраненный факт. Противоречие источников требует проверки, а уже подтвержденное значение без конфликта — использования в ответе.',
           'conflictingVerifiedProductFacts сохраняет источники, расходящиеся по значению одного атрибута модели. Они не подтверждают ни одно окончательное значение; не считай совпадение одного из них с каталогом разрешением конфликта. Проверь решающий конфликт через доступные источники, если текущие наблюдения его еще не разрешили.',
           'Сохраняй intent, область потребности и все требования без изменения. Нельзя создавать лиды, менять бюджет/условия, переинтерпретировать реплику или выполнять side effects. productIds/candidateProductIds только из products; productNames копируй из products/явных исходных целей. Не подставляй другую модификацию. coversRequirementIds только существующие id, иначе [].',
+          'Найденный, но еще не проверенный артикул — гипотеза поиска, не установленная идентичность товара. Для проверки принадлежности аксессуара исследуй comparisonAttributes исходной модели, сохраняя ее productNames и класс; найденные обозначения можно уточнить в query. Не превращай исследование комплектации в смену выбранного оборудования.',
+          'Если передан validationFeedback, прежние запросы НЕ выполнены. Исправь указанные нарушения в одном новом решении с учетом исходной задачи и наблюдений. rejectedDecision не является доказательством фактов или разрешением новых действий. Не выбирай answer только ради обхода проверки: если полезный read возможен в текущей области, сформулируй его корректно.',
           'allowedRequirementIds — полный список допустимых ссылок coversRequirementIds. technicalAttributes и missingFacts описывают вопросы для исследования, а не новые requirement IDs. Если allowedRequirementIds пуст, продолжай необходимый технический поиск с coversRequirementIds=[]; не создавай требования подбора ради проверки инструкции.',
           'Каждый новый запрос имеет уникальный id. Не повторяй выполненный tool+args; после ошибки выбирай другую разумную попытку, не бесконечный retry. Учитывай remainingBudget и оставь время на ответ. Если источники не подтвердили факт, missingFacts точно описывает пробел; timeout/остановка не доказывает отсутствие свойства или исчерпание источников.',
           'candidateProductIds — только перспективные варианты, а не окончательная выдача карточек. missingFacts и rationale кратко объясняют решение. Для answer/clarify toolRequests=[]; для continue — непустой список.'
@@ -2429,7 +2432,8 @@ export class OpenAIAgentManagerModel implements AgentManagerModel {
           toolResults: compactToolResultsForModel(input.toolResults, input.products),
           round: input.round,
           maxReadRounds: CONTINUATION_MAX_ROUNDS,
-          remainingBudget: input.remainingBudget
+          remainingBudget: input.remainingBudget,
+          ...(input.validationFeedback ? { validationFeedback: input.validationFeedback } : {})
         }) }],
         text: observationDecisionFormatForRequirements(allowedRequirementIds, input.products.map(product => product.id))
       },
