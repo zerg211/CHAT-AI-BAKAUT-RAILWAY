@@ -993,6 +993,7 @@ function normalizeResearchParsed(
 
 const sourceTextLimit = 250000;
 const semanticSourceTextLimit = 18000;
+const sourceEvidenceWords = new Intl.Segmenter('ru', { granularity: 'word' });
 const sourceHtmlMaxBytes = 2 * 1024 * 1024;
 const sourcePdfMaxBytes = 8 * 1024 * 1024;
 const sourcePdfMaxPages = 80;
@@ -1520,7 +1521,8 @@ export function boundedSemanticSourceTextForEvidence(sourceText: string, evidenc
     // A proposed quotation may be paraphrased or stitched. Retrieve context from
     // literal source windows, but never treat lexical overlap as claim approval.
     // The existing semantic validator must still recover valid exact excerpts.
-    const words = (value: string) => value.toLocaleLowerCase('ru-RU').match(/[\p{L}\p{N}]+/gu) ?? [];
+    const words = (value: string) => [...sourceEvidenceWords.segment(value.toLocaleLowerCase('ru-RU'))]
+      .filter((part) => part.isWordLike).map((part) => part.segment);
     const queryWords = words(String(evidence ?? ''));
     const phrases = new Set(queryWords.slice(0, -2).map((word, index) =>
       [word, queryWords[index + 1], queryWords[index + 2]].join(' ')));
