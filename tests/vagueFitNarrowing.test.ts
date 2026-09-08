@@ -4,7 +4,8 @@ import { selectedCardsContradictReadiness } from '../src/ai/agentManagerOrchestr
 import type { AnswerSelectionReadiness } from '../src/ai/agentManagerContracts.js';
 
 async function orchestratorSource() {
-  return readFile(new URL('../src/ai/agentManagerOrchestrator.ts', import.meta.url), 'utf8');
+  return (await readFile(new URL('../src/ai/agentManagerOrchestrator.ts', import.meta.url), 'utf8')) + '\n' +
+    (await readFile(new URL('../src/ai/agentManagerModelAdapter.ts', import.meta.url), 'utf8'));
 }
 
 function readiness(status: AnswerSelectionReadiness['status'], canShow: boolean): AnswerSelectionReadiness {

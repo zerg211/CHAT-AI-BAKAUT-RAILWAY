@@ -19,6 +19,7 @@ const SEMANTIC_SCOPE_FILES = [
   'src/ai/agentManagerGeneratorLoad.ts',
   'src/ai/agentManagerModelContext.ts',
   'src/ai/agentManagerOrchestrator.ts',
+  'src/ai/agentManagerModelAdapter.ts',
   'src/ai/agentManagerOutputGuard.ts',
   'src/ai/agentManagerPolicyGate.ts',
   'src/ai/agentManagerTurnBudget.ts',
