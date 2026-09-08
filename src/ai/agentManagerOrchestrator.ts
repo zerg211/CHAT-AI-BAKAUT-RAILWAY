@@ -1,4 +1,5 @@
-import { AsyncLocalStorage } from 'node:async_hooks';
+import {recordTurnTelemetry,runWithTurnStageEmitter,type AgentManagerStageEmitter} from './turnTelemetry.js';
+export type {AgentManagerStageEvent} from './turnTelemetry.js';
 import { managerTaskOwnershipGuidance } from './managerTaskOwnership.js';
 import { createHash, randomUUID } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
@@ -182,15 +183,6 @@ import {
   resolvedRequirementEligibilityStatus,
   selectionRequirementAttributeMatches
 } from './requirementProofs.js';
-
-export interface AgentManagerStageEvent {
-  phase: string;
-  eventType: string;
-}
-
-type AgentManagerStageEmitter = (event: AgentManagerStageEvent) => void | Promise<void>;
-
-const activeStageEmitter = new AsyncLocalStorage<AgentManagerStageEmitter | undefined>();
 
 export interface AgentManagerGenerateInput {
   sessionId: string;
@@ -6367,7 +6359,7 @@ export class AgentManagerOrchestrator {
       ? AbortSignal.any([input.signal, wallTimeSignal])
       : wallTimeSignal;
     try {
-      const payload = await activeStageEmitter.run(input.onStage, () => runWithAgentManagerTurnBudget(
+      const payload = await runWithTurnStageEmitter(input.onStage, () => runWithAgentManagerTurnBudget(
         turnBudget,
         () => this.executeClaimedTurnWithinBudget({ ...input, signal }, turnBudget)
       ));
@@ -9884,30 +9876,6 @@ export class AgentManagerOrchestrator {
   }
 
   private async trace(sessionId: string, turnId: string, phase: string, eventType: string, payload: Record<string, unknown>) {
-    const eventRepository = this.conversations as ConversationRepository & {
-      appendTurnEvent?: ConversationRepository['appendTurnEvent'];
-    };
-    if (typeof eventRepository.appendTurnEvent === 'function') {
-      await eventRepository.appendTurnEvent.call(this.conversations, {
-        sessionId,
-        turnId,
-        stage: phase,
-        eventType,
-        payload: {}
-      }).catch((error) => console.warn('Agent manager durable event write failed', safeError(error)));
-    }
-    try {
-      await activeStageEmitter.getStore()?.({ phase, eventType });
-    } catch (error) {
-      console.warn('Agent manager stage delivery failed', safeError(error));
-    }
-    await this.conversations.addAgentTrace({
-      sessionId,
-      turnId,
-      phase,
-      eventType,
-      payload,
-      redacted: true
-    }).catch((error) => console.warn('Agent manager trace write failed', safeError(error)));
+    return recordTurnTelemetry(this.conversations,sessionId,turnId,phase,eventType,payload);
   }
 }
