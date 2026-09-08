@@ -4521,8 +4521,9 @@ const observationDecisionFormat = {
   }
 } as const;
 
-function observationDecisionFormatForRequirements(requirementIds: string[]) {
+export function observationDecisionFormatForRequirements(requirementIds: string[], productIds: string[]) {
   const allowedIds = uniqueStrings(requirementIds);
+  const allowedProductIds = uniqueStrings(productIds);
   const requestSchema = (tool: string, args: Record<string, unknown>) => strictJsonObject({
     ...toolRequestVariantJsonSchema(tool, args).properties,
     coversRequirementIds: { type: 'array', maxItems: allowedIds.length ? 40 : 0,
@@ -4530,6 +4531,10 @@ function observationDecisionFormatForRequirements(requirementIds: string[]) {
   });
   return { format: { ...observationDecisionFormat.format, schema: strictJsonObject({
     ...observationDecisionFormat.format.schema.properties,
+    candidateProductIds: {
+      type: 'array', maxItems: allowedProductIds.length ? 8 : 0,
+      items: allowedProductIds.length ? { type: 'string', enum: allowedProductIds } : { type: 'string' }
+    },
     toolRequests: { type: 'array', maxItems: 3, items: { anyOf: [
       requestSchema('catalog.search', catalogSearchToolArgsJsonSchema),
       requestSchema('catalog.getProductDetails', productDetailsToolArgsJsonSchema),
@@ -5096,7 +5101,8 @@ const answerContractFormat = {
   }
 } as const;
 
-function answerContractFormatForEvidenceSources(allowedSourceIds: string[]) {
+export function answerContractFormatForEvidenceSources(allowedSourceIds: string[], eligibleProductIds: string[]) {
+  const productIds = uniqueStrings(eligibleProductIds);
   const sourceIdItems = allowedSourceIds.length
     ? { type: 'string', enum: allowedSourceIds }
     : { type: 'string' };
@@ -5108,6 +5114,10 @@ function answerContractFormatForEvidenceSources(allowedSourceIds: string[]) {
         ...answerContractFormat.format.schema,
         properties: {
           ...answerContractFormat.format.schema.properties,
+          selectedProductIds: {
+            type: 'array', maxItems: productIds.length ? 8 : 0,
+            items: productIds.length ? { type: 'string', enum: productIds } : { type: 'string' }
+          },
           factsUsed: {
             ...answerContractFormat.format.schema.properties.factsUsed,
             items: {
@@ -5689,7 +5699,7 @@ export class OpenAIAgentManagerModel implements AgentManagerModel {
           maxReadRounds: CONTINUATION_MAX_ROUNDS,
           remainingBudget: input.remainingBudget
         }) }],
-        text: observationDecisionFormatForRequirements(allowedRequirementIds)
+        text: observationDecisionFormatForRequirements(allowedRequirementIds, input.products.map(product => product.id))
       },
       stage: 'agent_observation_decision',
       signal: input.signal,
@@ -5781,7 +5791,11 @@ export class OpenAIAgentManagerModel implements AgentManagerModel {
           })
         }
       ],
-      text: answerContractFormatForEvidenceSources(availableEvidenceSources.allowedSourceIds)
+      text: answerContractFormatForEvidenceSources(availableEvidenceSources.allowedSourceIds,
+        input.productEvidenceRoles
+          ? input.products.filter(product => input.productEvidenceRoles!.some(role =>
+            role.productId === product.id && role.eligibleForRecommendation)).map(product => product.id)
+          : input.products.map(product => product.id))
     };
     const { parsed } = await createStructuredJsonResponse({
       request,
@@ -7001,7 +7015,9 @@ export class AgentManagerOrchestrator {
               sessionId: input.sessionId, turnId: input.turnId, executionOwner: input.executionOwner,
               checkpoint, status: 'failed', payload: { issues, decision }, errorCode: 'invalid_continuation'
             });
-            await stop('invalid_continuation', decision);
+            // Keep rejected model output in diagnostic evidence only. In particular,
+            // invented candidate identities must never become writer context.
+            await stop('invalid_continuation');
             break;
           }
           if (!savedObservation) {
