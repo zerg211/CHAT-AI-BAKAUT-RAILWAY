@@ -1,6 +1,7 @@
 import React, { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import {OutcomeDashboard} from './OutcomeDashboard';
+import {createAnswerDeliveryMetric} from './answerDeliveryMetric';
 import {
   abandonSavedChat,
   findCompletedAnswerForRetry,
@@ -1462,6 +1463,7 @@ function App() {
 
   async function submitText(text: string, options: { clearInput?: boolean } = { clearInput: true }) {
     if (!text.trim() || busy || chatInteractionDisabled) return;
+    const deliveryMetric = createAnswerDeliveryMetric();
     const userText = text.trim();
     if (options.clearInput !== false) setInput('');
     setError('');
@@ -1496,6 +1498,7 @@ function App() {
       if (!visitorId) throw new Error('Не удалось подтвердить сессию чата');
       const payload = await streamChatMessage(apiBase, activeSessionId, userText, {
         onDelta: (delta) => {
+          deliveryMetric.observe(delta);
           setMessages((current) => current.map((message) => (
             message.id === assistantId ? { ...message, content: message.content + delta, progress: undefined } : message
           )));
@@ -1513,6 +1516,8 @@ function App() {
       const committedAnswer = typeof payload?.answer === 'string' && payload.answer.trim()
         ? payload.answer
         : '';
+      deliveryMetric.observe(committedAnswer);
+      void deliveryMetric.report(apiBase, activeSessionId, payload?.assistantMessageId, visitorId);
       setMessages((current) => current.map((message) => (
         message.id === assistantId
           ? {

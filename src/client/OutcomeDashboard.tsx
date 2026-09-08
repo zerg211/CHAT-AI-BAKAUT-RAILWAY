@@ -34,13 +34,13 @@ export function OutcomeDashboard({baseUrl,token}:{baseUrl:string;token:string}) 
         <tr><th scope="row">Расход на решённое обращение</th><td>{number(report.cost.costPerResolvedConversationUsd,' USD')}</td></tr>
         <tr><th scope="row">Ходы с неизвестным расходом</th><td>{report.cost.unknownCostTurnCount}</td></tr>
         <tr><th scope="row">Подготовка ответа сервером, p95</th><td>{number(report.operations.serverAnswerLatency.p95Ms,' мс')}</td></tr>
-        <tr><th scope="row">Первый полезный текст в браузере</th><td>Измерение ещё не подключено</td></tr>
+        <tr><th scope="row">Первый полезный текст в видимом виджете, p95</th><td>{number(report.operations.firstUsefulContentMs.p95Ms,' мс')}; измерено {report.operations.firstUsefulContentMs.sampleCount} из {report.operations.firstUsefulContentMs.turnDenominator} ходов</td></tr>
         <tr><th scope="row">Попытки восстановления</th><td>{number(report.operations.recoveryAttempts.total)}</td></tr>
         <tr><th scope="row">Восстановленные ответы</th><td>{report.operations.recoveredTurns} из {report.operations.turnDenominator} ходов</td></tr>
         <tr><th scope="row">Использование сохранённых знаний</th><td>{number(report.operations.knowledgeReuse.total)}; измерено ходов: {report.operations.knowledgeReuse.sampleCount}</td></tr>
         <tr><th scope="row">Дубли действий в работе</th><td>Нет подтверждённого измерения</td></tr>
       </tbody></table>
-      <p>Расход рассчитан по данным использования и тарифам; это не счёт провайдера. Полученный ответ сам по себе не подтверждает решение вопроса.{report.possiblyTruncated?' Выборка ограничена; агрегаты неполные.':''}</p>
+      <p>Расход рассчитан по данным использования и тарифам; это не счёт провайдера. Полученный ответ сам по себе не подтверждает решение вопроса. Время первого текста сообщает браузер при первоначальной отправке; восстановление после перезагрузки в эту выборку не входит.{report.possiblyTruncated?' Выборка ограничена; агрегаты неполные.':''}</p>
     </>:null}
   </details>;
 }

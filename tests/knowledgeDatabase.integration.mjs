@@ -50,6 +50,11 @@ try {
    assert.equal(await conversations.annotateConversationOutcome({sessionId,turnId:completeId,resolutionStatus:'resolved',actor:'test-reviewer'}),true);
    const annotated=(await conversations.listQualityAuditTurns(1,500)).find(t=>t.turnId===completeId);
    assert.equal(annotated.resolutionStatus,'resolved');
+   assert.equal(await conversations.recordAnswerDelivery({sessionId:randomUUID(),messageId,firstUsefulContentMs:123}),false);
+   assert.equal(await conversations.recordAnswerDelivery({sessionId,messageId,firstUsefulContentMs:123}),true);
+   assert.equal(await conversations.recordAnswerDelivery({sessionId,messageId,firstUsefulContentMs:999}),true);
+   const delivered=(await conversations.listQualityAuditTurns(1,500)).find(t=>t.turnId===completeId);
+   assert.equal(delivered.firstUsefulContentMs,123);
   } finally {await pool.query('DELETE FROM conversation_sessions WHERE id=$1',[sessionId]);}
  });
  await run('TECHNICAL_FACT_PUBLISHED_WITH_ORIGINAL_VERIFICATION_TIME',async()=>{

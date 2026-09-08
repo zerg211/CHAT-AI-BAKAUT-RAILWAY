@@ -35,7 +35,8 @@ function buildDependencies() {
     )),
     createTurnWithUserMessage: vi.fn(),
     getTurn: vi.fn(),
-    updateTurn: vi.fn()
+    updateTurn: vi.fn(),
+    recordAnswerDelivery: vi.fn(async () => true)
   };
   const assistant = {
     generateAnswer: vi.fn(),
@@ -53,6 +54,19 @@ async function buildApp() {
 }
 
 describe('session-scoped chat route capability', () => {
+  it('records bounded delivery telemetry only for the authorized session', async () => {
+    const {app,conversations}=await buildApp();
+    const request={method:'POST' as const,url:`/api/chat/sessions/${sessionId}/messages/${messageId}/delivery`,payload:{firstUsefulContentMs:1200}};
+    expect((await app.inject(request)).statusCode).toBe(404);
+    expect((await app.inject({...request,headers:{'x-bakaut-visitor-id':'wrong'}})).statusCode).toBe(404);
+    expect(conversations.recordAnswerDelivery).not.toHaveBeenCalled();
+    expect((await app.inject({...request,headers:{'x-bakaut-visitor-id':visitorId}})).statusCode).toBe(200);
+    expect(conversations.recordAnswerDelivery).toHaveBeenCalledWith(expect.objectContaining({sessionId,messageId,firstUsefulContentMs:1200}));
+    conversations.recordAnswerDelivery.mockClear();
+    const invalid=await app.inject({...request,headers:{'x-bakaut-visitor-id':visitorId},payload:{firstUsefulContentMs:600001}});
+    expect(invalid.statusCode).toBeGreaterThanOrEqual(400);
+    expect(conversations.recordAnswerDelivery).not.toHaveBeenCalled();
+  });
   it.each([
     {
       label: 'send',

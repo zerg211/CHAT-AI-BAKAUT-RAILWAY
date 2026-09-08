@@ -5,6 +5,7 @@ export interface QualityAuditTurn {
   estimatedCostUsd?:number|null; totalTokens?:number|null;
   resolutionStatus?:'resolved'|'unresolved'|'unknown';
   recoveryAttempts?:number|null; serverAnswerMs?:number|null; knowledgeReuseHits?:number|null;
+  firstUsefulContentMs?:number|null;
   tools:Array<{tool:string;status:string;priceUnavailable?:boolean}>; reviewIssues:string[];
 }
 
@@ -55,6 +56,7 @@ export function buildDialogueQualityAudit(rows:QualityAuditTurn[],input:{hours:n
   const measured=(values:Array<number|null>)=>{const present=values.filter((n):n is number=>n!==null && n>=0);
     return {sampleCount:present.length,turnDenominator:rows.length,total:present.length?present.reduce((sum,n)=>sum+n,0):null};};
   const answerTimes=rows.map(row=>finiteNumber(row.serverAnswerMs)).filter((n):n is number=>n!==null&&n>=0).sort((a,b)=>a-b);
+  const deliveryTimes=rows.map(row=>finiteNumber(row.firstUsefulContentMs)).filter((n):n is number=>n!==null&&n>=0&&n<=600_000).sort((a,b)=>a-b);
   return {schemaVersion:'dialogue-quality-audit-v1',generatedAt:now.toISOString(),windowHours:input.hours,limit:input.limit,
     possiblyTruncated:rows.length>=input.limit,turnCount:rows.length,answerCount:rows.filter(r=>r.hasAnswer).length,
     latency:{sampleCount:durations.length,medianMs:percentile(durations,.5),p95Ms:percentile(durations,.95)},
@@ -65,7 +67,7 @@ export function buildDialogueQualityAudit(rows:QualityAuditTurn[],input:{hours:n
       toolCalls:measured(rows.map(row=>row.tools.length)),
       knowledgeReuse:measured(rows.map(row=>finiteNumber(row.knowledgeReuseHits))),
       duplicateBusinessActions:{value:null,basis:'not_instrumented_in_production; use controlled fault evidence'},
-      firstUsefulContentMs:{value:null,basis:'browser_delivery_not_instrumented'},
+      firstUsefulContentMs:{sampleCount:deliveryTimes.length,turnDenominator:rows.length,medianMs:percentile(deliveryTimes,.5),p95Ms:percentile(deliveryTimes,.95),basis:'client_reported_visible_render_opportunity; initial_submit_only'},
       serverAnswerLatency:{sampleCount:answerTimes.length,medianMs:percentile(answerTimes,.5),p95Ms:percentile(answerTimes,.95)}},
     cost:{currency:'USD',basis:'estimated_token_rate',turnCostSampleCount:rows.filter(row => finiteNumber(row.estimatedCostUsd)!==null).length,
       conversationCount:conversationRows.length,resolvedConversationCount,unresolvedConversationCount,unknownConversationCount,

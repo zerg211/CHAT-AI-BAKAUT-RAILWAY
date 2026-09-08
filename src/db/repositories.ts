@@ -698,6 +698,7 @@ export class ConversationRepository {
          ELSE 'unknown'
        END AS "resolutionStatus",
        t.recovery_attempts AS "recoveryAttempts",
+       m.metadata->'clientDelivery'->'firstUsefulContentMs' AS "firstUsefulContentMs",
        CASE WHEN m.id IS NOT NULL THEN extract(epoch FROM (m.created_at-t.created_at))*1000 ELSE NULL END AS "serverAnswerMs",
        (SELECT count(*) FROM agent_traces trace WHERE trace.turn_id=t.id AND trace.event_type='verified_fact_memory_used'
          AND trace.payload->>'attributesCovered'='true') AS "knowledgeReuseHits",
@@ -720,6 +721,14 @@ export class ConversationRepository {
       AND t.status IN ('completed','recovered') RETURNING t.id`,[input.sessionId,input.turnId,
       JSON.stringify({resolutionStatus:input.resolutionStatus,confirmedBy:'human_review',actor:input.actor,assessedAt:new Date().toISOString()})]);
     return result.rowCount === 1;
+  }
+
+  async recordAnswerDelivery(input:{sessionId:string;messageId:string;firstUsefulContentMs:number}) {
+    const result=await this.db.query(`UPDATE messages SET metadata=CASE WHEN metadata ? 'clientDelivery' THEN metadata
+      ELSE jsonb_set(coalesce(metadata,'{}'::jsonb),'{clientDelivery}',$3::jsonb) END
+      WHERE id=$2 AND session_id=$1 AND role='assistant' RETURNING id`,[input.sessionId,input.messageId,
+      JSON.stringify({firstUsefulContentMs:input.firstUsefulContentMs,basis:'client_visible_render_opportunity',cohort:'initial_submit',receivedAt:new Date().toISOString()})]);
+    return result.rowCount===1;
   }
 
   async createSession(input: { visitorId?: string; pageUrl?: string; userAgent?: string }) {

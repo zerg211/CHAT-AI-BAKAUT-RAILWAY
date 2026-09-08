@@ -5,6 +5,11 @@ const row=(id:string,overrides:Partial<QualityAuditTurn>={}):QualityAuditTurn=>(
   createdAt:'2026-09-07T11:00:00Z',deadlineAt:'2026-09-07T11:03:00Z',hasAnswer:true,errorCode:null,errorClass:null,
   buildCommit:null,wallTimeMs:40000,modelCalls:4,recovered:false,rating:null,tools:[],reviewIssues:[],...overrides});
 describe('automatic execution audit review queue',()=>{
+  it('reports client delivery coverage without substituting server duration or missing values',()=>{
+    const report=buildDialogueQualityAudit([row('a',{firstUsefulContentMs:1000}),row('b',{firstUsefulContentMs:3000}),row('c')],{hours:24,limit:500,now});
+    expect(report.operations.firstUsefulContentMs).toMatchObject({sampleCount:2,turnDenominator:3,medianMs:3000,p95Ms:3000});
+    expect(buildDialogueQualityAudit([row('none')],{hours:24,limit:500,now}).operations.firstUsefulContentMs.p95Ms).toBeNull();
+  });
   it('groups repeat causes without hiding missing answers or judging silent failures as good',()=>{
     const report=buildDialogueQualityAudit([row('one',{hasAnswer:false,status:'failed',wallTimeMs:null,errorCode:'generation_failed'}),
       row('two',{reviewIssues:['missing_source:product-a','missing_source:product-b']}),

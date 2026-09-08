@@ -260,6 +260,15 @@ export async function registerChatRoutes(
     return reply.send({ ok: true });
   });
 
+  app.post('/api/chat/sessions/:id/messages/:messageId/delivery', async (request, reply) => {
+    const params = z.object({id:z.string().uuid(),messageId:z.string().uuid()}).parse(request.params);
+    const input = z.object({firstUsefulContentMs:z.number().int().min(0).max(600_000)}).strict().parse(request.body);
+    const session = await restoreAuthorizedSession(request, reply, conversations, params.id);
+    if (!session) return sessionNotFound(reply);
+    const recorded = await conversations.recordAnswerDelivery({...params,sessionId:params.id,...input});
+    return recorded ? reply.send({ok:true}) : reply.code(404).send({error:'Message not found'});
+  });
+
   app.post('/api/chat/sessions/:id/messages', async (request, reply) => {
     const params = z.object({ id: z.string().uuid() }).parse(request.params);
     const input = messageSchema.parse(request.body ?? {});
