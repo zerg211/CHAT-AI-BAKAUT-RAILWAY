@@ -2837,6 +2837,25 @@ describe('product comparison research', () => {
     ]));
   });
 
+  it.each(['supported', 'wrong_target', 'rejected'] as const)('binds exact model accessory relations without treating the part as another equipment model: %s', async (mode) => {
+    const quote = mode === 'wrong_target' ? 'for AX200 - accessory MAT900' : 'for AX100 - accessory MAT700';
+    const source = 'MAKE AX100 / AX200 manual. You may install a trans- port cart and a mat (for AX100 - accessory MAT700, for AX200 - accessory MAT900).';
+    fetchMock.mockResolvedValue(sourceResponse(source));
+    const fact = { productName: 'MAKE AX100', attribute: 'compatible_accessory', value: mode === 'wrong_target' ? 'MAT900' : 'MAT700',
+      evidence: quote, sourceType: 'web', confidence: 'high', sourceUrl: 'https://example.test/shared-family-guide', sourceTitle: 'MAKE shared manual' };
+    const research = result({ usedWebSearch: true, facts: [fact], answerGuidance: { directAnswer: '', completeness: 'answered', coverage: [{ ...fact, status: 'confirmed' }] } });
+    createStructuredJsonResponse.mockImplementation(async call => call.stage === 'source_evidence_semantic_validation'
+      ? semanticValidationResponseWith(call, { claimSupported: mode !== 'rejected', claimStartKinds: [], supportedStartKinds: [],
+        relatedItemIdentifiers: ['MAT700', 'MAT900'],
+        evidence: source.replace('trans- port', 'transport'), targetApplicability: 'exact_model', scopeQuote: source.replace('trans- port', 'transport') })
+      : { parsed: research, response: { output: [{ type: 'web_search_call', status: 'completed' }] } });
+    const actual = await researchProductComparisonFacts({ userMessage: 'Which accessory fits AX100?', products: [],
+      targetProductNames: ['MAKE AX100'], comparisonAttributes: ['compatible_accessory'] });
+    if (mode === 'supported') expect(actual.facts).toContainEqual(expect.objectContaining({ value: 'MAT700', evidence: quote,
+      targetApplicability: 'exact_model', scopeQuote: quote, evidenceVerifiedExact: true }));
+    else expect(actual.facts).toEqual([]);
+  });
+
   it.each([false, true])('keeps semantic claim scope authoritative with unrelated starter context (unsupported start=%s)', async (unsupportedStart) => {
     const quote = unsupportedStart ? 'FIRMAN RD4910E has an electric starter.' : 'FIRMAN RD4910E: first oil change after 20 hours.';
     const passage = `${quote} Manual starter and engine switch are also listed on the control panel.`;
