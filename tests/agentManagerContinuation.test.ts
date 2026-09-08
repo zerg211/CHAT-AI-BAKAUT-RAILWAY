@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { continuationValidationIssues, parseContinuationDecision } from '../src/ai/agentManagerContinuation.js';
 import { AgentIntentContractSchema, type ToolRequest } from '../src/ai/agentManagerContracts.js';
+import { observationDecisionFormatForRequirements, answerContractFormatForEvidenceSources } from '../src/ai/agentManagerOrchestrator.js';
 
 const search = (id: string, query: string): ToolRequest => ({
   id, tool: 'catalog.search', args: { query }, rationale: 'Find a suitable catalog candidate', required: true, coversRequirementIds: []
@@ -15,6 +16,17 @@ const decision = (toolRequests: ToolRequest[]) => ({
 });
 
 describe('observation-driven continuation boundary', () => {
+  it('restricts generated candidate identities to the supplied product evidence', () => {
+    const productId = '96c772d3-ae4b-4414-9bce-d0ab22a9dc5c';
+    const schema = observationDecisionFormatForRequirements([], [productId, productId]).format.schema.properties;
+    expect(schema.candidateProductIds).toMatchObject({ items: { type: 'string', enum: [productId] } });
+    expect(observationDecisionFormatForRequirements([], []).format.schema.properties.candidateProductIds).toMatchObject({ maxItems: 0 });
+  });
+  it('restricts writer selection to eligible product IDs, including an empty eligible set', () => {
+    const schema = answerContractFormatForEvidenceSources(['source'], ['eligible']).format.schema.properties;
+    expect(schema.selectedProductIds.items).toEqual({ type: 'string', enum: ['eligible'] });
+    expect(answerContractFormatForEvidenceSources([], []).format.schema.properties.selectedProductIds.maxItems).toBe(0);
+  });
   it('allows a new read after an unhelpful initial catalog query', () => {
     expect(continuationValidationIssues({ decision: decision([search('next', 'refined query')]), intent, products: [] })).toEqual([]);
   });

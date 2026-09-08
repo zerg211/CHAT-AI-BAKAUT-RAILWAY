@@ -1243,12 +1243,13 @@ describe('observation-driven catalog continuation', () => {
     const conversations = new FakeConversations();
     const leads = new FakeLeads();
     const assessObservations = vi.fn(async () => ({ ...ready, action: 'continue' as const,
+      candidateProductIds: ['invented-product-id'],
       toolRequests: [{ id: 'unapproved-lead', tool: 'lead.capture' as const, args: {}, required: true, rationale: 'contact', coversRequirementIds: [] }] }));
     const orchestrator = new AgentManagerOrchestrator(conversations as never, new FakeProducts() as never, leads as never,
       model({ planTurn: async () => structuredGeneratorCatalogIntent(), assessObservations }));
     const payload = await orchestrator.generateAnswer({ sessionId, turnId, userMessage: 'Покажите генераторы.' });
     expect(leads.created).toEqual([]);
-    expect(payload.metadata?.continuation).toMatchObject({ status: 'stopped', stopReason: 'invalid_continuation' });
+    expect(payload.metadata?.continuation).toMatchObject({ status: 'stopped', stopReason: 'invalid_continuation', candidateProductIds: [] });
     expect(conversations.toolArtifacts).not.toEqual(expect.arrayContaining([expect.objectContaining({ toolName: 'lead.capture' })]));
   });
 
