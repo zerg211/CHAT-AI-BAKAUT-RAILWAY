@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
+import { managerTaskOwnershipGuidance } from './managerTaskOwnership.js';
 import { createHash, randomUUID } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import { z, ZodError } from 'zod';
@@ -235,6 +236,7 @@ export interface AgentManagerModel {
     evidence: string;
     rationale: string;
     factualIssues?: Array<{ claim: string; sourceResultId: string; reason: string }>;
+    ownershipIssues?: Array<{ claim: string; reason: string; managerAction: string }>;
   }>;
 }
 
@@ -5178,6 +5180,7 @@ function plannerSystemPromptBlock(
     'Return the shortest complete semantic JSON that satisfies the schema. Do not restate the buyer request across summary, rationale, query, semanticQuery, reason, notes, or evidence fields. Preserve exact buyer quotes only where provenance requires them.',
     'Ты планировщик AI менеджера БАКАУТ.',
     untrustedEvidenceBoundary,
+    managerTaskOwnershipGuidance,
     managerPolicy,
     ledgerIncludesCurrentTurnDelta
       ? 'Текущая реплика уже применена reducer-ом к ledger. Планируй по post-delta state, не добавляй её повторно, согласуй selectionPolicy с активными typed hard_requirement facts.'
@@ -5596,6 +5599,8 @@ export class OpenAIAgentManagerModel implements AgentManagerModel {
             'Учитывай userMessage. Ссылка на руководство, страницу производителя или иной источник факта, указание его редакции, точный неподтвержденный параметр и честное отсутствие подтверждения допустимы. Когда покупатель просит проверить сведения, краткий итог проверки конкретного факта отвечает на его вопрос; это не internal process disclosure. Не запрещай полезную атрибуцию источника или неопределенность из-за упоминания инструкции, подтверждения или проверки.',
             'Обычное упоминание товара или рабочего инструмента не является раскрытием процесса.',
             technicalGapResponseGuidance,
+            managerTaskOwnershipGuidance,
+            'Отдельно проверь ownershipIssues: переложена ли доступная менеджеру проверка на покупателя. Для каждого нарушения верни claimId из claimReferences, reason с объяснением с учётом вопроса и наблюдений, managerAction — конкретную работу, которую должен выполнить менеджер имеющимися возможностями. Это самостоятельная ошибка качества даже при верных фактах. Не отмечай допустимые вопросы о личных условиях покупателя и физическом осмотре полученного товара. Без нарушения верни [].',
             untrustedEvidenceBoundary,
             'Также проверь factualIssues: противоречия между точными товарными утверждениями ответа и products/toolResults/verifiedProductFacts, перенос факта на другую модель, утрату отрицания или условий, выдачу неподтвержденного/конфликтного значения за установленный факт. verifiedProductFacts — актуальные сохраненные факты с источниками для точных моделей: учитывай исходные attribute/value, даже если вопрос использует другой термин. confirmed означает подтверждение конкретного value, включая отсутствие свойства; название атрибута, тип документа и упоминание слова не подтверждают наличие свойства. Не путай отрицание свойства другой модели с отрицанием свойства проверяемой модели.',
             'conflictingVerifiedProductFacts — актуальные источники точных моделей с разными значениями одного атрибута. Они не подтверждают окончательное значение: проверь, разрешают ли текущие toolResults конфликт; иначе ответ должен сохранить неопределенность. sourceResultId=verified_fact:<id> конфликтующего источника допустим для указания проблемы, но сам конфликт не становится фактом ответа.',
@@ -5627,6 +5632,14 @@ export class OpenAIAgentManagerModel implements AgentManagerModel {
                 processDisclosure: { type: 'boolean' },
                 evidence: { type: 'string' },
                 rationale: { type: 'string' },
+                ownershipIssues: {
+                  type: 'array', maxItems: claimReferences.length ? 3 : 0,
+                  items: strictJsonObject({
+                    claimId: {type: 'string', enum: claimReferences.length ? claimReferences.map(claim => claim.id) : ['']},
+                    reason: {type: 'string'},
+                    managerAction: {type: 'string'}
+                  })
+                },
                 factualIssues: {
                   type: 'array',
                   maxItems: factualSourceIds.length && claimReferences.length ? 5 : 0,
@@ -5642,7 +5655,7 @@ export class OpenAIAgentManagerModel implements AgentManagerModel {
                   }
                 }
               },
-              required: ['processDisclosure', 'evidence', 'rationale', 'factualIssues']
+              required: ['processDisclosure', 'evidence', 'rationale', 'factualIssues', 'ownershipIssues']
             }
           }
         }
@@ -5654,14 +5667,22 @@ export class OpenAIAgentManagerModel implements AgentManagerModel {
       transportMaxRetries: 0
     });
     if (typeof parsed.processDisclosure !== 'boolean' || typeof parsed.evidence !== 'string' ||
-      typeof parsed.rationale !== 'string' || !Array.isArray(parsed.factualIssues)) {
+      typeof parsed.rationale !== 'string' || !Array.isArray(parsed.factualIssues) || !Array.isArray(parsed.ownershipIssues)) {
       throw new Error('semantic_language_review_invalid_contract');
     }
     return {
       processDisclosure: parsed.processDisclosure,
       evidence: parsed.evidence.trim(),
       rationale: parsed.rationale.trim(),
-      factualIssues: expandReviewFindings(parsed.factualIssues, claimReferences, factualSourceIds)
+      factualIssues: expandReviewFindings(parsed.factualIssues, claimReferences, factualSourceIds),
+      ownershipIssues: parsed.ownershipIssues.map((issue: {claimId: string; reason: string; managerAction: string}) => {
+        const claim = claimReferences.find(reference => reference.id === issue.claimId);
+        if (!claim || typeof issue.reason !== 'string' || !issue.reason.trim() ||
+          typeof issue.managerAction !== 'string' || !issue.managerAction.trim()) {
+          throw new Error('semantic_ownership_review_unbound_evidence');
+        }
+        return {claim: claim.text, reason: issue.reason, managerAction: issue.managerAction};
+      })
     };
   }
 
@@ -5748,6 +5769,7 @@ export class OpenAIAgentManagerModel implements AgentManagerModel {
             'lead.capture ok → подтверди получение и не проси повторно. not_found/error (нет имени/телефона) → НЕ подтверждай и не говори, что передано; leadAction="offer_form" и просьба недостающего контакта в форме.',
             'Без лишних вопросов; вопрос — только если он реально нужен для следующего шага.',
             'continuation — итог оценки реальных наблюдений в этом ходе. При clarify объясни полезное направление и задай конкретный решающий вопрос из missingFacts, не объявляй первые найденные товары подходящими. При answer используй накопленное evidence. При stopped дай полезную подтвержденную часть и точный пробел; остановка по бюджету или ошибка не означает исчерпание источников. Кандидаты из continuation все равно должны соответствовать productEvidenceRoles и фактам.',
+            managerTaskOwnershipGuidance,
             'Общие принципы устройства, применения, установки, запуска и обслуживания объясняй как общие технические рекомендации, явно отделяя их от характеристик конкретной модели. Точные режимы, расходники, интервалы, допуски и действия с оборудованием зависят от модели и должны опираться на ее проверенные сведения или инструкцию. Не подменяй полезное объяснение предложением оставить телефон.',
             'calculator.generatorLoad ok: payload.profile.requiredNominalKw/requiredStartingKw — расчётный минимум только когда эти поля присутствуют и missingStartingLoads пуст. При неизвестном пуске totalRunningKw/runningOnlyNominalFloorKw описывают лишь работу без учёта пуска, а не достаточный минимум генератора. Среди достаточных по мощности вариантов соблюдай порядок rankingObjectives покупателя. Только при приоритете минимального номинала или без явного числового приоритета ближайший достаточный номинал ставь первым, а превышение >1.5× — на позиции 2+ с числами в тексте (+X кВт к расчёту, +Y руб, зачем); слова запас/комфорт/надёжность/ресурс/бренд/дизель без этих чисел — не обоснование. Тип топлива, бренд и ресурс requiredNominalKw не меняют. Топливо покупателем не заявлено — смешанный показ топлив либо явная оговорка «показываю только [топливо], потому что [причина]; нужно другое — скажите». Оценки — «по расчету/допущениям», отдельно назови какой факт (шильдик насоса/инструмента) нужен до финального выбора. not_found — не выдумывай кВт. Warnings estimate_only/unbounded_guess/invalid_load_kind/bounded_basis_incomplete/bounded_assumption: без final fit и без утверждения совместимости; browse_catalog может показывать ассортимент без обещания совместимости. preliminary_fit может показывать предварительные варианты с canShowProductCards=true только при минимум одном заявленном требовании покупателя и без доказанного конфликта, а missingFacts и answerText точно называют непроверенную нагрузку. Estimate-only с нулем заявленных требований — это needs_more_info: canShowProductCards=false, selectedProductIds=[], короткая ориентация по классу как явно грубая (не факт о товаре) и ровно один главный вопрос, без карточек. final_fit — canShowProductCards=false и минимальный вопрос.',
             'Просьба предварительных вариантов + calculator ok + catalog товары + минимум одно заявленное требование покупателя → selectionReadiness "ready_for_preliminary_cards", карточки предварительные, недостающий точный факт назван. Если расчет и каталог доказывают load/phase, отсутствие топлива или бюджета не подавляет полезные предварительные карточки: покажи подходящие, назови допущение, максимум один уточняющий вопрос.',
@@ -7318,7 +7340,7 @@ export class AgentManagerOrchestrator {
         });
         review = { ...review, verdict: 'pass', issues: review.issues.map((issue) => ({ ...issue, severity: 'low' as const })) };
       }
-      if (review.verdict !== 'pass') {
+      if (review.verdict !== 'pass' || review.issues.some(issue => issue.code === 'manager_task_delegated_to_buyer')) {
         // LLM repair round: re-run the writer with issue feedback instead of killing
         // the whole turn. Deterministic gates stay as validators; the fix is semantic.
         const issueCodes = review.issues.map((issue) => issue.code);
@@ -7398,13 +7420,13 @@ export class AgentManagerOrchestrator {
           } else {
             // A review must remain bound to the exact draft it judged.
             // Preserve the original if only its wording needs improvement.
-            if (!review.issues.every(issue => issue.code === 'customer_output_research_process_disclosure')) {
+            if (!review.issues.every(issue => ['customer_output_research_process_disclosure', 'manager_task_delegated_to_buyer'].includes(issue.code))) {
               answer = repairedAnswer;
               review = repairReview;
             }
           }
           } catch (error) {
-            if (input.signal?.aborted || !review.issues.every(issue => issue.code === 'customer_output_research_process_disclosure')) throw error;
+            if (input.signal?.aborted || !review.issues.every(issue => ['customer_output_research_process_disclosure', 'manager_task_delegated_to_buyer'].includes(issue.code))) throw error;
             await this.trace(input.sessionId, input.turnId, 'recovery', 'editorial_repair_failed_keep_verified_original', {
               issueCodes: review.issues.map(issue => issue.code)
             });
@@ -7797,6 +7819,9 @@ export class AgentManagerOrchestrator {
       conflictingVerifiedProductFacts,
       answerContract: finalAnswerContract,
       preSendValidation: review,
+      consultationQuality: {
+        ownership: review.issues.some(issue => issue.code === 'manager_task_delegated_to_buyer') ? 'needs_improvement' : 'not_flagged'
+      },
       toolResults,
       historicalSelectionEvidence: {
         reused: historicalSelectionTools.length > 0,
@@ -9495,6 +9520,17 @@ export class AgentManagerOrchestrator {
             evidence: issue.claim
           });
         }
+        for (const issue of semanticLanguageReview.ownershipIssues ?? []) {
+          if (!issue.claim?.trim() || !customerVisibleText.includes(issue.claim) ||
+            !issue.reason?.trim() || !issue.managerAction?.trim()) {
+            throw new Error('semantic_ownership_review_unbound_evidence');
+          }
+          mechanicalIssues.push({
+            code: 'manager_task_delegated_to_buyer', severity: 'medium',
+            message: `Manager responsibility violation: ${issue.reason}. Required manager action: ${issue.managerAction}`,
+            evidence: issue.claim
+          });
+        }
       } catch (error) {
         if (input.signal?.aborted) throw error;
         mechanicalIssues.push({
@@ -9765,7 +9801,11 @@ export class AgentManagerOrchestrator {
       });
     }
     if (mechanicalIssues.length) {
-      return { verdict: 'block', issues: uniqueReviewIssues(mechanicalIssues) };
+      // Responsibility shortcomings trigger bounded repair, not an empty chat
+      // response. Keep the unresolved quality finding visible independently of
+      // factual/business delivery gates.
+      return { verdict: mechanicalIssues.every(issue => issue.code === 'manager_task_delegated_to_buyer') ? 'pass' : 'block',
+        issues: uniqueReviewIssues(mechanicalIssues) };
     }
     return { verdict: 'pass', issues: [] };
   }

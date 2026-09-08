@@ -25,7 +25,7 @@ describe('production consultation regressions', () => {
   });
 
   it('passes buyer source-verification context to the same semantic review that checks the answer', async () => {
-    structured.mockResolvedValueOnce({ parsed: { processDisclosure: false, evidence: '', rationale: 'Source attribution answers the buyer question.', factualIssues: [] } });
+    structured.mockResolvedValueOnce({ parsed: { processDisclosure: false, evidence: '', rationale: 'Source attribution answers the buyer question.', factualIssues: [], ownershipIssues: [] } });
     const input = { userMessage: 'Проверьте первую замену по руководству производителя.', answerText: 'В руководстве указан интервал первой замены; для точной редакции нужен серийный номер.', products: [], toolResults: [] };
     await new OpenAIAgentManagerModel().reviewCustomerLanguage(input);
     const payload = JSON.parse(structured.mock.calls.at(-1)![0].request.input.find((item: {role: string}) => item.role === 'user').content);

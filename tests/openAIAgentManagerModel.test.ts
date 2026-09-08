@@ -15,6 +15,22 @@ import { AgentIntentContractSchema, normalizeLedgerStateDeltaEvents, type AgentI
 import type { ConversationSession, Message, VerifiedProductFact } from '../src/shared/types.js';
 
 describe('OpenAIAgentManagerModel semantic inputs', () => {
+  it('binds a manager-responsibility finding to the actual buyer-visible fragment', async () => {
+    const answerText = 'На вашем месте я бы сверил артикул и совместимость у продавца.';
+    createStructuredJsonResponse.mockResolvedValueOnce({parsed: {
+      processDisclosure: false, evidence: '', rationale: 'Accurate facts do not complete manager-owned work.',
+      factualIssues: [], ownershipIssues: [{claimId: 'claim_1', reason: 'The manager can check its catalog.',
+        managerAction: 'Identify the exact offered model and check accessory compatibility using available evidence.'}]
+    }});
+    const review = await new OpenAIAgentManagerModel().reviewCustomerLanguage({
+      userMessage: 'Что ещё проверить перед покупкой?', answerText, products: [], toolResults: []
+    });
+    expect(review.ownershipIssues).toEqual([expect.objectContaining({claim: answerText, managerAction: expect.any(String)})]);
+    const request = createStructuredJsonResponse.mock.calls[0]![0].request;
+    expect(request.text.format.schema.required).toContain('ownershipIssues');
+    expect(request.text.format.schema.properties.ownershipIssues.items.properties.claimId.enum).toEqual(['claim_1']);
+  });
+
   beforeEach(() => {
     createStructuredJsonResponse.mockReset();
   });
@@ -94,7 +110,7 @@ describe('OpenAIAgentManagerModel semantic inputs', () => {
         processDisclosure: true,
         evidence: 'Я обращался к доступным источникам',
         rationale: 'The answer describes how information was sought.',
-        factualIssues: []
+        factualIssues: [], ownershipIssues: []
       }
     });
 
@@ -117,7 +133,7 @@ describe('OpenAIAgentManagerModel semantic inputs', () => {
 
   it('reviews grounded factual polarity using source-bound findings in the existing review call', async () => {
     const finding = { claim: 'The model has a manual starter.', sourceResultId: 'manual-read', reason: 'The exact model source confirms absence.' };
-    createStructuredJsonResponse.mockResolvedValueOnce({ parsed: { processDisclosure: false, evidence: '', rationale: 'Fact polarity mismatch.', factualIssues: [{ claimId: 'claim_1', sourceResultId: finding.sourceResultId, reason: finding.reason }] } });
+    createStructuredJsonResponse.mockResolvedValueOnce({ parsed: { processDisclosure: false, evidence: '', rationale: 'Fact polarity mismatch.', ownershipIssues: [], factualIssues: [{ claimId: 'claim_1', sourceResultId: finding.sourceResultId, reason: finding.reason }] } });
     const review = await new OpenAIAgentManagerModel().reviewCustomerLanguage({
       answerText: finding.claim,
       products: [{ id: 'model-1', name: 'Exact model X100', specs: {} }],
@@ -215,7 +231,7 @@ describe('OpenAIAgentManagerModel semantic inputs', () => {
       .mockResolvedValueOnce({ parsed: { action: 'answer', rationale: 'The saved canonical attribute answers this wording.',
         missingFacts: [], candidateProductIds: [], toolRequests: [] } })
       .mockResolvedValueOnce({ parsed: answer })
-      .mockResolvedValueOnce({ parsed: { processDisclosure: false, evidence: '', rationale: 'The exact-model fact supports the answer.', factualIssues: [] } });
+      .mockResolvedValueOnce({ parsed: { processDisclosure: false, evidence: '', rationale: 'The exact-model fact supports the answer.', factualIssues: [], ownershipIssues: [] } });
     const model = new OpenAIAgentManagerModel();
     await model.assessObservations({ ...input, round: 1, remainingBudget: new AgentManagerTurnBudget().snapshot() });
     expect(await model.composeAnswer(input)).toMatchObject(answer);
