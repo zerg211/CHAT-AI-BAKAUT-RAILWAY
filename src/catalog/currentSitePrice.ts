@@ -4,6 +4,7 @@ import type { Product } from '../shared/types.js';
 import { compactModelText } from '../ai/modelTextMatching.js';
 import { safeFetchBytes, outboundText } from '../security/outboundHttp.js';
 import { cleanText } from './normalize.js';
+import {singleflightPriceReader} from './priceSingleflight.js';
 
 export type VerifiedSitePrice = { productId: string; productName: string; previousPrice: number | null;
   price: number; currency: 'RUB'; sourceUrl: string; observedAt: string; evidence: string };
@@ -45,13 +46,15 @@ export function extractCurrentSitePrice(html: string, product: Product, pageUrl:
     price: prices[0].price, currency: 'RUB', sourceUrl: actual.toString(), observedAt: new Date().toISOString(), evidence: prices[0].evidence };
 }
 
-export async function readCurrentSitePrice(product: Product, signal?: AbortSignal): Promise<VerifiedSitePrice> {
+async function fetchCurrentSitePrice(product: Product): Promise<VerifiedSitePrice> {
   if (!product.sourceUrl || new URL(product.sourceUrl).origin !== new URL(config.CATALOG_BASE_URL).origin) throw new Error('site_price_source_untrusted');
   const result = await safeFetchBytes(product.sourceUrl, { allowedOrigin:config.CATALOG_BASE_URL,
-    timeoutMs:Math.min(15_000,config.CATALOG_REQUEST_TIMEOUT_MS), maxBytes:config.CATALOG_MAX_RESPONSE_BYTES, maxRedirects:2, signal,
+    timeoutMs:Math.min(15_000,config.CATALOG_REQUEST_TIMEOUT_MS), maxBytes:config.CATALOG_MAX_RESPONSE_BYTES, maxRedirects:2,
     headers:{'user-agent':'Bakaut catalog price verification'} });
   if (result.status !== 200) throw new Error('site_price_http_error');
   const price = extractCurrentSitePrice(outboundText(result), product, result.url, config.CATALOG_BASE_URL);
   if (!price) throw new Error('site_price_identity_or_value_unconfirmed');
   return price;
 }
+
+export const readCurrentSitePrice=singleflightPriceReader(fetchCurrentSitePrice,()=>config.CATALOG_BASE_URL);
