@@ -1423,6 +1423,32 @@ describe('observation-driven catalog continuation', () => {
     expect(conversations.assistantSaves).toHaveLength(1);
   });
 
+  it.each([false, true])('uses source-bound semantic review for designation roles (invented=%s)', async (invented) => {
+    class PartsProducts extends FakeProducts {
+      override async searchProducts() {
+        return [{ ...product('p1', 'Generator 5 kW'), specs: { 'Spark plug': 'E7RTC' } }];
+      }
+    }
+    const safeText = 'Для Generator 5 kW указан тип свечи E7RTC.';
+    const badText = 'Купите у нас генератор XYZ999.';
+    const composeAnswer = vi.fn(async (input) => ({
+      answerText: invented && !input.reviewIssuesFeedback?.length ? badText : safeText,
+      factsUsed: [], questionsAsked: [], toolResultIds: ['catalog-search'], selectedProductIds: [],
+      leadAction: 'none' as const, riskFlags: []
+    }));
+    const reviewCustomerLanguage = vi.fn(async ({ answerText }: { answerText: string }) => ({
+      processDisclosure: false, evidence: '', rationale: 'Distinguish a sourced part designation from a sold model.',
+      factualIssues: answerText === badText ? [{ claim: badText, sourceResultId: 'catalog-search',
+        reason: 'The catalog result does not offer this generator.' }] : []
+    }));
+    const orchestrator = new AgentManagerOrchestrator(new FakeConversations() as never, new PartsProducts() as never,
+      new FakeLeads() as never, model({ planTurn: async () => structuredGeneratorCatalogIntent(), composeAnswer, reviewCustomerLanguage }));
+    const result = await orchestrator.generateAnswer({ sessionId, turnId, userMessage: 'Какую свечу использует этот генератор?' });
+    expect(result.answer).toBe(safeText);
+    expect(composeAnswer).toHaveBeenCalledTimes(invented ? 2 : 1);
+    expect(reviewCustomerLanguage.mock.calls[0][0]).toMatchObject({ products: [expect.objectContaining({ specs: { 'Spark plug': 'E7RTC' } })] });
+  });
+
   it('only records questions from the accepted answer after semantic repair', async () => {
     const conversations = new FakeConversations();
     let reviews = 0;

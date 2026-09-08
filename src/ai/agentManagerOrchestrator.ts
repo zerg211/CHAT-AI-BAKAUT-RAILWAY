@@ -147,7 +147,6 @@ import {
   compactModelText,
   exactProductIdentity,
   isModelTokenChar,
-  modelIdentifierDisplayTokens,
   modelIdentifierTokens,
   modelTextTokens,
   normalizeModelText,
@@ -3258,66 +3257,11 @@ function structuredCatalogExpansionQuery(
     .join(' ');
 }
 
-function hasCatalogEvidenceRequest(intent: AgentIntentContract) {
-  return intent.toolRequests.some((request) =>
-    request.tool === 'catalog.search' || request.tool === 'catalog.getProductDetails'
-  );
-}
-
-function hasWebEvidenceRequest(intent: AgentIntentContract) {
-  return intent.toolRequests.some((request) => request.tool === 'web.researchProductFacts');
-}
-
-function catalogProductNameGuardApplies(input: {
-  intent: AgentIntentContract;
-  products: Product[];
-}) {
-  if (!input.products.length) return false;
-  if (!hasCatalogEvidenceRequest(input.intent)) return false;
-  if (hasWebEvidenceRequest(input.intent)) return false;
-  return input.intent.grounding?.taskType === 'product_selection' ||
-    input.intent.grounding?.sourcePolicy === 'catalog_required' ||
-    input.intent.toolRequests.some((request) => request.tool === 'catalog.search');
-}
-
-function productEvidenceModelTokens(products: Product[]) {
-  return new Set(products.flatMap((product) =>
-    modelIdentifierTokens([
-      product.name,
-      product.brand,
-      product.externalId,
-      product.slug
-    ].filter(Boolean).join(' '))
-  ));
-}
-
 function nonTargetMentionModelTokens(intent: AgentIntentContract) {
   return new Set((intent.productMentions ?? [])
     .filter((mention) => !exactTargetProductMentionRoles.has(mention.role))
     .flatMap((mention) => modelIdentifierTokens(mention.name)));
 }
-function unsupportedCatalogProductMentionTokens(input: {
-  answerText: string;
-  intent: AgentIntentContract;
-  products: Product[];
-}) {
-  if (!catalogProductNameGuardApplies(input)) return null;
-  const allowedTokens = productEvidenceModelTokens(input.products);
-  // All buyer/planner mention tokens are nameable: the buyer named them, the writer may
-  // echo them back. Anti-hallucination applies to INVENTED models, not to buyer targets.
-  for (const mention of input.intent.productMentions ?? []) {
-    for (const token of modelIdentifierTokens(mention.name)) allowedTokens.add(token);
-  }
-  if (!allowedTokens.size) return null;
-
-  const unsupportedDisplayTokens = modelIdentifierDisplayTokens(input.answerText)
-    .filter((token) => !allowedTokens.has(compactModelText(token)));
-  const unsupportedTokens = new Set(unsupportedDisplayTokens.map(compactModelText));
-  if (!unsupportedTokens.size) return null;
-
-  return unsupportedTokens.size ? uniqueStrings(unsupportedDisplayTokens) : null;
-}
-
 function targetBrandCandidates(targetNames: string[]) {
   const genericProductWords = new Set([
     'generator',
@@ -5603,6 +5547,7 @@ export class OpenAIAgentManagerModel implements AgentManagerModel {
             'Отдельно проверь ownershipIssues: переложена ли доступная менеджеру проверка на покупателя. Для каждого нарушения верни claimId из claimReferences, reason с объяснением с учётом вопроса и наблюдений, managerAction — конкретную работу, которую должен выполнить менеджер имеющимися возможностями. Это самостоятельная ошибка качества даже при верных фактах. Не отмечай допустимые вопросы о личных условиях покупателя и физическом осмотре полученного товара. Без нарушения верни [].',
             untrustedEvidenceBoundary,
             'Также проверь factualIssues: противоречия между точными товарными утверждениями ответа и products/toolResults/verifiedProductFacts, перенос факта на другую модель, утрату отрицания или условий, выдачу неподтвержденного/конфликтного значения за установленный факт. verifiedProductFacts — актуальные сохраненные факты с источниками для точных моделей: учитывай исходные attribute/value, даже если вопрос использует другой термин. confirmed означает подтверждение конкретного value, включая отсутствие свойства; название атрибута, тип документа и упоминание слова не подтверждают наличие свойства. Не путай отрицание свойства другой модели с отрицанием свойства проверяемой модели.',
+            'Определи роль каждого товарного обозначения по смыслу: предлагаемый к покупке товар, подтверждённая деталь/расходник, стандарт или характеристика, либо упоминание покупателя. Обозначение детали или стандарта не обязано быть названием отдельного товара каталога, но его применение и совместимость должны опираться на источники. Если ответ предлагает не подтверждённую каталогом модель как наш товар либо выдумывает совместимость, верни factualIssues с claimId и sourceResultId соответствующего каталожного наблюдения или проверенного факта. Само сочетание букв и цифр не является нарушением.',
             'conflictingVerifiedProductFacts — актуальные источники точных моделей с разными значениями одного атрибута. Они не подтверждают окончательное значение: проверь, разрешают ли текущие toolResults конфликт; иначе ответ должен сохранить неопределенность. sourceResultId=verified_fact:<id> конфликтующего источника допустим для указания проблемы, но сам конфликт не становится фактом ответа.',
             'Оценивай смысл и область утверждения, допускай корректный пересказ и полезный предварительный вывод с оговоркой. Не отклоняй общие знания без противоречия источникам и не требуй дословного копирования directAnswer. Для каждого factualIssues укажи claimId — существующий id фрагмента claimReferences, содержащего ошибку, sourceResultId — существующий requestId наблюдения или verified_fact:<id> сохраненного факта, доказывающего проблему, reason — конкретное противоречие или неподтвержденный факт внутри этого фрагмента. Без доказанной проблемы factualIssues=[]. Не копируй и не переписывай цитату: точный исходный текст будет связан кодом по claimId.',
             'Если processDisclosure=true, evidence должно быть точной цитатой из answerText. Верни только JSON.'
@@ -9760,19 +9705,6 @@ export class AgentManagerOrchestrator {
         severity: 'high',
         message: 'Exact-model research has unconfirmed or ambiguous coverage; use checked answerGuidance instead of a broader generated claim.',
         evidence: expectedResearchGuidance
-      });
-    }
-    const unsupportedCatalogProductMentions = unsupportedCatalogProductMentionTokens({
-      answerText: input.answer.answerText,
-      intent: input.intent,
-      products: input.products
-    });
-    if (unsupportedCatalogProductMentions) {
-      mechanicalIssues.push({
-        code: 'unsupported_catalog_product_mention',
-        severity: 'high',
-        message: 'Catalog selection answer names a model identifier that is absent from the product evidence passed to the answer.',
-        evidence: unsupportedCatalogProductMentions.join(', ')
       });
     }
     const researchStatus = technicalResearchStatus(input.toolResults, input.intent);
