@@ -9537,7 +9537,9 @@ export class AgentManagerOrchestrator {
           code: 'customer_output_semantic_review_unavailable',
           severity: 'high',
           message: 'Semantic customer-language review did not complete, so the answer cannot be sent safely.',
-          evidence: safeError(error).code ?? safeError(error).message ?? 'semantic_language_review_failed'
+          evidence: error instanceof AgentManagerTurnBudgetExceededError
+            ? error.stopReason
+            : safeError(error).code ?? safeError(error).message ?? 'semantic_language_review_failed'
         });
       }
     } else {

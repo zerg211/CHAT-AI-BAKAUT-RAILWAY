@@ -2,6 +2,7 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import { createHash } from 'node:crypto';
 import type { AgentManagerToolDefinition } from './agentManagerToolRegistry.js';
 import type { ProviderCallEstimate, ProviderBudgetEstimationStopReason } from './openaiRequestBudget.js';
+import { estimateProviderUsageCostUsd } from './openaiRequestBudget.js';
 import type { CustomerNeedState } from '../shared/types.js';
 
 export interface AgentManagerTurnLimits {
@@ -144,6 +145,7 @@ export class AgentManagerTurnBudget {
   private readonly deadlineAtMs: number;
   private modelCalls = 0;
   private providerCalls = 0;
+  private providerReconciledCalls = 0;
   private toolCalls = 0;
   private webCalls = 0;
   private resultBytes = 0;
@@ -246,6 +248,25 @@ export class AgentManagerTurnBudget {
     this.providerEstimatedTotalTokens = nextTotalTokens;
     this.estimatedCostUsd = nextCostUsd;
     this.hostedToolEstimatedCostUsd += Math.max(0, input.hostedToolCostUsd);
+    let reconciled = false;
+    return (usage: { input_tokens?: unknown; output_tokens?: unknown; total_tokens?: unknown } | null | undefined) => {
+      if (reconciled || !usage) return;
+      const { input_tokens: actualInput, output_tokens: actualOutput, total_tokens: actualTotal } = usage;
+      if (typeof actualInput !== 'number' || !Number.isSafeInteger(actualInput) || actualInput < 0 ||
+        typeof actualOutput !== 'number' || !Number.isSafeInteger(actualOutput) || actualOutput < 0 ||
+        typeof actualTotal !== 'number' || !Number.isSafeInteger(actualTotal) || actualTotal !== actualInput + actualOutput) return;
+      const cost = estimateProviderUsageCostUsd({ model: input.model, inputTokens: actualInput,
+        outputTokens: actualOutput, hostedToolCostUsd: input.hostedToolCostUsd });
+      if (cost === null) return;
+      reconciled = true;
+      this.providerReconciledCalls += 1;
+      // Release only this request's unused reserve. Other in-flight requests and
+      // failed/unknown-usage calls remain fully reserved; attempt counts never fall.
+      this.providerEstimatedInputTokens += actualInput - input.estimatedInputTokens;
+      this.providerReservedOutputTokens += actualOutput - input.reservedOutputTokens;
+      this.providerEstimatedTotalTokens += actualTotal - input.estimatedTotalTokens;
+      this.estimatedCostUsd += cost - input.estimatedCostUsd;
+    };
   }
 
   consumeToolCall(definition: AgentManagerToolDefinition) {
@@ -276,6 +297,7 @@ export class AgentManagerTurnBudget {
         promptShapes: this.promptShapes.map(shape => ({ ...shape })),
         modelCalls: this.modelCalls,
         providerCalls: this.providerCalls,
+        providerReconciledCalls: this.providerReconciledCalls,
         toolCalls: this.toolCalls,
         webCalls: this.webCalls,
         resultBytes: this.resultBytes,
@@ -302,7 +324,7 @@ export function hasCurrentAgentManagerTurnBudget() {
 }
 
 export function consumeCurrentAgentManagerProviderCall(estimate: ProviderCallEstimate) {
-  activeTurnBudget.getStore()?.consumeProviderCall(estimate);
+  return activeTurnBudget.getStore()?.consumeProviderCall(estimate);
 }
 
 export function recordCurrentAgentPromptShape(stage: string, request: Record<string, unknown>) {

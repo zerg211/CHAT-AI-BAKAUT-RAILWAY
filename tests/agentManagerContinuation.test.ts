@@ -16,6 +16,23 @@ const decision = (toolRequests: ToolRequest[]) => ({
 });
 
 describe('observation-driven continuation boundary', () => {
+  it('allows an already grounded secondary read class without allowing unrelated class drift', () => {
+    const accessory = { ...search('accessory', 'initial accessory'), args: { canonicalProductIntent: 'plateAccessory' as const } };
+    const scoped = AgentIntentContractSchema.parse({ ...intent,
+      selectionPolicy: { canonicalProductClass: 'plate', targetProductClass: 'plate', needAction: 'continue',
+        alternativePolicy: 'same_class_only', reusePreviousCards: true, maxCards: null,
+        powerSource: 'any', phase: 'any', requirements: [], rationale: 'Keep the selected plate while checking its accessory' },
+      toolRequests: [accessory],
+      productMentions: [{ name: 'compatible mat', role: 'catalog_candidate', productClass: 'plateAccessory', evidence: 'find a compatible mat', sourceMessageId: null }]
+    });
+    const next = { ...search('next', 'refined accessory'), args: { query: 'exact compatible mat', canonicalProductIntent: 'plateAccessory' as const } };
+    expect(continuationValidationIssues({ decision: decision([next]), intent: scoped, products: [] })).toEqual([]);
+    expect(continuationValidationIssues({ decision: decision([next]), intent: { ...scoped, productMentions: [] }, products: [] }))
+      .toContain('continuation_product_class_changed:plateAccessory');
+    const unrelated = { ...next, args: { canonicalProductIntent: 'generator' as const } };
+    expect(continuationValidationIssues({ decision: decision([unrelated]), intent: scoped, products: [] }))
+      .toContain('continuation_product_class_changed:generator');
+  });
   it('restricts generated candidate identities to the supplied product evidence', () => {
     const productId = '96c772d3-ae4b-4414-9bce-d0ab22a9dc5c';
     const schema = observationDecisionFormatForRequirements([], [productId, productId]).format.schema.properties;
