@@ -10415,3 +10415,33 @@ describe('verified product memory across catalog-only follow-ups', () => {
     expect(run.conversations.assistantSaves).toHaveLength(1);
   });
 });
+describe('manager responsibility quality repair', () => {
+  it.each(['fixed', 'repair_failure', 'still_delegated'] as const)('repairs delegated work without suppressing a safe answer: %s', async (outcome) => {
+    const conversations = new FakeConversations();
+    const bad = 'На вашем месте я бы сверил артикул и совместимость у продавца.';
+    const good = 'Подтверждённые сведения о выбранной модели доступны. Комплектацию конкретной поставки подтвердить пока нельзя.';
+    let attempt = 0;
+    const composeAnswer = vi.fn(async (input: Parameters<AgentManagerModel['composeAnswer']>[0]) => {
+      attempt += 1;
+      if (attempt > 1) {
+        expect(input.reviewIssuesFeedback?.join(' ')).toContain('manager_task_delegated_to_buyer');
+        if (outcome === 'repair_failure') throw new Error('writer unavailable');
+      }
+      return {answerText: attempt > 1 && outcome === 'fixed' ? good : bad, factsUsed: [], questionsAsked: [],
+        toolResultIds: [], leadAction: 'none' as const, riskFlags: []};
+    });
+    const reviewCustomerLanguage = vi.fn(async ({answerText}: {answerText: string}) => ({
+      processDisclosure: false, evidence: '', rationale: 'Assess manager-owned work independently of facts.',
+      factualIssues: [], ownershipIssues: answerText === bad ? [{claim: bad,
+        reason: 'Catalog identification can be performed by the manager.',
+        managerAction: 'Use the available model evidence instead of asking the buyer to consult the seller.'}] : []
+    }));
+    const orchestrator = new AgentManagerOrchestrator(conversations as never, new FakeProducts() as never,
+      new FakeLeads() as never, model({composeAnswer, reviewCustomerLanguage}));
+    const payload = await orchestrator.generateAnswer({sessionId, turnId, userMessage: 'Что ещё проверить перед покупкой?'});
+    expect(composeAnswer).toHaveBeenCalledTimes(2);
+    expect(payload.answer).toBe(outcome === 'fixed' ? good : bad);
+    expect(payload.metadata?.consultationQuality).toMatchObject({ownership: outcome === 'fixed' ? 'not_flagged' : 'needs_improvement'});
+    expect(conversations.assistantSaves).toHaveLength(1);
+  });
+});

@@ -171,7 +171,7 @@ describe('initial semantic producer memory references', () => {
     } };
     createStructuredJsonResponse.mockResolvedValueOnce({ parsed: { answerText: 'Полезный предварительный вывод.', factsUsed: [], questionsAsked: [], selectedProductIds: [],
       toolResultIds: ['research'], leadAction: exhausted ? 'offer_form' : 'none', riskFlags: [] } });
-    createStructuredJsonResponse.mockResolvedValueOnce({ parsed: { processDisclosure: false, evidence: '', rationale: 'Appropriate uncertainty.', factualIssues: [] } });
+    createStructuredJsonResponse.mockResolvedValueOnce({ parsed: { processDisclosure: false, evidence: '', rationale: 'Appropriate uncertainty.', factualIssues: [], ownershipIssues: [] } });
     const model = new OpenAIAgentManagerModel();
     await model.composeAnswer({ session, history: [], userMessage: 'Проверьте способ запуска этой модели.', ledgerEvents: [], ledgerState: reduceDialogueLedger([]),
       intent: initialDecision().intent, toolResults: [result], products: [] });
@@ -307,7 +307,7 @@ describe('initial semantic producer memory references', () => {
     class RepairModel extends OpenAIAgentManagerModel {
       override async composeAnswer() { return { answerText: 'Новые условия учёл.', factsUsed: [], questionsAsked: [],
         selectedProductIds: [], toolResultIds: [], leadAction: 'none' as const, riskFlags: [] }; }
-      override async reviewCustomerLanguage() { return { processDisclosure: false, evidence: '', rationale: 'No disclosure.', factualIssues: [] }; }
+      override async reviewCustomerLanguage() { return { processDisclosure: false, evidence: '', rationale: 'No disclosure.', factualIssues: [], ownershipIssues: [] }; }
     }
     const result = await new AgentManagerOrchestrator(conversations as never, {} as never, {} as never, new RepairModel())
       .generateAnswer({ sessionId, turnId, userMessage: correction });
