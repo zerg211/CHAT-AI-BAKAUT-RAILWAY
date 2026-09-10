@@ -1169,6 +1169,21 @@ export const leadCaptureToolArgsJsonSchema = strictJsonObject({
   notes: nullableStringJsonSchema
 });
 
+export const firstPartyPageToolArgsJsonSchema = strictJsonObject({
+  url: { type: 'string', minLength: 1, description: 'Full buyer-supplied first-party page URL (bakautprof.ru). Read directly instead of re-searching the catalog.' },
+  expectedKind: { type: ['string', 'null'], enum: ['product', 'company', 'other', null] },
+  expectedProductIdentity: nullableStringJsonSchema,
+  reason: nullableStringJsonSchema,
+  notes: nullableStringJsonSchema
+});
+
+export const companyKnowledgeToolArgsJsonSchema = strictJsonObject({
+  query: { type: 'string', minLength: 1, description: 'Public company information need: addresses, phones, pickup, delivery rules, warranty, working hours.' },
+  limit: nullableIntegerRangeJsonSchema(1, 6),
+  reason: nullableStringJsonSchema,
+  notes: nullableStringJsonSchema
+});
+
 export const ledgerDeltaFormat = {
   verbosity: 'low',
   format: {
@@ -1225,6 +1240,8 @@ export const toolRequestJsonSchema = {
     toolRequestVariantJsonSchema('catalog.getProductDetails', productDetailsToolArgsJsonSchema),
     toolRequestVariantJsonSchema('calculator.generatorLoad', generatorLoadToolArgsJsonSchema),
     toolRequestVariantJsonSchema('web.researchProductFacts', webResearchToolArgsJsonSchema),
+    toolRequestVariantJsonSchema('site.readFirstPartyPage', firstPartyPageToolArgsJsonSchema),
+    toolRequestVariantJsonSchema('site.searchCompanyKnowledge', companyKnowledgeToolArgsJsonSchema),
     toolRequestVariantJsonSchema('lead.capture', leadCaptureToolArgsJsonSchema)
   ]
 } as const;
@@ -1242,7 +1259,9 @@ export const observationDecisionFormat = {
       toolRequests: { type: 'array', maxItems: 3, items: { anyOf: [
         toolRequestVariantJsonSchema('catalog.search', catalogSearchToolArgsJsonSchema),
         toolRequestVariantJsonSchema('catalog.getProductDetails', productDetailsToolArgsJsonSchema),
-        toolRequestVariantJsonSchema('web.researchProductFacts', webResearchToolArgsJsonSchema)
+        toolRequestVariantJsonSchema('web.researchProductFacts', webResearchToolArgsJsonSchema),
+        toolRequestVariantJsonSchema('site.readFirstPartyPage', firstPartyPageToolArgsJsonSchema),
+        toolRequestVariantJsonSchema('site.searchCompanyKnowledge', companyKnowledgeToolArgsJsonSchema)
       ] } }
     })
   }
@@ -1265,7 +1284,9 @@ export function observationDecisionFormatForRequirements(requirementIds: string[
     toolRequests: { type: 'array', maxItems: 3, items: { anyOf: [
       requestSchema('catalog.search', catalogSearchToolArgsJsonSchema),
       requestSchema('catalog.getProductDetails', productDetailsToolArgsJsonSchema),
-      requestSchema('web.researchProductFacts', webResearchToolArgsJsonSchema)
+      requestSchema('web.researchProductFacts', webResearchToolArgsJsonSchema),
+      requestSchema('site.readFirstPartyPage', firstPartyPageToolArgsJsonSchema),
+      requestSchema('site.searchCompanyKnowledge', companyKnowledgeToolArgsJsonSchema)
     ] } }
   }) } };
 }
@@ -1952,7 +1973,8 @@ export function plannerSystemPromptBlock(
     'Явный вопрос «есть ли у вас X / можно ли заказать / цена / альтернативы» → riskFlags "answer_policy_catalog_presence_relevant"; для чистого техфакта — не добавлять.',
     'Новая модель в текущем ходе → не переиспользуй факты прежней модели, даже при «same», без evidence scoped к тому же идентификатору.',
     'Мультиходовый подбор генератора: при прежнем расчете нагрузок в истории перезапусти calculator.generatorLoad в текущем ходе перед catalog.search, чтобы результаты несли payload.profile.requiredNominalKw.',
-    'Не задавай вопрос, ответ на который уже есть в ledger.'
+    'Не задавай вопрос, ответ на который уже есть в ledger.',
+    'Ссылка покупателя на страницу bakautprof.ru — прямое evidence, а не повод для нового текстового поиска: планируй site.readFirstPartyPage с полным url из сообщения (детерминированный код всё равно добавит это чтение сам, дублировать не нужно). Публичные данные компании (адреса магазинов, телефоны, самовывоз, доставка, гарантия, часы) ищи сам через site.searchCompanyKnowledge по смыслу вопроса — никогда не отвечай «нет данных», не проверив знание компании, и не проси покупателя искать самому.'
   ].join('\n');
 }
 
@@ -2422,7 +2444,7 @@ export class OpenAIAgentManagerModel implements AgentManagerModel {
           'Проверь, позволяют ли наблюдения решить задачу покупателя, а не просто назвать найденные товары. Учитывай весь активный контекст, назначение, доступные покупателю условия работы и сравниваемые модели.',
           'Верни action=answer, если данных достаточно для полезного обоснованного ответа. Верни clarify только для решающего неизвестного условия самого покупателя; характеристики товара выясняй самостоятельно. Не предлагай неподъемную/неуместную технику новичку, если способ работы и перевозки еще неизвестен: выясни существенное условие без выдумывания лимита.',
           'Верни continue и 1–3 конкретных read-запроса, если каталог пуст/неуместен, нужна другая формулировка поиска, детали найденной модели или решающий отсутствующий/противоречивый факт. После выполнения увидишь их результаты. Не заканчивай на первом пустом запросе, когда разумный уточненный поиск еще возможен.',
-          'catalog.search ищет по query/semanticQuery в каталоге; catalog.getProductDetails получает известные productIds/productNames; web.researchProductFacts проверяет точные productNames и comparisonAttributes. Сначала используй каталог/проверенные факты, потом сайт/инструкцию производителя, затем надежные профильные источники. Не исследуй повторно покрытые факты, если покупатель не просил перепроверить. Не запрашивай точное наличие/скидку/доставку через технический поиск.',
+          'catalog.search ищет по query/semanticQuery в каталоге; catalog.getProductDetails получает известные productIds/productNames; web.researchProductFacts проверяет точные productNames и comparisonAttributes. site.readFirstPartyPage читает напрямую страницу сайта БАКАУТ, которую дал покупатель (url обязателен): используй его для ссылки из сообщения вместо повторного поиска; site.searchCompanyKnowledge ищет публичные данные компании (адреса, телефоны, самовывоз, доставка, гарантия) в страницах сайта. Сначала используй каталог/проверенные факты, потом сайт/инструкцию производителя, затем надежные профильные источники. Не исследуй повторно покрытые факты, если покупатель не просил перепроверить. Не запрашивай точное наличие/скидку/доставку через технический поиск.',
           'verifiedProductFacts содержит актуальные сохраненные факты точных моделей независимо от текущего web policy. Сам сопоставь смысл исходных attribute/value вопросу покупателя; отсутствие того же имени атрибута в каталоге не отменяет сохраненный факт. Противоречие источников требует проверки, а уже подтвержденное значение без конфликта — использования в ответе.',
           'conflictingVerifiedProductFacts сохраняет источники, расходящиеся по значению одного атрибута модели. Они не подтверждают ни одно окончательное значение; не считай совпадение одного из них с каталогом разрешением конфликта. Проверь решающий конфликт через доступные источники, если текущие наблюдения его еще не разрешили.',
           'Сохраняй intent, область потребности и все требования без изменения. Нельзя создавать лиды, менять бюджет/условия, переинтерпретировать реплику или выполнять side effects. productIds/candidateProductIds только из products; productNames копируй из products/явных исходных целей. Не подставляй другую модификацию. coversRequirementIds только существующие id, иначе [].',

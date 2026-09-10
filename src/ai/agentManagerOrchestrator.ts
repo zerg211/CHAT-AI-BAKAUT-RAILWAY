@@ -30,6 +30,7 @@ import { safeError } from './responseUtils.js';
 import { getAgentManagerRuntimeDecision } from './agentManagerRuntime.js';
 import { extractContact, hasLeadContact } from './contactExtraction.js';
 import { leadCaptureMissingContact, leadCaptureMissingName, leadOfferWithoutReviewableResult } from './leadReviewGuards.js';
+import { deriveTaskOutcome } from './taskOutcome.js';
 import { hasAdjudicationRisk, hasUnsupportedClaimRisk } from './riskReviewGuards.js';
 import { assessVisibleCardReadiness, budgetMaxFromNeedState, filterGeneratorProductsByLoadProfile, gateStrictSelectionRequirements, hasStructuredGeneratorRemoteStartPreference, productSelectionClasses, productCards, productMeetsSupportedStrictAutoStartRequirement, productMeetsSupportedStrictRemoteStartRequirement, productMeetsSupportedStrictFuelRequirement, productMeetsSupportedStrictPriceVisibilityRequirement, productMeetsSupportedStrictVoltageRequirement, qualifiedNominalActivePowerKw, rankCatalogProductsByStructuredPreferences, selectProductsForVisibleCards, strictSelectionRequirementShapeBlockers, structuredSelectionRankingObjectives, suppressVisibleCardsForReadiness, toolRequestProductIntent, toolRequestScopedQuery, uniqueStrings } from './agentManagerCardSelection.js';
 import { buildGeneratorLoadToolPayload, hasUnconfirmedGeneratorLoadBasisResult, isGeneratorProductClass } from './agentManagerGeneratorLoad.js';
@@ -48,6 +49,7 @@ import { AI_MANAGER_RUNTIME_VERSION } from './aiManagerRuntimeManifest.js';
 import { readCurrentSitePrice } from '../catalog/currentSitePrice.js';
 import { verifyBudgetPrices } from '../catalog/verifyBudgetPrices.js';
 import { buildRequirementProofs, combinedRequirementProofStatus, requirementUsesGenericReadProof, requirementProofsFor, resolvedRequirementEligibilityStatus, selectionRequirementAttributeMatches } from './requirementProofs.js';
+import { injectFirstPartyPageReads, unreadFirstPartyUrls } from './firstPartyTurnInjection.js';
 
 export interface AgentManagerGenerateInput {
   sessionId: string;
@@ -2714,10 +2716,20 @@ private async persistVerifiedResearchFacts(input: {
       ...plannedIntent,
       toolRequests: validatedToolRequests
     };
-    const intent: AgentIntentContract = {
+    const orderedIntent: AgentIntentContract = {
       ...intentWithoutOrderedTools,
       toolRequests: orderToolRequestsForSelectionDependencies(validatedToolRequests, intentWithoutOrderedTools)
     };
+    // Deterministic first-class evidence path (F04): a buyer-supplied first-party
+    // URL must be read directly in this turn; the planner may not skip it.
+    const intent = injectFirstPartyPageReads(orderedIntent, userMessage);
+    if (intent !== orderedIntent) {
+      await this.trace(input.sessionId, input.turnId, 'intent', 'first_party_url_read_injected', {
+        urls: intent.toolRequests
+          .filter((request) => request.tool === 'site.readFirstPartyPage')
+          .map((request) => request.args.url)
+      });
+    }
     turnBudget.applySemanticProfile(selectAgentManagerBudgetProfile({recovered:input.recovered,intent}), 'validated_current_turn_intent');
     await this.trace(input.sessionId,input.turnId,'intent','task_budget_classified',{
       taskType:intent.grounding?.taskType,profile:turnBudget.profile,transitions:turnBudget.snapshot().profileTransitions
@@ -2929,7 +2941,8 @@ private async persistVerifiedResearchFacts(input: {
               signal: input.signal
             }));
           }
-          let issues = continuationValidationIssues({ decision, intent, products: observationProducts });
+          let issues = continuationValidationIssues({ decision, intent, products: observationProducts,
+            unreadFirstPartyUrls: unreadFirstPartyUrls(userMessage, toolResults) });
           if (issues.length && !savedObservation && !observationRepairUsed &&
             decision.toolRequests.every(request => continuationReadTools.has(request.tool)) &&
             turnBudget.remainingWallTimeMs() >= 40_000) {
@@ -2950,7 +2963,8 @@ private async persistVerifiedResearchFacts(input: {
               structuredDeadlineAtMs: turnBudget.deadlineForStage(20_000, 30_000),
               signal: input.signal
             }));
-            issues = continuationValidationIssues({ decision, intent, products: observationProducts });
+            issues = continuationValidationIssues({ decision, intent, products: observationProducts,
+              unreadFirstPartyUrls: unreadFirstPartyUrls(userMessage, toolResults) });
           }
           if (issues.length) {
             await this.trace(input.sessionId, input.turnId, 'tools', 'observation_validation_failed', { round, issues, replayed: Boolean(savedObservation) });
@@ -3724,6 +3738,18 @@ private async persistVerifiedResearchFacts(input: {
       turnContract: turnContractMetadataFromIntent(intent, cards, {
         toolResults: selectionToolResults,
         answer: finalAnswerContract
+      }),
+      taskOutcome: deriveTaskOutcome({
+        goal: intent.userMessageSummary,
+        userMessage: input.userMessage ?? '',
+        toolResults: selectionToolResults,
+        blockingUnknowns: policyGate.blockedReasons,
+        leadCaptured: selectionToolResults.some(isDurableLeadCaptureResult),
+        contactOffered: finalAnswerContract.leadAction === 'offer_form',
+        resolvedFacts: finalFactsUsed.map((fact) => fact.factKey),
+        unresolvedFacts: finalAnswerContract.selectionReadiness?.status === 'needs_more_info'
+          ? [...(finalAnswerContract.selectionReadiness.missingFacts ?? [])]
+          : []
       }),
       policyGate,
       policyGateEnforcement,

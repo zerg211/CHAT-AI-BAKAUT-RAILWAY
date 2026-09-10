@@ -1,6 +1,8 @@
 import { z } from 'zod';
 import {
   CatalogSearchToolArgsSchema,
+  CompanyKnowledgeToolArgsSchema,
+  FirstPartyPageToolArgsSchema,
   GeneratorLoadToolArgsSchema,
   LeadCaptureToolArgsSchema,
   ProductDetailsToolArgsSchema,
@@ -155,8 +157,42 @@ const webResearchResult = z.object({
   error: z.unknown().optional()
 }).strict();
 
-const leadCaptureResult = z.object({
-  leadId: z.string().optional(),
+const firstPartyPageResult = z.object({
+  canonicalUrl: nonEmpty,
+  pageKind: z.enum(['product', 'company', 'other']).optional(),
+  title: z.string().optional(),
+  text: z.string().optional(),
+  productIdentity: z.object({
+    title: z.string(),
+    article: z.string().optional()
+  }).strict().optional(),
+  catalogProductId: nonEmpty.optional(),
+  catalogMatch: z.enum(['matched', 'absent']).optional(),
+  companyInfo: z.object({
+    kind: z.string(),
+    volatility: z.enum(['STABLE', 'SEMI_VOLATILE']),
+    snippet: z.string()
+  }).strict().optional(),
+  sourceFingerprint: z.string().optional(),
+  observedAt: z.string().optional(),
+  failureCode: z.enum(['denied', 'timeout', 'http_status', 'unreadable', 'unsupported']).optional(),
+  error: z.unknown().optional()
+}).strict();
+
+const companyKnowledgeResult = z.object({
+  query: z.string().optional(),
+  pages: z.array(z.object({
+    url: nonEmpty,
+    title: z.string(),
+    pageKind: z.string(),
+    volatility: z.enum(['STABLE', 'SEMI_VOLATILE']).optional(),
+    snippet: z.string()
+  }).strict()).max(6).optional(),
+  reason: z.string().optional(),
+  error: z.unknown().optional()
+}).strict();
+
+const leadCaptureResult = z.object({  leadId: z.string().optional(),
   existing: z.boolean().optional(),
   outbox: z.boolean().optional(),
   outboxId: z.string().optional(),
@@ -232,6 +268,26 @@ export const agentManagerToolRegistry = {
     maxResultBytes: 300_000,
     // 2 attempts: a single network timeout must not end the search while the turn
     // budget still fits a shortened retry (AGENTS.md: exhaust sources before giving up).
+    maxAttempts: 2
+  },
+  'site.readFirstPartyPage': {
+    argsSchema: FirstPartyPageToolArgsSchema,
+    resultPayloadSchema: firstPartyPageResult,
+    risk: 'external_read',
+    sideEffect: false,
+    timeoutMs: 20_000,
+    maxResultItems: 1,
+    maxResultBytes: 60_000,
+    maxAttempts: 2
+  },
+  'site.searchCompanyKnowledge': {
+    argsSchema: CompanyKnowledgeToolArgsSchema,
+    resultPayloadSchema: companyKnowledgeResult,
+    risk: 'safe_read',
+    sideEffect: false,
+    timeoutMs: 10_000,
+    maxResultItems: 6,
+    maxResultBytes: 120_000,
     maxAttempts: 2
   },
   'lead.capture': {

@@ -246,6 +246,8 @@ const allowedToolArgKeys: Record<ToolRequest['tool'], Set<string>> = {
     'query', 'semanticQuery', 'productIntent', 'canonicalProductIntent', 'powerSource', 'phase',
     'productNames', 'comparisonAttributes', 'limit', 'reason', 'notes'
   ]),
+  'site.readFirstPartyPage': new Set(['url', 'expectedKind', 'expectedProductIdentity', 'reason', 'notes']),
+  'site.searchCompanyKnowledge': new Set(['query', 'limit', 'reason', 'notes']),
   'lead.capture': new Set(['contact', 'reason', 'notes'])
 };
 

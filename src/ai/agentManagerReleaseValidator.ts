@@ -10,6 +10,7 @@ import { isGeneratorProductClass } from './agentManagerGeneratorLoad.js';
 import { AgentManagerTurnBudget, AgentManagerTurnBudgetExceededError } from './agentManagerTurnBudget.js';
 import { guardCustomerOutput } from './agentManagerOutputGuard.js';
 import { compactModelText, modelIdentifierTokens, modelTextTokens, normalizeModelText, textMatchesTargetName, tokenHasLetter } from './modelTextMatching.js';
+import { firstPartyAnswerReviewIssues, stalledRepetitionReviewIssues } from './taskOutcome.js';
 
 export interface AgentManagerReviewInput extends AgentManagerAnswerInput {
   answer: AnswerContract;
@@ -328,6 +329,25 @@ export async function validateAgentAnswer(model: AgentManagerModel,
     budget?: AgentManagerTurnBudget
   ): Promise<PreSendReview> {
     const mechanicalIssues: PreSendReview['issues'] = [];
+    for (const firstPartyIssue of firstPartyAnswerReviewIssues({
+      userMessage: input.userMessage,
+      toolResults: input.toolResults
+    })) {
+      mechanicalIssues.push(firstPartyIssue);
+    }
+    for (const repetitionIssue of stalledRepetitionReviewIssues({
+      history: input.history,
+      userMessage: input.userMessage,
+      toolRequests: input.intent.toolRequests.map((request) => ({
+        id: request.id, tool: request.tool, args: request.args as Record<string, unknown>
+      })),
+      toolResults: input.toolResults,
+      readinessStatus: input.answer.selectionReadiness?.status,
+      selectedProductIds: input.answer.selectedProductIds ?? [],
+      leadAction: input.answer.leadAction
+    })) {
+      mechanicalIssues.push(repetitionIssue);
+    }
     if ((input.continuation?.status === 'clarify' || input.intent.grounding?.responseMode === 'clarify') && (
       input.answer.questionsAsked.length === 0 ||
       input.answer.selectionReadiness?.status === 'ready_for_exact_cards'

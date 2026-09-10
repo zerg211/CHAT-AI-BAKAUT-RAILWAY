@@ -27,6 +27,8 @@ export const AgentManagerToolNameSchema = z.enum([
   'catalog.getProductDetails',
   'calculator.generatorLoad',
   'web.researchProductFacts',
+  'site.readFirstPartyPage',
+  'site.searchCompanyKnowledge',
   'lead.capture'
 ]);
 
@@ -159,6 +161,21 @@ export const LeadCaptureToolArgsSchema = z.object({
   notes: optionalText
 }).strict();
 
+export const FirstPartyPageToolArgsSchema = z.object({
+  url: nonEmptyString,
+  expectedKind: optionalPlaceholder(z.enum(['product', 'company', 'other'])),
+  expectedProductIdentity: optionalText,
+  reason: optionalText,
+  notes: optionalText
+}).strict();
+
+export const CompanyKnowledgeToolArgsSchema = z.object({
+  query: nonEmptyString,
+  limit: optionalPositiveLimit(6),
+  reason: optionalText,
+  notes: optionalText
+}).strict();
+
 export const DialogueLedgerEventSchema = z.object({
   id: z.string().uuid().optional(),
   sessionId: z.string().uuid(),
@@ -200,16 +217,20 @@ export const ToolRequestSchema = z.discriminatedUnion('tool', [
   z.object({ ...toolRequestFields, tool: z.literal('catalog.getProductDetails'), args: ProductDetailsToolArgsSchema }).strict(),
   z.object({ ...toolRequestFields, tool: z.literal('calculator.generatorLoad'), args: GeneratorLoadToolArgsSchema }).strict(),
   z.object({ ...toolRequestFields, tool: z.literal('web.researchProductFacts'), args: WebResearchToolArgsSchema }).strict(),
+  z.object({ ...toolRequestFields, tool: z.literal('site.readFirstPartyPage'), args: FirstPartyPageToolArgsSchema }).strict(),
+  z.object({ ...toolRequestFields, tool: z.literal('site.searchCompanyKnowledge'), args: CompanyKnowledgeToolArgsSchema }).strict(),
   z.object({ ...toolRequestFields, tool: z.literal('lead.capture'), args: LeadCaptureToolArgsSchema }).strict()
 ]);
 
 export const ToolObservationStatusSchema = z.enum([
   'success',
   'not_found',
+  'unavailable',
   'timeout',
   'aborted',
   'denied',
   'malformed',
+  'unsupported',
   'conflict'
 ]);
 export type ToolObservationStatus = z.infer<typeof ToolObservationStatusSchema>;
@@ -264,6 +285,9 @@ export interface ToolRequestArgs {
   } | null;
   reason?: string | null;
   notes?: string | null;
+  url?: string | null;
+  expectedKind?: 'product' | 'company' | 'other' | null;
+  expectedProductIdentity?: string | null;
 }
 
 export const ToolResultSchema = z.object({

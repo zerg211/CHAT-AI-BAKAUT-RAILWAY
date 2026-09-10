@@ -643,6 +643,8 @@ async function repairCatalogFreshnessSchema(client: QueryableClient) {
     AS $$ SELECT hashtextextended(identity, 0); $$
   `);
   await client.query('CREATE INDEX IF NOT EXISTS products_catalog_freshness_idx ON products(is_active, last_seen_at DESC)');
+  await client.query('CREATE INDEX IF NOT EXISTS products_slug_idx ON products(slug)');
+  await client.query(`CREATE INDEX IF NOT EXISTS products_article_idx ON products((specs->>'артикул'))`);
   await client.query('CREATE INDEX IF NOT EXISTS catalog_pages_freshness_idx ON catalog_pages(is_active, last_seen_at DESC)');
   await client.query('CREATE INDEX IF NOT EXISTS catalog_sync_runs_source_finished_idx ON catalog_sync_runs(source_type, source_location, finished_at DESC)');
   await client.query("CREATE INDEX IF NOT EXISTS catalog_sync_runs_running_lock_idx ON catalog_sync_runs(lock_identity, started_at DESC) WHERE status = 'running'");
