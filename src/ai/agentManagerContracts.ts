@@ -648,3 +648,56 @@ export function normalizeLedgerStateDeltaEvents(input: {
     });
   });
 }
+
+/**
+ * Deterministic guardian taxonomy for riskFlags (Astra-01 AC7).
+ * LLM sets flags by meaning; code only normalizes and gates on this closed
+ * list. The policy gate never classifies the buyer message — it checks the
+ * already-typed plan. See evaluateAgentManagerPolicyGate.
+ */
+export const AGENT_RISK_FLAG_TAXONOMY = [
+  'answer_policy_catalog_presence_relevant',
+  'unsupported_claim',
+  'selection_readiness_blocked_cards',
+  'recovered_legacy_answer_contract_fail_closed'
+] as const;
+
+export type AgentRiskFlag = (typeof AGENT_RISK_FLAG_TAXONOMY)[number];
+
+export function normalizeRiskFlags(flags: readonly string[] | undefined): string[] {
+  const seen = new Set<string>();
+  for (const flag of flags ?? []) {
+    const normalized = flag.trim();
+    if (!normalized || seen.has(normalized)) continue;
+    seen.add(normalized);
+  }
+  return [...seen];
+}
+
+export function isKnownAgentRiskFlag(flag: string): flag is AgentRiskFlag {
+  return (AGENT_RISK_FLAG_TAXONOMY as readonly string[]).includes(flag);
+}
+
+/**
+ * Per-turn failure memory for the turn contract (Astra-01 AC5).
+ * Keeps failed/denied/timed-out tool steps visible to the next turn without
+ * re-reading the full tool trace. Success results are omitted.
+ */
+export function recentFailuresFromToolResults(
+  toolResults: ReadonlyArray<{ tool: string; status: string; errorCode?: string }> | undefined
+): string[] {
+  const failures: string[] = [];
+  const seen = new Set<string>();
+  for (const result of toolResults ?? []) {
+    if (result.status === 'ok') continue;
+    const tool = result.tool.trim();
+    if (!tool) continue;
+    const errorCode = result.errorCode?.trim();
+    const entry = errorCode ? `${tool}:${result.status}:${errorCode}` : `${tool}:${result.status}`;
+    if (seen.has(entry)) continue;
+    seen.add(entry);
+    failures.push(entry);
+    if (failures.length >= 8) break;
+  }
+  return failures;
+}

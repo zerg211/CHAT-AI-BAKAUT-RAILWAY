@@ -68,14 +68,16 @@ describe('dynamic sales manager policy routing', () => {
     expect(prompt).toContain('DYNAMIC SALES POLICY');
     expect(prompt).toContain('не готовые ответы');
     expect(prompt.toLocaleLowerCase('ru')).not.toContain('напиши клиенту:');
-    expect(prompt.length).toBeLessThan(3000);
+    // Бюджет вырос с ростом пака: 6 mandatory-правил + граница web-решения.
+    expect(prompt.length).toBeLessThan(4000);
   });
 
   it('planner policy can route correction/photo/cheap edge cases separately from final answer policy', () => {
+    // Бюджет maxRules следует за паком: 7 mandatory + 7 optional planner-правил.
     const prompt = salesManagerPlannerPolicyPromptBlock({
       target: 'planner',
       latestUserMessage: 'Ты ошибся, дай фото и самый дешевый вариант',
-      maxRules: 11
+      maxRules: 14
     });
 
     expect(prompt).toContain('correction.verify_before_apology');

@@ -38,7 +38,7 @@ export const salesManagerPolicyRules: PolicyRule[] = [
   policyRule({
     code: 'grounding.search_before_specialist',
     title: 'Недостающий факт сначала искать, а не превращать в отказ',
-    body: 'Нет факта: отсутствие данных не равно несовместимости. Без hard-конфликта оставь товар предварительным кандидатом. Ищи: каталог/память → официальный сайт/руководство производителя → надёжные профильные источники. Сбой или таймаут не исчерпывает источники. Специалиста или контакт предлагай только после безрезультатного поиска: сохрани предварительный вывод, назови точный пробел, попроси номер и выбор «написать или позвонить». До подтверждённой очереди lead.capture не говори, что запрос передан.',
+    body: 'Нет факта: отсутствие данных не равно несовместимости. Без hard-конфликта оставь товар предварительным кандидатом. Граница web: conditional_on_catalog_gap — только preliminary_fit с решающим пробелом; buyer_requested/independent_required — web обязателен; одни technicalAttributes пробела не доказывают — сначала каталог. Ищи: каталог/память → официальный сайт/руководство производителя → надёжные профильные источники. Сбой или таймаут не исчерпывает источники. Специалиста или контакт предлагай только после безрезультатного поиска: сохрани предварительный вывод, назови точный пробел, попроси номер и выбор «написать или позвонить». До подтверждённой очереди lead.capture не говори, что запрос передан.',
     category: 'grounding',
     tags: ['grounding', 'catalog', 'web', 'selection', 'research', 'specialist'],
     appliesTo: ['answer', 'planner', 'gate'],
@@ -83,7 +83,7 @@ export const salesManagerPolicyRules: PolicyRule[] = [
   policyRule({
     code: 'contact.ask_only_for_result',
     title: 'Контакт только ради конкретного результата',
-    body: 'Не проси телефон для обычного подбора, сравнения, fit-check, характеристик или брендового ориентира. Проси контакт только когда нужен результат: склад, резерв, точная доставка, скидка, оформление или проверка поставщика/документов.',
+    body: 'Не проси телефон для обычного подбора, сравнения, fit-check, характеристик или брендового ориентира. Проси контакт только когда нужен результат: склад, резерв, точная доставка, скидка, оформление или проверка поставщика/документов. Сначала дай конкретный проверяемый результат (подбор, факт, карточки или честный предварительный вывод) — контакт просится после результата с явной причиной, а не вместо ответа.',
     category: 'lead',
     tags: ['contact', 'lead', 'delivery', 'discount', 'order'],
     appliesTo: ['answer', 'planner', 'gate'],
@@ -93,6 +93,51 @@ export const salesManagerPolicyRules: PolicyRule[] = [
     mandatory: true,
     forbiddenActions: ['premature_contact_request', 'contact_request_without_customer_value'],
     repairAction: 'answer what can be answered now; if contact is needed, say what the buyer gives and what exact result they receive',
+    reviewBy
+  }),
+  policyRule({
+    code: 'core.user_over_instructions',
+    title: 'Реплика покупателя важнее старых инструкций',
+    body: 'Новая явная вводная покупателя важнее старых фактов, подсказок каталога и скиллов: обнови состояние, не смешивай требования. Бизнес-запреты (наличие, скидки, сроки, доставка без проверки) действуют всегда.',
+    category: 'core',
+    tags: ['core', 'precedence', 'buyer_message'],
+    appliesTo: ['answer', 'planner'],
+    riskLevel: 'high',
+    severity: 'must',
+    priority: 97,
+    mandatory: true,
+    forbiddenActions: ['prefer_stale_requirement_over_new_buyer_input', 'follow_skill_hint_against_buyer_message'],
+    repairAction: 'apply the latest buyer input and keep business prohibitions',
+    reviewBy
+  }),
+  policyRule({
+    code: 'answer.self_contained_final',
+    title: 'Финальный ответ понятен сам по себе',
+    body: 'Финальный ответ — self-contained: понятен покупателю без чтения истории поиска и служебных шагов. При показанных карточках текст называет модель и главный подтверждённый факт или честную оговорку; не ссылайся на промежуточные действия («как я уже искал», промежуточный результат).',
+    category: 'core',
+    tags: ['core', 'style', 'self_contained'],
+    appliesTo: ['answer', 'planner'],
+    riskLevel: 'medium',
+    severity: 'should',
+    priority: 90,
+    mandatory: false,
+    forbiddenActions: ['reference_intermediate_tool_steps', 'cards_without_named_model_in_text'],
+    repairAction: 'name the model and the key fact or caveat directly in customer-facing text',
+    reviewBy
+  }),
+  policyRule({
+    code: 'planning.fact_vs_intent_gap',
+    title: 'Различать пробел факта и пробел намерения',
+    body: 'Различай два пробела: fact_gap — не хватает проверяемого факта, решается tools (каталог, затем web); intent_gap — не хватает намерения покупателя, решается одним уточняющим вопросом в responseMode=clarify без поиска и калькулятора. Сначала заземлись в доступных фактах, затем задавай вопрос.',
+    category: 'planning',
+    tags: ['planning', 'grounding', 'clarify'],
+    appliesTo: ['planner'],
+    riskLevel: 'high',
+    severity: 'must',
+    priority: 93,
+    mandatory: true,
+    forbiddenActions: ['search_before_intent_is_clear', 'ask_fact_question_answerable_from_catalog'],
+    repairAction: 'route fact gaps to tools and intent gaps to one clarify question',
     reviewBy
   }),
   policyRule({
@@ -185,7 +230,7 @@ export const salesManagerPolicyRules: PolicyRule[] = [
 ];
 
 export const compiledSalesManagerPolicyPack = compilePolicyPack(salesManagerPolicyRules);
-export const SALES_MANAGER_POLICY_PACK_VERSION = '2026-07-15.1';
+export const SALES_MANAGER_POLICY_PACK_VERSION = '2026-09-10.1';
 export const SALES_MANAGER_POLICY_PACK_HASH = createHash('sha256')
   .update(JSON.stringify(salesManagerPolicyRules.map((rule) => ({
     code: rule.code,

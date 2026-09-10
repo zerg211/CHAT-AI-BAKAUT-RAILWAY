@@ -15,7 +15,7 @@ import { ZodError } from 'zod';
 import { config } from '../config.js';
 import { ConversationRepository, LeadRepository, ProductRepository } from '../db/repositories.js';
 import type { AgentSourcePolicyV2, AgentTaskType, AgentTurnContract, ChatResponsePayload, ConversationSession, CustomerNeedState, LeadCaptureDraft, Message, Product, ProductCard, ProductSelectionClass, VerifiedProductFact } from '../shared/types.js';
-import { AgentIntentContractSchema, AgentSemanticDecisionSchema, DialogueLedgerEventSchema, DEFAULT_AGENT_INTENT_GROUNDING_RATIONALE, LedgerStateDeltaSchema, PreSendReviewSchema, ToolResultSchema, createStableLedgerEventId, normalizeLedgerStateDeltaEvents, parseAnswerContractModelOutput, type AgentIntentContract, type AgentSemanticDecision, type AgentIntentGrounding, type AnswerContract, type DialogueLedgerEvent, type LedgerStateDelta, type PreSendReview, type SelectionRequirement, type ToolRequest, type ToolResult } from './agentManagerContracts.js';
+import { AgentIntentContractSchema, AgentSemanticDecisionSchema, DialogueLedgerEventSchema, DEFAULT_AGENT_INTENT_GROUNDING_RATIONALE, LedgerStateDeltaSchema, PreSendReviewSchema, ToolResultSchema, createStableLedgerEventId, normalizeLedgerStateDeltaEvents, parseAnswerContractModelOutput, recentFailuresFromToolResults, type AgentIntentContract, type AgentSemanticDecision, type AgentIntentGrounding, type AnswerContract, type DialogueLedgerEvent, type LedgerStateDelta, type PreSendReview, type SelectionRequirement, type ToolRequest, type ToolResult } from './agentManagerContracts.js';
 import { deriveNeedStateSnapshotFromLedger, getActiveDialogueNeed, parseReducedDialogueLedgerState, reduceDialogueLedger, type ReducedDialogueLedgerState } from './dialogueLedgerReducer.js';
 import { createEmbedding } from './openaiClient.js';
 import { sanitizeVisibleAnswerNumbers } from './answerSanity.js';
@@ -29,7 +29,7 @@ import { emptyNeedState } from './needState.js';
 import { safeError } from './responseUtils.js';
 import { getAgentManagerRuntimeDecision } from './agentManagerRuntime.js';
 import { extractContact, hasLeadContact } from './contactExtraction.js';
-import { leadCaptureMissingContact, leadCaptureMissingName } from './leadReviewGuards.js';
+import { leadCaptureMissingContact, leadCaptureMissingName, leadOfferWithoutReviewableResult } from './leadReviewGuards.js';
 import { hasAdjudicationRisk, hasUnsupportedClaimRisk } from './riskReviewGuards.js';
 import { assessVisibleCardReadiness, budgetMaxFromNeedState, filterGeneratorProductsByLoadProfile, gateStrictSelectionRequirements, hasStructuredGeneratorRemoteStartPreference, productSelectionClasses, productCards, productMeetsSupportedStrictAutoStartRequirement, productMeetsSupportedStrictRemoteStartRequirement, productMeetsSupportedStrictFuelRequirement, productMeetsSupportedStrictPriceVisibilityRequirement, productMeetsSupportedStrictVoltageRequirement, qualifiedNominalActivePowerKw, rankCatalogProductsByStructuredPreferences, selectProductsForVisibleCards, strictSelectionRequirementShapeBlockers, structuredSelectionRankingObjectives, suppressVisibleCardsForReadiness, toolRequestProductIntent, toolRequestScopedQuery, uniqueStrings } from './agentManagerCardSelection.js';
 import { buildGeneratorLoadToolPayload, hasUnconfirmedGeneratorLoadBasisResult, isGeneratorProductClass } from './agentManagerGeneratorLoad.js';
@@ -1314,7 +1314,14 @@ function agentManagerTaskTypeFromGrounding(intent: AgentIntentContract): AgentTa
   return undefined;
 }
 
-function turnContractMetadataFromIntent(intent: AgentIntentContract, cards: ProductCard[]): AgentTurnContract {
+function turnContractMetadataFromIntent(
+  intent: AgentIntentContract,
+  cards: ProductCard[],
+  extra?: {
+    toolResults?: ToolResult[];
+    answer?: Pick<AnswerContract, 'leadAction' | 'factsUsed' | 'selectedProductIds' | 'questionsAsked'>;
+  }
+): AgentTurnContract {
   const taskType = agentManagerTaskTypeFromGrounding(intent);
   const qualifiesNeed = intent.grounding?.responseMode === 'clarify';
   const showSelectionCards = cards.length > 0 && taskType === 'product_selection' && !qualifiesNeed;
@@ -1328,6 +1335,10 @@ function turnContractMetadataFromIntent(intent: AgentIntentContract, cards: Prod
       : taskType === 'pure_delivery'
         ? 'lead_handoff'
         : 'technical_explanation';
+  const validatorWarnings = ['agent_manager_grounding_contract'];
+  if (extra?.answer && leadOfferWithoutReviewableResult(extra.answer)) {
+    validatorWarnings.push('lead_offer_without_reviewable_result');
+  }
   return {
     answerTask,
     taskType,
@@ -1347,7 +1358,9 @@ function turnContractMetadataFromIntent(intent: AgentIntentContract, cards: Prod
       ? 'Agent manager intent planned lead capture.'
       : 'No lead capture planned for this turn.',
     errorRecoveryPriority: intent.nextStepRationale,
-    validatorWarnings: ['agent_manager_grounding_contract']
+    validatorWarnings,
+    responseRequirements: ['final_self_contained'],
+    recentFailures: recentFailuresFromToolResults(extra?.toolResults)
   };
 }
 
@@ -3708,7 +3721,10 @@ private async persistVerifiedResearchFacts(input: {
       ledgerEventIds: turnLedgerEvents.map((event) => event.eventId),
       intentContract: intent,
       effectiveIntentContract: effectiveIntent === intent ? undefined : effectiveIntent,
-      turnContract: turnContractMetadataFromIntent(intent, cards),
+      turnContract: turnContractMetadataFromIntent(intent, cards, {
+        toolResults: selectionToolResults,
+        answer: finalAnswerContract
+      }),
       policyGate,
       policyGateEnforcement,
       sourcePolicy: sourcePolicyMetadataFromIntent(effectiveIntent, selectionToolResults),
