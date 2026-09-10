@@ -3791,6 +3791,54 @@ export class ProductRepository {
     return result.rows.map(mapProduct);
   }
 
+  /**
+   * Exact identity lookups for the product identity resolver (F03/F12).
+   * These never use embeddings or fuzzy ranking: a hit is an exact DB fact,
+   * a miss only means "not proven by this selector" — never product absence.
+   */
+  async getProductByExactExternalId(externalId: string) {
+    const value = externalId.trim();
+    if (!value) return null;
+    const result = await this.db.query(
+      `SELECT ${PRODUCT_RESPONSE_COLUMNS}, 1::numeric AS retrieval_score, 'exact'::text AS retrieval_source
+       FROM products
+       WHERE ${PRODUCT_FILTER}
+         AND external_id = $1
+       LIMIT 1`,
+      [value]
+    );
+    return result.rows.map(mapProduct)[0] ?? null;
+  }
+
+  async getProductByExactArticle(article: string) {
+    const value = article.trim();
+    if (!value) return null;
+    const result = await this.db.query(
+      `SELECT ${PRODUCT_RESPONSE_COLUMNS}, 1::numeric AS retrieval_score, 'exact'::text AS retrieval_source
+       FROM products
+       WHERE ${PRODUCT_FILTER}
+         AND (specs->>'артикул' = $1 OR lower(specs->>'артикул') = lower($1))
+       LIMIT 1`,
+      [value]
+    );
+    return result.rows.map(mapProduct)[0] ?? null;
+  }
+
+  async getProductBySourceUrl(sourceUrl: string) {
+    let value = sourceUrl.trim();
+    while (value.length > 0 && value.endsWith('/')) value = value.slice(0, -1);
+    if (!value) return null;
+    const result = await this.db.query(
+      `SELECT ${PRODUCT_RESPONSE_COLUMNS}, 1::numeric AS retrieval_score, 'exact'::text AS retrieval_source
+       FROM products
+       WHERE ${PRODUCT_FILTER}
+         AND (source_url = $1 OR source_url = $2)
+       LIMIT 1`,
+      [value, value + '/']
+    );
+    return result.rows.map(mapProduct)[0] ?? null;
+  }
+
   async searchProductsByModelTokens(tokens: string[], limit = 20, options: ProductQueryOptions = {}) {
     if (!tokens.length) return [];
     const result = await queryWithAbort(

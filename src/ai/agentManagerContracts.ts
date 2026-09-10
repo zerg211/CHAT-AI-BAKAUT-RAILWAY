@@ -27,6 +27,8 @@ export const AgentManagerToolNameSchema = z.enum([
   'catalog.getProductDetails',
   'calculator.generatorLoad',
   'web.researchProductFacts',
+  'site.readFirstPartyPage',
+  'site.searchCompanyKnowledge',
   'lead.capture'
 ]);
 
@@ -159,6 +161,21 @@ export const LeadCaptureToolArgsSchema = z.object({
   notes: optionalText
 }).strict();
 
+export const FirstPartyPageToolArgsSchema = z.object({
+  url: nonEmptyString,
+  expectedKind: optionalPlaceholder(z.enum(['product', 'company', 'other'])),
+  expectedProductIdentity: optionalText,
+  reason: optionalText,
+  notes: optionalText
+}).strict();
+
+export const CompanyKnowledgeToolArgsSchema = z.object({
+  query: nonEmptyString,
+  limit: optionalPositiveLimit(6),
+  reason: optionalText,
+  notes: optionalText
+}).strict();
+
 export const DialogueLedgerEventSchema = z.object({
   id: z.string().uuid().optional(),
   sessionId: z.string().uuid(),
@@ -200,16 +217,20 @@ export const ToolRequestSchema = z.discriminatedUnion('tool', [
   z.object({ ...toolRequestFields, tool: z.literal('catalog.getProductDetails'), args: ProductDetailsToolArgsSchema }).strict(),
   z.object({ ...toolRequestFields, tool: z.literal('calculator.generatorLoad'), args: GeneratorLoadToolArgsSchema }).strict(),
   z.object({ ...toolRequestFields, tool: z.literal('web.researchProductFacts'), args: WebResearchToolArgsSchema }).strict(),
+  z.object({ ...toolRequestFields, tool: z.literal('site.readFirstPartyPage'), args: FirstPartyPageToolArgsSchema }).strict(),
+  z.object({ ...toolRequestFields, tool: z.literal('site.searchCompanyKnowledge'), args: CompanyKnowledgeToolArgsSchema }).strict(),
   z.object({ ...toolRequestFields, tool: z.literal('lead.capture'), args: LeadCaptureToolArgsSchema }).strict()
 ]);
 
 export const ToolObservationStatusSchema = z.enum([
   'success',
   'not_found',
+  'unavailable',
   'timeout',
   'aborted',
   'denied',
   'malformed',
+  'unsupported',
   'conflict'
 ]);
 export type ToolObservationStatus = z.infer<typeof ToolObservationStatusSchema>;
@@ -264,6 +285,9 @@ export interface ToolRequestArgs {
   } | null;
   reason?: string | null;
   notes?: string | null;
+  url?: string | null;
+  expectedKind?: 'product' | 'company' | 'other' | null;
+  expectedProductIdentity?: string | null;
 }
 
 export const ToolResultSchema = z.object({
@@ -647,4 +671,57 @@ export function normalizeLedgerStateDeltaEvents(input: {
       eventId: createStableLedgerEventId(eventWithoutId)
     });
   });
+}
+
+/**
+ * Deterministic guardian taxonomy for riskFlags (Astra-01 AC7).
+ * LLM sets flags by meaning; code only normalizes and gates on this closed
+ * list. The policy gate never classifies the buyer message — it checks the
+ * already-typed plan. See evaluateAgentManagerPolicyGate.
+ */
+export const AGENT_RISK_FLAG_TAXONOMY = [
+  'answer_policy_catalog_presence_relevant',
+  'unsupported_claim',
+  'selection_readiness_blocked_cards',
+  'recovered_legacy_answer_contract_fail_closed'
+] as const;
+
+export type AgentRiskFlag = (typeof AGENT_RISK_FLAG_TAXONOMY)[number];
+
+export function normalizeRiskFlags(flags: readonly string[] | undefined): string[] {
+  const seen = new Set<string>();
+  for (const flag of flags ?? []) {
+    const normalized = flag.trim();
+    if (!normalized || seen.has(normalized)) continue;
+    seen.add(normalized);
+  }
+  return [...seen];
+}
+
+export function isKnownAgentRiskFlag(flag: string): flag is AgentRiskFlag {
+  return (AGENT_RISK_FLAG_TAXONOMY as readonly string[]).includes(flag);
+}
+
+/**
+ * Per-turn failure memory for the turn contract (Astra-01 AC5).
+ * Keeps failed/denied/timed-out tool steps visible to the next turn without
+ * re-reading the full tool trace. Success results are omitted.
+ */
+export function recentFailuresFromToolResults(
+  toolResults: ReadonlyArray<{ tool: string; status: string; errorCode?: string }> | undefined
+): string[] {
+  const failures: string[] = [];
+  const seen = new Set<string>();
+  for (const result of toolResults ?? []) {
+    if (result.status === 'ok') continue;
+    const tool = result.tool.trim();
+    if (!tool) continue;
+    const errorCode = result.errorCode?.trim();
+    const entry = errorCode ? `${tool}:${result.status}:${errorCode}` : `${tool}:${result.status}`;
+    if (seen.has(entry)) continue;
+    seen.add(entry);
+    failures.push(entry);
+    if (failures.length >= 8) break;
+  }
+  return failures;
 }

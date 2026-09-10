@@ -15,7 +15,7 @@ import { ZodError } from 'zod';
 import { config } from '../config.js';
 import { ConversationRepository, LeadRepository, ProductRepository } from '../db/repositories.js';
 import type { AgentSourcePolicyV2, AgentTaskType, AgentTurnContract, ChatResponsePayload, ConversationSession, CustomerNeedState, LeadCaptureDraft, Message, Product, ProductCard, ProductSelectionClass, VerifiedProductFact } from '../shared/types.js';
-import { AgentIntentContractSchema, AgentSemanticDecisionSchema, DialogueLedgerEventSchema, DEFAULT_AGENT_INTENT_GROUNDING_RATIONALE, LedgerStateDeltaSchema, PreSendReviewSchema, ToolResultSchema, createStableLedgerEventId, normalizeLedgerStateDeltaEvents, parseAnswerContractModelOutput, type AgentIntentContract, type AgentSemanticDecision, type AgentIntentGrounding, type AnswerContract, type DialogueLedgerEvent, type LedgerStateDelta, type PreSendReview, type SelectionRequirement, type ToolRequest, type ToolResult } from './agentManagerContracts.js';
+import { AgentIntentContractSchema, AgentSemanticDecisionSchema, DialogueLedgerEventSchema, DEFAULT_AGENT_INTENT_GROUNDING_RATIONALE, LedgerStateDeltaSchema, PreSendReviewSchema, ToolResultSchema, createStableLedgerEventId, normalizeLedgerStateDeltaEvents, parseAnswerContractModelOutput, recentFailuresFromToolResults, type AgentIntentContract, type AgentSemanticDecision, type AgentIntentGrounding, type AnswerContract, type DialogueLedgerEvent, type LedgerStateDelta, type PreSendReview, type SelectionRequirement, type ToolRequest, type ToolResult } from './agentManagerContracts.js';
 import { deriveNeedStateSnapshotFromLedger, getActiveDialogueNeed, parseReducedDialogueLedgerState, reduceDialogueLedger, type ReducedDialogueLedgerState } from './dialogueLedgerReducer.js';
 import { createEmbedding } from './openaiClient.js';
 import { sanitizeVisibleAnswerNumbers } from './answerSanity.js';
@@ -29,7 +29,8 @@ import { emptyNeedState } from './needState.js';
 import { safeError } from './responseUtils.js';
 import { getAgentManagerRuntimeDecision } from './agentManagerRuntime.js';
 import { extractContact, hasLeadContact } from './contactExtraction.js';
-import { leadCaptureMissingContact, leadCaptureMissingName } from './leadReviewGuards.js';
+import { leadCaptureMissingContact, leadCaptureMissingName, leadOfferWithoutReviewableResult } from './leadReviewGuards.js';
+import { deriveTaskOutcome } from './taskOutcome.js';
 import { hasAdjudicationRisk, hasUnsupportedClaimRisk } from './riskReviewGuards.js';
 import { assessVisibleCardReadiness, budgetMaxFromNeedState, filterGeneratorProductsByLoadProfile, gateStrictSelectionRequirements, hasStructuredGeneratorRemoteStartPreference, productSelectionClasses, productCards, productMeetsSupportedStrictAutoStartRequirement, productMeetsSupportedStrictRemoteStartRequirement, productMeetsSupportedStrictFuelRequirement, productMeetsSupportedStrictPriceVisibilityRequirement, productMeetsSupportedStrictVoltageRequirement, qualifiedNominalActivePowerKw, rankCatalogProductsByStructuredPreferences, selectProductsForVisibleCards, strictSelectionRequirementShapeBlockers, structuredSelectionRankingObjectives, suppressVisibleCardsForReadiness, toolRequestProductIntent, toolRequestScopedQuery, uniqueStrings } from './agentManagerCardSelection.js';
 import { buildGeneratorLoadToolPayload, hasUnconfirmedGeneratorLoadBasisResult, isGeneratorProductClass } from './agentManagerGeneratorLoad.js';
@@ -48,6 +49,7 @@ import { AI_MANAGER_RUNTIME_VERSION } from './aiManagerRuntimeManifest.js';
 import { readCurrentSitePrice } from '../catalog/currentSitePrice.js';
 import { verifyBudgetPrices } from '../catalog/verifyBudgetPrices.js';
 import { buildRequirementProofs, combinedRequirementProofStatus, requirementUsesGenericReadProof, requirementProofsFor, resolvedRequirementEligibilityStatus, selectionRequirementAttributeMatches } from './requirementProofs.js';
+import { injectFirstPartyPageReads, unreadFirstPartyUrls } from './firstPartyTurnInjection.js';
 
 export interface AgentManagerGenerateInput {
   sessionId: string;
@@ -1314,7 +1316,14 @@ function agentManagerTaskTypeFromGrounding(intent: AgentIntentContract): AgentTa
   return undefined;
 }
 
-function turnContractMetadataFromIntent(intent: AgentIntentContract, cards: ProductCard[]): AgentTurnContract {
+function turnContractMetadataFromIntent(
+  intent: AgentIntentContract,
+  cards: ProductCard[],
+  extra?: {
+    toolResults?: ToolResult[];
+    answer?: Pick<AnswerContract, 'leadAction' | 'factsUsed' | 'selectedProductIds' | 'questionsAsked'>;
+  }
+): AgentTurnContract {
   const taskType = agentManagerTaskTypeFromGrounding(intent);
   const qualifiesNeed = intent.grounding?.responseMode === 'clarify';
   const showSelectionCards = cards.length > 0 && taskType === 'product_selection' && !qualifiesNeed;
@@ -1328,6 +1337,10 @@ function turnContractMetadataFromIntent(intent: AgentIntentContract, cards: Prod
       : taskType === 'pure_delivery'
         ? 'lead_handoff'
         : 'technical_explanation';
+  const validatorWarnings = ['agent_manager_grounding_contract'];
+  if (extra?.answer && leadOfferWithoutReviewableResult(extra.answer)) {
+    validatorWarnings.push('lead_offer_without_reviewable_result');
+  }
   return {
     answerTask,
     taskType,
@@ -1347,7 +1360,9 @@ function turnContractMetadataFromIntent(intent: AgentIntentContract, cards: Prod
       ? 'Agent manager intent planned lead capture.'
       : 'No lead capture planned for this turn.',
     errorRecoveryPriority: intent.nextStepRationale,
-    validatorWarnings: ['agent_manager_grounding_contract']
+    validatorWarnings,
+    responseRequirements: ['final_self_contained'],
+    recentFailures: recentFailuresFromToolResults(extra?.toolResults)
   };
 }
 
@@ -2701,10 +2716,20 @@ private async persistVerifiedResearchFacts(input: {
       ...plannedIntent,
       toolRequests: validatedToolRequests
     };
-    const intent: AgentIntentContract = {
+    const orderedIntent: AgentIntentContract = {
       ...intentWithoutOrderedTools,
       toolRequests: orderToolRequestsForSelectionDependencies(validatedToolRequests, intentWithoutOrderedTools)
     };
+    // Deterministic first-class evidence path (F04): a buyer-supplied first-party
+    // URL must be read directly in this turn; the planner may not skip it.
+    const intent = injectFirstPartyPageReads(orderedIntent, userMessage);
+    if (intent !== orderedIntent) {
+      await this.trace(input.sessionId, input.turnId, 'intent', 'first_party_url_read_injected', {
+        urls: intent.toolRequests
+          .filter((request) => request.tool === 'site.readFirstPartyPage')
+          .map((request) => request.args.url)
+      });
+    }
     turnBudget.applySemanticProfile(selectAgentManagerBudgetProfile({recovered:input.recovered,intent}), 'validated_current_turn_intent');
     await this.trace(input.sessionId,input.turnId,'intent','task_budget_classified',{
       taskType:intent.grounding?.taskType,profile:turnBudget.profile,transitions:turnBudget.snapshot().profileTransitions
@@ -2916,7 +2941,8 @@ private async persistVerifiedResearchFacts(input: {
               signal: input.signal
             }));
           }
-          let issues = continuationValidationIssues({ decision, intent, products: observationProducts });
+          let issues = continuationValidationIssues({ decision, intent, products: observationProducts,
+            unreadFirstPartyUrls: unreadFirstPartyUrls(userMessage, toolResults) });
           if (issues.length && !savedObservation && !observationRepairUsed &&
             decision.toolRequests.every(request => continuationReadTools.has(request.tool)) &&
             turnBudget.remainingWallTimeMs() >= 40_000) {
@@ -2937,7 +2963,8 @@ private async persistVerifiedResearchFacts(input: {
               structuredDeadlineAtMs: turnBudget.deadlineForStage(20_000, 30_000),
               signal: input.signal
             }));
-            issues = continuationValidationIssues({ decision, intent, products: observationProducts });
+            issues = continuationValidationIssues({ decision, intent, products: observationProducts,
+              unreadFirstPartyUrls: unreadFirstPartyUrls(userMessage, toolResults) });
           }
           if (issues.length) {
             await this.trace(input.sessionId, input.turnId, 'tools', 'observation_validation_failed', { round, issues, replayed: Boolean(savedObservation) });
@@ -3708,7 +3735,22 @@ private async persistVerifiedResearchFacts(input: {
       ledgerEventIds: turnLedgerEvents.map((event) => event.eventId),
       intentContract: intent,
       effectiveIntentContract: effectiveIntent === intent ? undefined : effectiveIntent,
-      turnContract: turnContractMetadataFromIntent(intent, cards),
+      turnContract: turnContractMetadataFromIntent(intent, cards, {
+        toolResults: selectionToolResults,
+        answer: finalAnswerContract
+      }),
+      taskOutcome: deriveTaskOutcome({
+        goal: intent.userMessageSummary,
+        userMessage: input.userMessage ?? '',
+        toolResults: selectionToolResults,
+        blockingUnknowns: policyGate.blockedReasons,
+        leadCaptured: selectionToolResults.some(isDurableLeadCaptureResult),
+        contactOffered: finalAnswerContract.leadAction === 'offer_form',
+        resolvedFacts: finalFactsUsed.map((fact) => fact.factKey),
+        unresolvedFacts: finalAnswerContract.selectionReadiness?.status === 'needs_more_info'
+          ? [...(finalAnswerContract.selectionReadiness.missingFacts ?? [])]
+          : []
+      }),
       policyGate,
       policyGateEnforcement,
       sourcePolicy: sourcePolicyMetadataFromIntent(effectiveIntent, selectionToolResults),

@@ -57,7 +57,8 @@ const defaultContentRoots = new Set([
   'garantiya',
   'delivery-and-payment',
   'about',
-  'brands'
+  'brands',
+  'contacts'
 ]);
 
 const documentSuffixes = ['.pdf', '.doc', '.docx', '.xls', '.xlsx', '.zip', '.rar'];
@@ -214,6 +215,25 @@ function contentPageType(url: string, baseUrl: string) {
   if (!sameHost(url, baseUrl) || !parts.length) return undefined;
   if (parts[0] === 'catalog') return undefined;
   return defaultContentRoots.has(parts[0]) ? parts[0] : undefined;
+}
+
+/** Stable company-knowledge kind for a content root (F05); null for non-company roots. */
+export function companyKindForContentRoot(pageType: string): string | null {
+  switch (pageType) {
+    case 'contacts':
+      return 'company_contacts';
+    case 'delivery-and-payment':
+      return 'company_delivery';
+    case 'about':
+      return 'company_about';
+    case 'garantiya':
+    case 'guarantee':
+      return 'company_warranty';
+    case 'brands':
+      return 'company_brands';
+    default:
+      return null;
+  }
 }
 
 function withoutQueryOrHash(value: string) {
@@ -581,6 +601,7 @@ function extractCatalogPage(response: FetchResult, baseUrl: string, pageType: st
     raw: {
       sourceType: 'site',
       pageType,
+      companyKind: companyKindForContentRoot(pageType),
       crawledAt: new Date().toISOString(),
       sitemapLastmod,
       documents: extractDocuments($, response.url)

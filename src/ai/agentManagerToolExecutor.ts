@@ -19,6 +19,10 @@ import { matchingVerifiedFactsForRequest, reusableVerifiedFact, researchFactConf
 import { canonicalFactAttribute, verifiedFactValueKey } from './verifiedFactNormalization.js';
 import { readCurrentSitePrice } from '../catalog/currentSitePrice.js';
 import { verifyBudgetPrices } from '../catalog/verifyBudgetPrices.js';
+import { extractEvidenceInput } from './evidenceInput.js';
+import { readFirstPartyPage } from './siteFirstParty.js';
+import { bindEphemeralPageIdentity } from './productIdentityResolver.js';
+import { classifyCompanyPath } from './companyKnowledge.js';
 import { buildRequirementProofs, combinedRequirementProofStatus, requirementUsesGenericReadProof, requirementProofsFor, resolvedRequirementEligibilityStatus, selectionRequirementAttributeMatches } from './requirementProofs.js';
 
 export function groundedBuyerQuestion(buyerQuestion: string | null | undefined, history: Message[]) {
@@ -2070,6 +2074,178 @@ async executeTools(input: {
                 .map((item) => `exact_catalog_product_absent:${item.productName}`)
             ]
           });
+        } else if (request.tool === 'site.readFirstPartyPage') {
+          const pageUrl = typeof request.args.url === 'string' ? request.args.url.trim() : '';
+          if (!pageUrl) {
+            result = ToolResultSchema.parse({
+              requestId: request.id,
+              tool: request.tool,
+              status: 'error',
+              payload: { canonicalUrl: '', error: { code: 'first_party_url_missing' } },
+              warnings: ['first_party_url_missing'],
+              errorCode: 'first_party_url_missing'
+            });
+          } else {
+            const read = await readFirstPartyPage(pageUrl, { baseUrl: config.CATALOG_BASE_URL });
+            if (read.ok) {
+              const page = read.page;
+              // F13 reconciliation: bind the verified page to the local catalog when
+              // possible. An absent match stays an ephemeral verified page identity —
+              // the answer may use it without requiring full catalog ingestion.
+              let catalogProductId: string | undefined;
+              let catalogMatch: 'matched' | 'absent' | undefined;
+              if (page.pageKind === 'product') {
+                try {
+                  const exactLookup = this.products as ProductRepository & {
+                    getProductByExactArticle?: (article: string) => Promise<Product | null>;
+                    getProductByExactExternalId?: (externalId: string) => Promise<Product | null>;
+                    getProductBySourceUrl?: (sourceUrl: string) => Promise<Product | null>;
+                  };
+                  const candidates: Array<Promise<Product | null>> = [];
+                  if (page.productIdentity?.article && typeof exactLookup.getProductByExactArticle === 'function') {
+                    candidates.push(exactLookup.getProductByExactArticle(page.productIdentity.article));
+                  }
+                  if (typeof exactLookup.getProductBySourceUrl === 'function') {
+                    candidates.push(exactLookup.getProductBySourceUrl(page.canonicalUrl));
+                  }
+                  for (const candidate of candidates) {
+                    const hit = await candidate;
+                    if (hit) {
+                      catalogProductId = hit.id;
+                      catalogMatch = 'matched';
+                      productsById.set(hit.id, hit);
+                      break;
+                    }
+                  }
+                  if (!catalogProductId) catalogMatch = 'absent';
+                } catch (error) {
+                  catalogMatch = 'absent';
+                }
+              }
+              // Single ownership (F13): the ephemeral verified-page identity is built
+              // by the product identity resolver, never assembled inline here.
+              const ephemeralPageIdentity = page.pageKind === 'product' && !catalogProductId
+                ? bindEphemeralPageIdentity({
+                  canonicalUrl: page.canonicalUrl,
+                  pageVerified: true,
+                  title: page.title,
+                  article: page.productIdentity?.article
+                })
+                : null;
+              result = ToolResultSchema.parse({
+                requestId: request.id,
+                tool: request.tool,
+                status: 'ok',
+                payload: {
+                  canonicalUrl: page.canonicalUrl,
+                  pageKind: page.pageKind,
+                  title: page.title,
+                  text: page.text.slice(0, 4000),
+                  ...(page.productIdentity ? { productIdentity: page.productIdentity } : {}),
+                  ...(page.companyInfo ? { companyInfo: page.companyInfo } : {}),
+                  ...(catalogProductId ? { catalogProductId } : {}),
+                  ...(catalogMatch ? { catalogMatch } : {}),
+                  ...(ephemeralPageIdentity ? { ephemeralPageIdentity } : {}),
+                  sourceFingerprint: page.sourceFingerprint,
+                  observedAt: page.observedAt
+                },
+                warnings: catalogMatch === 'absent' ? ['first_party_page_without_catalog_match'] : []
+              });
+            } else {
+              const failure = read.failure;
+              const legacyStatus = failure.code === 'denied'
+                ? 'denied' as const
+                : failure.code === 'timeout'
+                  ? 'timeout' as const
+                  : failure.code === 'http_status' && failure.status === 404
+                    ? 'not_found' as const
+                    : 'error' as const;
+              const observationStatus = failure.code === 'http_status' && failure.status === 404
+                ? 'not_found' as const
+                : failure.code === 'http_status'
+                  ? 'unavailable' as const
+                  : failure.code === 'unsupported'
+                    ? 'unsupported' as const
+                    : failure.code === 'unreadable'
+                      ? 'malformed' as const
+                      : undefined;
+              result = ToolResultSchema.parse({
+                requestId: request.id,
+                tool: request.tool,
+                status: legacyStatus,
+                ...(observationStatus ? { observationStatus } : {}),
+                payload: {
+                  canonicalUrl: failure.canonicalUrl,
+                  failureCode: failure.code,
+                  ...(failure.status !== undefined ? { status: failure.status } : {}),
+                  observedAt: failure.observedAt,
+                  error: { code: `first_party_unread:${failure.code}` }
+                },
+                warnings: [`first_party_unread:${failure.code}`],
+                errorCode: `first_party_unread:${failure.code}`
+              });
+            }
+          }
+        } else if (request.tool === 'site.searchCompanyKnowledge') {
+          const companyQuery = typeof request.args.query === 'string' ? request.args.query.trim() : '';
+          const companyLimit = Math.max(1, Math.min(6, Number(request.args.limit ?? 4)));
+          if (!companyQuery) {
+            result = ToolResultSchema.parse({
+              requestId: request.id,
+              tool: request.tool,
+              status: 'error',
+              payload: { query: '', error: { code: 'company_knowledge_query_missing' } },
+              warnings: ['company_knowledge_query_missing'],
+              errorCode: 'company_knowledge_query_missing'
+            });
+          } else {
+            let companyPages: Array<{ url: string; title: string; pageKind: string; volatility?: 'STABLE' | 'SEMI_VOLATILE'; snippet: string }> = [];
+            let companyError: unknown = null;
+            try {
+              const rows = await this.products.searchCatalogPages(companyQuery, companyLimit);
+              companyPages = rows.map((row) => {
+                let pathname = '';
+                try {
+                  pathname = new URL(row.sourceUrl).pathname;
+                } catch {
+                  pathname = row.sourceUrl;
+                }
+                const classified = classifyCompanyPath(pathname);
+                const snippet = (row.summary ?? row.content ?? '').slice(0, 1200);
+                return {
+                  url: row.sourceUrl,
+                  title: row.title,
+                  pageKind: classified?.kind ?? row.pageType,
+                  ...(classified ? { volatility: classified.volatility } : {}),
+                  snippet
+                };
+              });
+            } catch (error) {
+              companyError = error;
+            }
+            if (companyError) {
+              result = ToolResultSchema.parse({
+                requestId: request.id,
+                tool: request.tool,
+                status: 'error',
+                payload: { query: companyQuery, error: { code: 'company_knowledge_search_failed' } },
+                warnings: ['company_knowledge_search_failed'],
+                errorCode: 'company_knowledge_search_failed'
+              });
+            } else {
+              result = ToolResultSchema.parse({
+                requestId: request.id,
+                tool: request.tool,
+                status: companyPages.length > 0 ? 'ok' : 'not_found',
+                payload: {
+                  query: companyQuery,
+                  pages: companyPages,
+                  ...(companyPages.length > 0 ? {} : { reason: 'no_company_pages_matched' })
+                },
+                warnings: companyPages.length > 0 ? [] : ['company_knowledge_no_matches']
+              });
+            }
+          }
         } else if (request.tool === 'lead.capture') {
           const authorization = input.intent.leadCaptureAuthorization;
           if (!technicalHandoffContinuationProven) {
@@ -2546,6 +2722,39 @@ async searchCatalogProducts(input: {
       products.filter((product) => matchesCompleteTarget(product, name)).length === 1
     );
     const exactModelSearch = this.products.searchProductsByModelTokens;
+    // Deterministic exact-identifier pass (F12): numeric articles and catalog ids from
+    // the request text resolve via exact DB selectors with no embeddings. A miss only
+    // means "not proven by this selector" — broad retrieval still runs for it.
+    const evidenceIdentifiers = extractEvidenceInput(`${query} ${embeddingQuery}`).identifiers
+      .filter((identifier) => identifier.kind === 'numeric_article' || identifier.kind === 'catalog_id');
+    const resolvedIdentifierKeys = new Set<string>();
+    const exactIdentifierSearch = this.products as ProductRepository & {
+      getProductByExactArticle?: (article: string) => Promise<Product | null>;
+      getProductByExactExternalId?: (externalId: string) => Promise<Product | null>;
+    };
+    for (const identifier of evidenceIdentifiers) {
+      try {
+        const lookup = identifier.kind === 'numeric_article'
+          ? exactIdentifierSearch.getProductByExactArticle
+          : exactIdentifierSearch.getProductByExactExternalId;
+        if (typeof lookup !== 'function') continue;
+        const hit = identifier.kind === 'numeric_article'
+          ? await exactIdentifierSearch.getProductByExactArticle!(identifier.normalized)
+          : await exactIdentifierSearch.getProductByExactExternalId!(identifier.normalized);
+        if (hit) {
+          textProducts.push(hit);
+          resolvedIdentifierKeys.add(identifier.kind + ':' + identifier.normalized);
+        }
+      } catch (error) {
+        warnings.push(`catalog_exact_identifier_error:${safeError(error).code ?? safeError(error).message}`);
+      }
+    }
+    if (textProducts.length > 1) {
+      textProducts = [...new Map(textProducts.map((product) => [product.id, product])).values()];
+    }
+    for (const key of resolvedIdentifierKeys) warnings.push(`catalog_exact_identifier_match:${key}`);
+    const exactEvidenceSaturated = evidenceIdentifiers.length > 0 &&
+      evidenceIdentifiers.every((identifier) => resolvedIdentifierKeys.has(identifier.kind + ':' + identifier.normalized));
     if (preciseTargets && exactTargets.length <= 4 && typeof exactModelSearch === 'function') {
       for (const name of exactTargets) {
         try {
@@ -2560,7 +2769,7 @@ async searchCatalogProducts(input: {
       textProducts = [...new Map(textProducts.map((product) => [product.id, product])).values()];
     }
 
-    if (!exactTargetsResolved(textProducts)) {
+    if (!exactTargetsResolved(textProducts) && !exactEvidenceSaturated) {
       try {
         const found = await this.products.searchProducts(query, retrievalLimit, { signal: input.signal });
         textProducts = [...new Map([...textProducts, ...found].map((product) => [product.id, product])).values()];
@@ -2573,7 +2782,7 @@ async searchCatalogProducts(input: {
     const vectorSearchFn = (this.products as unknown as {
       vectorSearch?: ProductRepository['vectorSearch'];
     }).vectorSearch;
-    if (!exactTargetsResolved(textProducts) && vectorSearchFn && await this.canUseProductEmbeddings(input.signal)) {
+    if (!exactTargetsResolved(textProducts) && !exactEvidenceSaturated && vectorSearchFn && await this.canUseProductEmbeddings(input.signal)) {
       const embedding = await this.createCachedQueryEmbedding(embeddingQuery, input.signal);
       if (embedding) {
         try {

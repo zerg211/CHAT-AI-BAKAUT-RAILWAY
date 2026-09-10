@@ -4,7 +4,13 @@ import type { Product } from '../shared/types.js';
 import { exactProductIdentity } from './modelTextMatching.js';
 
 export const CONTINUATION_MAX_ROUNDS = 2;
-export const continuationReadTools = new Set(['catalog.search', 'catalog.getProductDetails', 'web.researchProductFacts']);
+export const continuationReadTools = new Set([
+  'catalog.search',
+  'catalog.getProductDetails',
+  'web.researchProductFacts',
+  'site.readFirstPartyPage',
+  'site.searchCompanyKnowledge'
+]);
 
 const continuationDecisionSchema = z.object({
   action: z.enum(['answer', 'clarify', 'continue']),
@@ -57,6 +63,8 @@ export function continuationValidationIssues(input: {
   decision: ContinuationDecision;
   intent: AgentIntentContract;
   products: Product[];
+  /** Buyer first-party URLs with no successful page read yet (F04/F06). */
+  unreadFirstPartyUrls?: string[];
 }) {
   const issues: string[] = [];
   const knownIds = new Set(input.products.map((product) => product.id));
@@ -71,6 +79,13 @@ export function continuationValidationIssues(input: {
   ];
   for (const id of input.decision.candidateProductIds) {
     if (!knownIds.has(id)) issues.push(`continuation_unknown_candidate:${id}`);
+  }
+  // A buyer-supplied first-party URL is first-class evidence: answering or
+  // clarifying while it stays unread repeats the P0 stall (Tecener). The repair
+  // loop then forces another observation round with the direct page read.
+  if ((input.decision.action === 'answer' || input.decision.action === 'clarify') &&
+    (input.unreadFirstPartyUrls ?? []).length > 0) {
+    issues.push('first_party_url_unread');
   }
   for (const request of input.decision.toolRequests) {
     if (!continuationReadTools.has(request.tool)) issues.push(`continuation_tool_not_read_only:${request.tool}`);

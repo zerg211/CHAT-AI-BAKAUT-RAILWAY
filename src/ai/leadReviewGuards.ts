@@ -1,4 +1,4 @@
-import type { ToolResult } from './agentManagerContracts.js';
+import type { AnswerContract, ToolResult } from './agentManagerContracts.js';
 import { type ExtractedContact, hasLeadContact } from './contactExtraction.js';
 
 const contactRequestStarts = [
@@ -171,6 +171,22 @@ export function stripContactRequestSentence(answerText: string) {
     cursor = removalEnd;
   }
   return output.trim();
+}
+
+export function leadOfferWithoutReviewableResult(answer: Pick<
+  AnswerContract,
+  'leadAction' | 'factsUsed' | 'selectedProductIds' | 'questionsAsked'
+>): boolean {
+  if (
+    answer.leadAction !== 'offer_form' &&
+    answer.leadAction !== 'capture_contact' &&
+    answer.leadAction !== 'confirm_contact_received'
+  ) {
+    return false;
+  }
+  return (answer.factsUsed ?? []).length === 0 &&
+    (answer.selectedProductIds ?? []).length === 0 &&
+    (answer.questionsAsked ?? []).length === 0;
 }
 
 export function leadCaptureMissingContact(toolResults: ToolResult[]) {

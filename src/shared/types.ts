@@ -624,6 +624,8 @@ export interface AgentTurnContract {
   leadAllowedReason: string;
   errorRecoveryPriority: string;
   validatorWarnings: string[];
+  responseRequirements?: string[];
+  recentFailures?: string[];
 }
 
 export type ExecutionCatalogPolicy = AgentCatalogAction;

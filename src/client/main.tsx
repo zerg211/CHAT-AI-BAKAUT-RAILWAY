@@ -658,7 +658,7 @@ async function createSession(createIfMissing = false) {
     if (heartbeatOutcome === 'retry') throw new Error('Не удалось проверить сохранённую сессию');
     const current = safeStorageGet(chatSessionStorage, 'bakaut_session_id');
     if (current && current !== existing) return current;
-    safeStorageRemove(chatSessionStorage, 'bakaut_session_id');
+    throw new ChatMessageNotAcceptedError('Предыдущий диалог недоступен. Начните новый чат.', undefined, 404);
   }
 
   if (!createIfMissing) return null;
@@ -745,10 +745,11 @@ function ProductCards({ cards, initialVisibleCount }: { cards: ProductCard[]; in
   );
 }
 
-function LeadPanel({ latestQuestion, autoOpenKey, disabled = false }: {
+function LeadPanel({ latestQuestion, autoOpenKey, disabled = false, onSessionUnavailable }: {
   latestQuestion: string;
   autoOpenKey: number;
   disabled?: boolean;
+  onSessionUnavailable: () => void;
 }) {
   const [form, setForm] = useState<LeadForm>({ name: '', phone: '', email: '', question: latestQuestion });
   const [status, setStatus] = useState<'idle' | 'sending' | 'sent' | 'error'>('idle');
@@ -791,6 +792,7 @@ function LeadPanel({ latestQuestion, autoOpenKey, disabled = false }: {
       setStatus('sent');
       setForm({ name: '', phone: '', email: '', question: '' });
     } catch (submitError) {
+      if (submitError instanceof ChatMessageNotAcceptedError && submitError.statusCode === 404) onSessionUnavailable();
       setStatus('error');
     }
   }
@@ -1245,6 +1247,8 @@ function App() {
     }
   ]);
   const [input, setInput] = useState('');
+  const [archivedChats, setArchivedChats] = useState<ChatMessage[][]>([]);
+  const [sessionUnavailable, setSessionUnavailable] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [leadAutoOpenKey, setLeadAutoOpenKey] = useState(0);
@@ -1255,7 +1259,7 @@ function App() {
   const [chatHydrationState, setChatHydrationState] = useState(() => initialChatHydrationState(initialSessionIdRef.current));
   const [chatRestoreAttempt, setChatRestoreAttempt] = useState(0);
   const restoringChat = chatHydrationState === 'restoring';
-  const chatInteractionDisabled = chatHydrationState !== 'ready';
+  const chatInteractionDisabled = sessionUnavailable || chatHydrationState !== 'ready';
   const latestQuestion = useMemo(() => [...messages].reverse().find((message) => message.role === 'user')?.content ?? '', [messages]);
   const isStart = messages.length <= 1;
   const quickPrompts = [
@@ -1279,7 +1283,7 @@ function App() {
       abandonSavedChat(chatSessionStorage, initialSessionId);
       initialSessionIdRef.current = null;
       setSessionId(null);
-      setChatHydrationState('ready');
+      showUnavailableSession();
       return () => {
         cancelled = true;
       };
@@ -1381,7 +1385,7 @@ function App() {
       if (restoration.kind === 'stale') {
         initialSessionIdRef.current = null;
         setSessionId(null);
-        setChatHydrationState('ready');
+        showUnavailableSession();
         return;
       }
       setError('Сессия чата изменилась. Можно начать новый чат.');
@@ -1399,18 +1403,31 @@ function App() {
   }, [chatRestoreAttempt]);
 
   function retryChatRestoration() {
+    if (busy || sessionUnavailable) return;
     setError('');
     setChatHydrationState('restoring');
     setChatRestoreAttempt((value) => value + 1);
   }
 
   function startNewChatAfterRestoreFailure() {
-    const initialSessionId = initialSessionIdRef.current;
+    if (busy) return;
+    const initialSessionId = sessionId ?? safeStorageGet(safeBrowserStorage('sessionStorage'), 'bakaut_session_id') ?? initialSessionIdRef.current;
     if (initialSessionId) abandonSavedChat(safeBrowserStorage('sessionStorage'), initialSessionId);
     initialSessionIdRef.current = null;
     setSessionId(null);
+    if (messages.some((message) => message.role === 'user')) {
+      setArchivedChats((current) => [...current, messages]);
+    }
+    setMessages([{ id: id(), role: 'assistant', content: 'Начат новый чат. Расскажите, какое оборудование вам нужно и для какой задачи.', createdAt: nowIso() }]);
+    setSessionUnavailable(false);
     setError('');
     setChatHydrationState('ready');
+  }
+
+  function showUnavailableSession() {
+    setSessionUnavailable(true);
+    setChatHydrationState('error');
+    setError('Предыдущий диалог недоступен для продолжения. Начните новый чат: прежняя переписка останется на экране, но консультант не будет использовать её как контекст. Текст вашего сообщения сохранён.');
   }
 
   useEffect(() => {
@@ -1438,13 +1455,14 @@ function App() {
         });
         if (cancelled) return;
         // Session no longer exists on the server (deleted, expired, or DB reset).
-        // Stop the interval, drop the stale id, and let createSession() spin up a fresh one.
+        // Preserve visible history and require an explicit new conversation.
         if (response.status === 404) {
           window.clearInterval(interval);
           const chatSessionStorage = safeBrowserStorage('sessionStorage');
           if (safeStorageGet(chatSessionStorage, 'bakaut_session_id') === sessionId) {
             safeStorageRemove(chatSessionStorage, 'bakaut_session_id');
             setSessionId((current) => current === sessionId ? null : current);
+            showUnavailableSession();
           }
         }
       } catch {
@@ -1538,10 +1556,11 @@ function App() {
         setMessages((current) => current.filter((message) => message.id !== userId && message.id !== assistantId));
         setInput(userText);
         setError(submitError.message);
-        if (submitError.statusCode === 404 && attemptedSessionId) {
+        if (submitError.statusCode === 404) {
           const chatSessionStorage = safeBrowserStorage('sessionStorage');
-          abandonSavedChat(chatSessionStorage, attemptedSessionId);
+          if (attemptedSessionId) abandonSavedChat(chatSessionStorage, attemptedSessionId);
           setSessionId((current) => current === attemptedSessionId ? null : current);
+          showUnavailableSession();
         }
         const activeSessionId = attemptedSessionId ?? sessionId ?? safeStorageGet(safeBrowserStorage('sessionStorage'), 'bakaut_session_id');
         const visitorId = safeStorageGet(safeBrowserStorage('localStorage'), 'bakaut_visitor_id');
@@ -1723,6 +1742,18 @@ function App() {
       </header>
 
       <section className="messages" aria-live="polite">
+        {archivedChats.map((chat, index) => (
+          <details key={index}>
+            <summary>Предыдущий диалог {index + 1} — не используется в новом чате</summary>
+            {chat.map((message) => (
+              <div className={`message ${message.role}`} key={message.id}>
+                <div className="message-meta">{message.role === 'user' ? 'Вы' : 'Консультант'}</div>
+                <div>{renderMarkdownText(message.content)}</div>
+                {message.cards ? <ProductCards cards={message.cards} initialVisibleCount={message.cardDisplay?.initialVisibleCount} /> : null}
+              </div>
+            ))}
+          </details>
+        ))}
         {messages.filter((message) => message.content || message.status === 'sending' || message.cards?.length).map((message) => (
           <div className={`message ${message.role}`} key={message.id}>
             <div className="message-meta">
@@ -1776,10 +1807,10 @@ function App() {
       {error ? (
         <div className="error">
           <span>{error}</span>
-          {chatHydrationState === 'error' ? (
+          {sessionUnavailable || chatHydrationState === 'error' ? (
             <div className="history-recovery-actions">
-              <button type="button" onClick={retryChatRestoration}>Попробовать ещё раз</button>
-              <button type="button" onClick={startNewChatAfterRestoreFailure}>Начать новый чат</button>
+              {!sessionUnavailable ? <button type="button" disabled={busy} onClick={retryChatRestoration}>Попробовать ещё раз</button> : null}
+              <button type="button" disabled={busy} onClick={startNewChatAfterRestoreFailure}>Начать новый чат</button>
             </div>
           ) : null}
         </div>
@@ -1820,6 +1851,7 @@ function App() {
         latestQuestion={latestQuestion}
         autoOpenKey={leadAutoOpenKey}
         disabled={chatInteractionDisabled}
+        onSessionUnavailable={showUnavailableSession}
       />
     </main>
   );

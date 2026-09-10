@@ -58,6 +58,9 @@ function webRequired(intent: AgentIntentContract) {
  * Deterministic policy boundary for an already typed LLM intent. It never
  * classifies the buyer message; it only checks whether the typed plan can be
  * safely executed and records the required next action.
+ * Guardian split: LLM owns meaning (intent, requirements, riskFlags from
+ * AGENT_RISK_FLAG_TAXONOMY); code owns facts, catalog order, and business
+ * prohibitions. No keyword matching, no semantic decisions here.
  */
 export function evaluateAgentManagerPolicyGate(
   input: AgentManagerPolicyGateInput
