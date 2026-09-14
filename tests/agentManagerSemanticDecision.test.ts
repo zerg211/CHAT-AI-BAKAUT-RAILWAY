@@ -149,6 +149,67 @@ describe('selection qualification semantic contract', () => {
   });
 });
 
+describe('buyer-supplied external evidence routing', () => {
+  const userMessage = 'Проверьте MODEL X100 на https://manufacturer.example/model-x100 и страницу https://bakautprof.ru/catalog/model-x100/ по весу.';
+
+  function externalEvidenceDecision() {
+    const decision = selectionDecision();
+    decision.ledgerDelta.events = [];
+    decision.intent.selectionPolicy!.needAction = 'none';
+    decision.intent.selectionPolicy!.requirements = [];
+    decision.intent.productMentions = [{
+      name: 'MODEL X100', role: 'comparison_subject', productClass: 'generator', evidence: 'MODEL X100'
+    }];
+    Object.assign(decision.intent.grounding, {
+      taskType: 'comparison', responseMode: 'compare', buyerRequestedWeb: false,
+      catalogRequirement: 'none', sourcePolicy: 'conversation_only', webRequirement: 'none',
+      requiredToolKinds: ['site.readFirstPartyPage'], technicalAttributes: ['weight_kg']
+    });
+    decision.intent.toolRequests = [{
+      id: 'wrong-external-read', tool: 'site.readFirstPartyPage', required: true,
+      rationale: 'Read the supplied manufacturer page.', coversRequirementIds: [],
+      args: { url: 'https://manufacturer.example/model-x100', expectedKind: 'product' }
+    }];
+    return decision;
+  }
+
+  it('rejects an external origin routed to the first-party reader and requires web research', () => {
+    const result = validateAgentSemanticDecision({
+      decision: externalEvidenceDecision(), previousLedgerState: reduceDialogueLedger([]),
+      sessionId: memorySessionId, turnId: memoryTurnId, userMessage
+    });
+    expect(result.issues).toContain('external_url_misrouted_to_first_party_reader:wrong-external-read');
+    expect(result.issues).toContain('external_evidence_url_requires_web_research');
+  });
+
+  it('accepts the source boundary after the external URL moves to web research', () => {
+    const decision = externalEvidenceDecision();
+    decision.intent.grounding.buyerRequestedWeb = true;
+    decision.intent.grounding.sourcePolicy = 'web_required';
+    decision.intent.grounding.webRequirement = 'buyer_requested';
+    decision.intent.grounding.requiredToolKinds = ['site.readFirstPartyPage', 'web.researchProductFacts'];
+    decision.intent.toolRequests = [{
+      id: 'bakaut-read', tool: 'site.readFirstPartyPage', required: true,
+      rationale: 'Read the supplied Bakaut page.', coversRequirementIds: [],
+      args: { url: 'https://bakautprof.ru/catalog/model-x100/', expectedKind: 'product' }
+    }, {
+      id: 'manufacturer-research', tool: 'web.researchProductFacts', required: true,
+      rationale: 'Verify the supplied manufacturer page independently.', coversRequirementIds: [],
+      args: {
+        query: 'https://manufacturer.example/model-x100 MODEL X100 weight',
+        productNames: ['MODEL X100'], productIntent: 'generator', canonicalProductIntent: 'generator',
+        comparisonAttributes: ['weight_kg']
+      }
+    }];
+    const result = validateAgentSemanticDecision({
+      decision, previousLedgerState: reduceDialogueLedger([]),
+      sessionId: memorySessionId, turnId: memoryTurnId, userMessage
+    });
+    expect(result.issues).not.toContain('external_evidence_url_requires_web_research');
+    expect(result.issues.some((issue) => issue.startsWith('external_url_misrouted_to_first_party_reader'))).toBe(false);
+  });
+});
+
 function generatorDecision(): AgentSemanticDecision {
   const loads = [
     { kind: 'compressor', name: 'compressor', runningKw: 2.2 },
