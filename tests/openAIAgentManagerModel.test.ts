@@ -254,6 +254,10 @@ describe('OpenAIAgentManagerModel semantic inputs', () => {
       expect(writer.text.format.schema.properties.factsUsed.items.properties.sourceEventIds.maxItems).toBe(0);
     }
     const reviewer = createStructuredJsonResponse.mock.calls[2]![0].request;
+    const writerSystemPrompt = writer.input.find((item: { role: string }) => item.role === 'system').content;
+    const reviewerSystemPrompt = reviewer.input.find((item: { role: string }) => item.role === 'system').content;
+    expect(writerSystemPrompt).toContain('подтверждённые отдельные числа не означают подтверждённую сопоставимость');
+    expect(reviewerSystemPrompt).toContain('отдельное подтверждение каждого числа не доказывает сопоставимость');
     expect(reviewer.text.format.schema.properties.factualIssues.maxItems).toBe(5);
     expect(reviewer.text.format.schema.properties.factualIssues.items.properties.sourceResultId.enum)
       .toEqual(kind === 'verified' ? ['verified_fact:saved-force'] : ['verified_fact:saved-force', 'verified_fact:conflicting-force']);

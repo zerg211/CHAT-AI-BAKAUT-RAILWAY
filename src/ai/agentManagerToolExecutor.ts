@@ -100,6 +100,30 @@ export function comparisonAttributesForRequest(request: ToolRequest) {
   return uniqueStrings(requestStringArray(request.args.comparisonAttributes));
 }
 
+export function comparisonAttributesForExecution(intent: AgentIntentContract, request: ToolRequest) {
+  const requested = comparisonAttributesForRequest(request);
+  if (
+    request.tool !== 'web.researchProductFacts' ||
+    intent.grounding?.taskType !== 'comparison' ||
+    !comparisonResearchRequiresFreshWeb(intent, request)
+  ) return requested;
+  // The planner owns which attributes are relevant. Once it declares web
+  // evidence required for an exact comparison, the executor keeps the web read
+  // coherent with that full structured scope instead of silently checking only
+  // one of the values that the answer will compare.
+  return uniqueStrings([
+    ...requested,
+    ...(intent.grounding.technicalAttributes ?? [])
+  ]).slice(0, 12);
+}
+
+export function comparisonResearchRequiresFreshWeb(intent: AgentIntentContract, request: ToolRequest) {
+  if (request.tool !== 'web.researchProductFacts') return false;
+  const requirement = intent.grounding?.webRequirement;
+  return requirement === 'buyer_requested' ||
+    requirement === 'independent_required';
+}
+
 export function comparisonAttributeBindingsForRequest(request: ToolRequest) {
   const bindings = (request.args as {
     comparisonAttributeBindings?: unknown;
@@ -1697,7 +1721,7 @@ async executeTools(input: {
           const publicInformation = request.args.researchScope === 'public_information';
           let targetProductNames = publicInformation ? [] : targetProductNamesForRequest(request, input.intent);
           const suppressedTargetProductNames = suppressedContextTargetProductNamesForRequest(request, input.intent);
-          const comparisonAttributes = comparisonAttributesForRequest(request);
+          const comparisonAttributes = comparisonAttributesForExecution(input.intent, request);
           const webProductClassKey = typedProductClassKey(
             request.args.canonicalProductIntent,
             request.args.productIntent
@@ -1883,8 +1907,7 @@ async executeTools(input: {
             'product_research_stage',
             { requestId: request.id, ...event }
           );
-          const freshRequested = input.intent.grounding?.webRequirement === 'buyer_requested' ||
-            input.intent.grounding?.webRequirement === 'independent_required';
+          const freshRequested = comparisonResearchRequiresFreshWeb(input.intent, request);
           const memoryCheckedFirst = !freshRequested && allRequestedFactSlots.length > 0;
           const priorMemory = memoryCheckedFirst ? await this.researchFromVerifiedFactMemory({
             sessionId:input.session.id,turnId:input.turnId,targetProductNames,comparisonAttributes,
@@ -1966,8 +1989,7 @@ async executeTools(input: {
               (!item.productName || exactCoverageProductNamesMatch(item.productName, slot.productName)) &&
               compactModelText(item.attribute) === compactModelText(slot.attribute))) ||
             !researchResultCoversFactSlot({ result: freshEvidence, ...slot, sourceTypes: ['web'] }));
-          const freshWebRequested = input.intent.grounding?.webRequirement === 'buyer_requested' ||
-            input.intent.grounding?.webRequirement === 'independent_required';
+          const freshWebRequested = comparisonResearchRequiresFreshWeb(input.intent, request);
           const requiresFreshWeb = freshWebRequested && freshWebMissingSlots.length > 0;
           const allowCatalogOnlyAnswer = allowCatalogOnlyResearchForWebRequest(input.intent, request);
           let research = !requiresFreshWeb && ((catalogCoversRequest && allowCatalogOnlyAnswer) || memory?.attributesCovered)
