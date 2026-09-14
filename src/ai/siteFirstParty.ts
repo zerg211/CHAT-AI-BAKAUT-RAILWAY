@@ -74,7 +74,7 @@ export interface FirstPartyReadOptions {
   }) => Promise<SafeOutboundFetchResult>;
 }
 
-function canonicalizeSameOrigin(raw: string, baseUrl: string): { canonical: string; host: string; pathname: string } | null {
+export function canonicalizeFirstPartyUrl(raw: string, baseUrl: string): { canonical: string; host: string; pathname: string } | null {
   let parsed: URL;
   let base: URL;
   try {
@@ -139,7 +139,7 @@ export async function readFirstPartyPage(
   options: FirstPartyReadOptions
 ): Promise<FirstPartyPageResult> {
   const observedAt = (options.now ?? (() => new Date().toISOString()))();
-  let canonical = canonicalizeSameOrigin(url, options.baseUrl);
+  let canonical = canonicalizeFirstPartyUrl(url, options.baseUrl);
   if (!canonical) {
     return { ok: false, failure: { code: 'denied', canonicalUrl: url, observedAt } };
   }
@@ -160,7 +160,7 @@ export async function readFirstPartyPage(
   if (result.status !== 200) {
     return { ok: false, failure: { code: 'http_status', canonicalUrl: canonical.canonical, status: result.status, observedAt } };
   }
-  canonical = canonicalizeSameOrigin(result.url, options.baseUrl);
+  canonical = canonicalizeFirstPartyUrl(result.url, options.baseUrl);
   if (!canonical) return { ok: false, failure: { code: 'denied', canonicalUrl: url, observedAt } };
   const contentType = String(result.headers.get('content-type') ?? '').toLowerCase();
   const isPdf = contentType.includes('application/pdf') || new TextDecoder().decode(result.bytes.subarray(0, 5)) === '%PDF-';

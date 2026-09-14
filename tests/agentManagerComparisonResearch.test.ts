@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { emptyNeedState } from '../src/ai/needState.js';
 import { AgentIntentContractSchema, type AgentIntentContract, type ToolRequest, type ToolResult } from '../src/ai/agentManagerContracts.js';
-import { AgentManagerTurnBudget } from '../src/ai/agentManagerTurnBudget.js';
+import { AgentManagerTurnBudget, DEFAULT_AGENT_MANAGER_TURN_LIMITS } from '../src/ai/agentManagerTurnBudget.js';
 import { validateToolResultOutput } from '../src/ai/agentManagerToolRegistry.js';
 import type { AgentManagerModel } from '../src/ai/agentManagerOrchestrator.js';
 import type { ConversationSession, ConversationTurn, Message, Product, VerifiedProductFact, VerifiedProductFactInput } from '../src/shared/types.js';
@@ -392,6 +392,75 @@ describe('AgentManager comparison research flow', () => {
     }));
     expect(result.toolResults.at(-1)?.payload).toMatchObject({ researchScope: 'public_information', targetProductNames: [], products: [] });
     expect(validateToolResultOutput(result.toolResults.at(-1)!)).toMatchObject({ status: 'ok', payload: { researchScope: 'public_information' } });
+  });
+
+  it('does not spend the web-call allowance on an external URL routed to the first-party reader', async () => {
+    researchProductComparisonFacts.mockResolvedValue({
+      usedWebSearch: true,
+      searchDisposition: 'completed',
+      sourcesExhausted: false,
+      facts: [],
+      conflicts: [],
+      warnings: [],
+      summaryForAnswer: '',
+      answerGuidance: { directAnswer: '', completeness: 'partially_answered', coverage: [] }
+    });
+    const targetName = 'SUMEC FIRMAN 6 kW';
+    const intent = AgentIntentContractSchema.parse({
+      userMessageSummary: 'Verify an external manufacturer page.',
+      dialogueUnderstanding: 'The external URL needs the web research tool.',
+      nextStepRationale: 'Reject the misrouted first-party read and continue research.',
+      requiresTools: true,
+      toolRequests: [{
+        id: 'misrouted-external-page',
+        tool: 'site.readFirstPartyPage',
+        args: { url: 'https://manufacturer.example/sumec' },
+        rationale: 'Planner-routed external page.',
+        required: true
+      }, {
+        id: 'manufacturer-research',
+        tool: 'web.researchProductFacts',
+        args: { productNames: [targetName], comparisonAttributes: ['noise_level_db'] },
+        rationale: 'Use the external research path.',
+        required: true
+      }],
+      productMentions: [{ name: targetName, role: 'target_product', productClass: 'generator', evidence: targetName }],
+      selectionPolicy: {
+        targetProductClass: 'generator', canonicalProductClass: 'generator', selectionGoal: 'preliminary_fit',
+        needAction: 'continue', alternativePolicy: 'exact_only', reusePreviousCards: false,
+        maxCards: 1, powerSource: 'any', phase: 'any', requirements: [], rankingObjectives: [],
+        rationale: 'Named product fact check.'
+      },
+      leadCaptureAuthorization: {
+        authorized: false, contactSource: 'none', handoffKind: 'none', purpose: null,
+        buyerQuestion: null, evidence: null, pendingDraftId: null
+      },
+      policyRuleIds: [],
+      grounding: {
+        taskType: 'technical_answer', sourcePolicy: 'web_required', webPurpose: 'technical_specs',
+        webRequirement: 'buyer_requested', requiredToolKinds: ['site.readFirstPartyPage', 'web.researchProductFacts'],
+        technicalAttributes: ['noise_level_db'], rationale: 'Buyer requested external verification.'
+      },
+      mustNotAskQuestionIds: [], riskFlags: []
+    });
+    const budget = new AgentManagerTurnBudget({ ...DEFAULT_AGENT_MANAGER_TURN_LIMITS, maxWebCalls: 1 });
+    const executor = new AgentManagerOrchestrator(new FakeConversations() as never, new FakeProducts() as never,
+      {} as never, withStrictToolFixtures(model())) as unknown as {
+        executeTools(input: Record<string, unknown>): Promise<{ toolResults: ToolResult[] }>;
+      };
+
+    const result = await executor.executeTools({
+      session: session(), turnId, executionOwner: 'first-party-preflight',
+      userMessage: `Verify ${targetName}.`, history: [], intent, toolRequests: intent.toolRequests,
+      needState: emptyNeedState(), pendingLeadCaptureDraft: null, persistedToolResults: new Map(), budget
+    });
+
+    expect(result.toolResults).toEqual(expect.arrayContaining([
+      expect.objectContaining({ requestId: 'misrouted-external-page', status: 'denied', warnings: expect.arrayContaining(['first_party_url_rejected_before_network']) }),
+      expect.objectContaining({ requestId: 'manufacturer-research', status: 'ok' })
+    ]));
+    expect(researchProductComparisonFacts).toHaveBeenCalledOnce();
+    expect(budget.snapshot().usage).toMatchObject({ toolCalls: 1, webCalls: 1 });
   });
 
   it.each(['editorial_only', 'mixed_factual'] as const)('retains a reviewed draft near deadline only for editorial issues: %s', async (kind) => {
