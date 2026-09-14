@@ -200,4 +200,26 @@ describe('agent manager strict tool registry', () => {
       warnings: []
     })).toThrow();
   });
+
+  it('keeps an unstarted first-party read as a bounded failure observation', () => {
+    expect(validateToolResultOutput({
+      requestId: 'first-party-budget-stop',
+      tool: 'site.readFirstPartyPage',
+      status: 'error',
+      payload: { error: { code: 'agent_manager_turn_budget_exceeded' } },
+      warnings: ['tool_not_executed:turn_budget_exceeded'],
+      errorCode: 'tool_budget_exhausted'
+    })).toMatchObject({
+      observationStatus: 'malformed',
+      payload: { error: { code: 'agent_manager_turn_budget_exceeded' } }
+    });
+
+    expect(() => validateToolResultOutput({
+      requestId: 'first-party-invalid-success',
+      tool: 'site.readFirstPartyPage',
+      status: 'ok',
+      payload: {},
+      warnings: []
+    })).toThrow(/canonical URL/i);
+  });
 });

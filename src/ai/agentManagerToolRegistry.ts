@@ -161,7 +161,7 @@ const webResearchResult = z.object({
 }).strict();
 
 const firstPartyPageResult = z.object({
-  canonicalUrl: nonEmpty,
+  canonicalUrl: nonEmpty.optional(),
   requestedUrl: z.string().optional(),
   format: z.enum(['html', 'pdf']).optional(),
   sourceTruncated: z.boolean().optional(),
@@ -190,7 +190,14 @@ const firstPartyPageResult = z.object({
   failureCode: z.enum(['denied', 'timeout', 'http_status', 'unreadable', 'unsupported', 'source_changed']).optional(),
   status: z.number().int().optional(),
   error: z.unknown().optional()
-}).strict();
+}).strict().superRefine((payload, context) => {
+  // A read that never started (for example, because the turn budget was
+  // exhausted) has no canonical URL. Keep that failure usable by the writer,
+  // while successful page observations must still identify their source.
+  if (payload.error === undefined && !payload.canonicalUrl) {
+    context.addIssue({ code: 'custom', path: ['canonicalUrl'], message: 'successful first-party reads require a canonical URL' });
+  }
+});
 
 const companyKnowledgeResult = z.object({
   query: z.string().optional(),
