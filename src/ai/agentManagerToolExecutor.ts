@@ -19,7 +19,7 @@ import { matchingVerifiedFactsForRequest, reusableVerifiedFact, researchFactConf
 import { canonicalFactAttribute, verifiedFactValueKey } from './verifiedFactNormalization.js';
 import { readCurrentSitePrice } from '../catalog/currentSitePrice.js';
 import { verifyBudgetPrices } from '../catalog/verifyBudgetPrices.js';
-import { readFirstPartyPage } from './siteFirstParty.js';
+import { canonicalizeFirstPartyUrl, readFirstPartyPage } from './siteFirstParty.js';
 import { articleCandidates, bindEphemeralPageIdentity } from './productIdentityResolver.js';
 import { classifyCompanyPath } from './companyKnowledge.js';
 import { buildRequirementProofs, combinedRequirementProofStatus, requirementUsesGenericReadProof, requirementProofsFor, resolvedRequirementEligibilityStatus, selectionRequirementAttributeMatches } from './requirementProofs.js';
@@ -1506,6 +1506,33 @@ async executeTools(input: {
           sourcesExhausted: false,
           remainingTurnMs: input.budget.remainingWallTimeMs()
         });
+      }
+      if (!result && request.tool === 'site.readFirstPartyPage') {
+        const requestedUrl = typeof request.args.url === 'string' ? request.args.url.trim() : '';
+        if (!canonicalizeFirstPartyUrl(requestedUrl, config.CATALOG_BASE_URL)) {
+          // This tool is intentionally same-origin. Reject an LLM-routed
+          // external URL before it consumes the bounded web-call allowance;
+          // web.researchProductFacts remains responsible for manufacturer URLs.
+          result = ToolResultSchema.parse({
+            requestId: request.id,
+            tool: request.tool,
+            status: 'denied',
+            observationStatus: 'denied',
+            payload: {
+              ...(requestedUrl ? { canonicalUrl: requestedUrl } : {}),
+              failureCode: 'denied',
+              error: { code: 'first_party_unread:denied' }
+            },
+            warnings: ['first_party_url_rejected_before_network'],
+            errorCode: 'first_party_unread:denied'
+          });
+          await this.trace(input.session.id, input.turnId, 'tools', 'tool_short_circuited_by_first_party_policy', {
+            requestId: request.id,
+            tool: request.tool,
+            attemptCount: 0,
+            remainingTurnMs: input.budget.remainingWallTimeMs()
+          });
+        }
       }
       if (!result && request.tool === 'web.researchProductFacts' && effectiveTimeoutMs < WEB_MIN_EXECUTION_MS) {
         result = ToolResultSchema.parse({
