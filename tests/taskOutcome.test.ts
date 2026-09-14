@@ -30,11 +30,11 @@ describe('first-party turn injection', () => {
       ...baseIntent,
       toolRequests: [{
         id: 'planner-1', tool: 'site.readFirstPartyPage',
-        args: { url: 'https://bakautprof.ru/catalog/gen_x' },
+        args: { url: 'https://bakautprof.ru/catalog/gen_x/' },
         rationale: 'planner read', required: true, coversRequirementIds: []
       }]
     } as unknown as AgentIntentContract;
-    expect(injectFirstPartyPageReads(planned, 'https://bakautprof.ru/catalog/gen_x/')).toBe(planned);
+    expect(injectFirstPartyPageReads(planned, 'https://bakautprof.ru/catalog/gen_x')).toBe(planned);
   });
 
   it('ignores external URLs', () => {

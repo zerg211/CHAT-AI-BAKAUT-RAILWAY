@@ -46,7 +46,7 @@ function plannedPageUrls(intent: AgentIntentContract): Set<string> {
   for (const request of intent.toolRequests) {
     if (request.tool !== 'site.readFirstPartyPage') continue;
     const url = typeof request.args.url === 'string' ? request.args.url.trim() : '';
-    if (url) planned.add(url);
+    for (const canonical of firstPartyUrlsFromMessage(url)) planned.add(canonical);
   }
   return planned;
 }
