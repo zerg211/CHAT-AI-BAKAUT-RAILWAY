@@ -394,6 +394,34 @@ describe('AgentManager comparison research flow', () => {
     expect(validateToolResultOutput(result.toolResults.at(-1)!)).toMatchObject({ status: 'ok', payload: { researchScope: 'public_information' } });
   });
 
+  it('degrades an excess external read to a persisted non-fact-bearing result', async () => {
+    researchProductComparisonFacts.mockResolvedValue({ usedWebSearch: true, searchDisposition: 'completed',
+      sourcesExhausted: false, facts: [], conflicts: [], warnings: [], summaryForAnswer: '',
+      answerGuidance: { directAnswer: 'usable partial evidence', completeness: 'answered', coverage: [] } });
+    const requests = ['one', 'two', 'three'].map((id) => ({
+      id, tool: 'web.researchProductFacts' as const, required: true, coversRequirementIds: [],
+      args: { researchScope: 'public_information' as const, query: `public ${id}`, productNames: [], comparisonAttributes: ['rule'] },
+      rationale: `read ${id}`
+    }));
+    const intent = AgentIntentContractSchema.parse({
+      userMessageSummary: 'broad public evidence request', dialogueUnderstanding: 'three independent reads',
+      nextStepRationale: 'preserve the first two results', requiresTools: true, toolRequests: requests,
+      productMentions: [], mustNotAskQuestionIds: [], riskFlags: []
+    });
+    const conversations = new FakeConversations();
+    const orchestrator = new AgentManagerOrchestrator(conversations as never, new FakeProducts() as never,
+      {} as never, withStrictToolFixtures(model()));
+    const executor = orchestrator as unknown as { executeTools(input: Record<string, unknown>): Promise<{ toolResults: ToolResult[] }> };
+    const result = await executor.executeTools({ session: session(), turnId, executionOwner: 'fail-soft-read',
+      userMessage: 'Check three public sources.', history: [], intent, toolRequests: intent.toolRequests,
+      needState: emptyNeedState(), pendingLeadCaptureDraft: null, persistedToolResults: new Map(),
+      budget: new AgentManagerTurnBudget({ ...DEFAULT_AGENT_MANAGER_TURN_LIMITS, maxWebCalls: 2 }) });
+    expect(researchProductComparisonFacts).toHaveBeenCalledTimes(2);
+    expect(result.toolResults).toHaveLength(3);
+    expect(result.toolResults[2]).toMatchObject({ status: 'error', errorCode: 'web_call_budget_exceeded' });
+    expect(result.toolResults[2]?.warnings).toContain('tool_not_executed:turn_budget_exceeded');
+  });
+
   it('does not spend the web-call allowance on an external URL routed to the first-party reader', async () => {
     researchProductComparisonFacts.mockResolvedValue({
       usedWebSearch: true,
@@ -1763,7 +1791,11 @@ describe('AgentManager comparison research flow', () => {
           factsUsed: [{
             factKey: 'calc.requiredNominalKw',
             sourceEventIds: ['calc:baxi-load'],
-            value: 4
+            evidenceItemIds: ['calc:baxi-load:payload:profile:requiredNominalKw'],
+            productName: null,
+            attribute: 'requiredNominalKw',
+            claimKind: 'confirmed_value',
+            value: 3.5
           }],
           questionsAsked: [],
           toolResultIds: ['calc:baxi-load'],

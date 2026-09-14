@@ -22,6 +22,7 @@ import { currentAgentWriterPolicy } from './agentManagerTurnBudget.js';
 import { compactModelText, normalizeModelText } from './modelTextMatching.js';
 import { compactSemanticDecisionFormat, expandCompactSemanticDecision } from './compactSemanticDecision.js';
 import { reviewClaimReferences, expandReviewFindings } from './reviewClaimReferences.js';
+import { answerEvidenceItemsForModel } from './answerEvidenceBindings.js';
 
 const scopedResearchEvidenceGuidance = [
   'Согласуй доказательства по смыслу конкретного утверждения, точной модели и условиям, а не только по имени attribute. Подтверждённая цитата об установке детали на модель доказывает эту применимость, даже если attribute называется артикулом.',
@@ -293,7 +294,8 @@ export function answerEvidenceSourceHints(input: {
       ...(input.verifiedProductFacts ?? []).map((fact) => `verified_fact:${fact.id}`)
     ],
     ledgerFacts,
-    toolResults
+    toolResults,
+    evidenceItems: answerEvidenceItemsForModel(input.toolResults)
   };
 }
 
@@ -1838,9 +1840,13 @@ export const answerContractFormat = {
             properties: {
               factKey: { type: 'string' },
               sourceEventIds: { type: 'array', items: { type: 'string' } },
+              evidenceItemIds: { type: 'array', items: { type: 'string' } },
+              productName: { type: ['string', 'null'] },
+              attribute: { type: 'string' },
+              claimKind: { type: 'string', enum: ['confirmed_value', 'source_label', 'absence_or_unknown'] },
               value: scalarValueJsonSchema
             },
-            required: ['factKey', 'sourceEventIds', 'value']
+            required: ['factKey', 'sourceEventIds', 'evidenceItemIds', 'productName', 'attribute', 'claimKind', 'value']
           }
         },
         questionsAsked: {
@@ -2009,7 +2015,7 @@ export function plannerSystemPromptBlock(
     'Текущая цена компании определяется страницей точного товара на bakautprof.ru. Для вопроса о текущей цене известной модели или расхождения цены сайта и каталога выбирай catalog.getProductDetails с verifyCurrentPrice=true. Это самостоятельно проверит страницу и обновит сохранённую цену. Не отправляй вопрос цены в технический web-поиск производителя и не эскалируй при успешно проверенной цене. В остальных запросах verifyCurrentPrice=false. Названная покупателем цена — повод проверить, а не разрешение записать её как факт.',
     'Явный вопрос «есть ли у вас X / можно ли заказать / цена / альтернативы» → riskFlags "answer_policy_catalog_presence_relevant"; для чистого техфакта — не добавлять.',
     'Новая модель в текущем ходе → не переиспользуй факты прежней модели, даже при «same», без evidence scoped к тому же идентификатору.',
-    'Мультиходовый подбор генератора: при прежнем расчете нагрузок в истории перезапусти calculator.generatorLoad в текущем ходе перед catalog.search, чтобы результаты несли payload.profile.requiredNominalKw.',
+    'Мультиходовый подбор генератора: перезапускай calculator.generatorLoad перед новым catalog.search/решением о пригодности карточек, если текущий ход продолжает подбор. Если текущая реплика — evidence-only technical_answer с responseMode=answer, нагрузка не менялась и новая рекомендация/карточки не запрошены, не вызывай calculator, не привязывай его как requiredToolKinds и не смешивай card readiness с техническим ответом; прежний расчёт остаётся контекстом ledger.',
     'Не задавай вопрос, ответ на который уже есть в ledger.',
     'Ссылка покупателя на страницу bakautprof.ru — прямое evidence, а не повод для нового текстового поиска: планируй site.readFirstPartyPage с полным url из сообщения (детерминированный код всё равно добавит это чтение сам, дублировать не нужно). Любой URL с origin вне bakautprof.ru запрещено передавать в site.readFirstPartyPage. Если покупатель просит проверить внешний URL для технического ответа или сравнения, ставь buyerRequestedWeb=true, sourcePolicy="web_required", webRequirement="buyer_requested" и планируй required web.researchProductFacts; сам URL включай в query, а проверяемые характеристики — в technicalAttributes/comparisonAttributes. Публичные данные компании (адреса магазинов, телефоны, самовывоз, доставка, гарантия, часы) ищи сам через site.searchCompanyKnowledge по смыслу вопроса — никогда не отвечай «нет данных», не проверив знание компании, и не проси покупателя искать самому.'
   ].join('\n');
@@ -2089,6 +2095,9 @@ export class OpenAIAgentManagerModel implements AgentManagerModel {
         : '',
       hasIssue('active_requirement_mismatch:generator_loads')
         ? 'Ключ generator_loads не используется: для расчёта нагрузки используй единственный hard fact generator_load_scenario с value true и typed requirement generator_load_scenario; остальные потребительские мощности — context, иначе убери hard требование.'
+        : '',
+      hasIssue('unchanged_generator_load_calculator_not_needed_for_technical_answer')
+        ? 'Текущий ход уже классифицирован как technical_answer с responseMode=answer, а нагрузочный сценарий пришёл только из истории. Удали calculator.generatorLoad из toolRequests и requiredToolKinds и не привязывай прежний generator_load_scenario как current-turn typed requirement. Сохрани его в ledger как контекст; если покупатель действительно изменил нагрузку или запросил новый подбор, исправь structured task/need action и добавь подтверждающее событие текущего хода.'
         : '',
       hasIssue('required_tool_request_missing:calculator.generatorLoad')
         ? 'Если policy или ledger требуют расчёта нагрузки, добавь required calculator.generatorLoad с корректными loads, runningSource/startingSource, operationMode/coRunningGroup и coversRequirementIds, либо убери hard generator требование и оставь факт как context.'
@@ -2578,7 +2587,7 @@ export class OpenAIAgentManagerModel implements AgentManagerModel {
             'verifiedProductFacts — актуальные сохраненные факты точных моделей из проверенных источников. Используй их вместе с каталогом и наблюдениями, в том числе в catalog-only ходе; сам сопоставляй исходные attribute/value с формулировкой вопроса. Отсутствие значения в каталоге не отменяет сохраненный факт, но конфликт источников нельзя скрывать. Сохраняй модель, единицы, отрицания и условия.',
             'При сравнении измерительных значений из разных источников подтверждённые отдельные числа не означают подтверждённую сопоставимость. Практический вывод о том, какая модель тише, производительнее, экономичнее или лучше по иному зависящему от методики показателю допустим только при подтверждённых одинаковых типе показателя, стандарте, расстоянии, нагрузке и существенных условиях. Иначе назови значения как отдельные заявления источников, укажи неподтверждённую сопоставимость и не вычисляй из них преимущество как доказанный факт.',
             'conflictingVerifiedProductFacts — источники с разными значениями одного атрибута модели, а не подтвержденные факты. Окончательное значение допустимо только если текущие наблюдения разрешили конфликт; иначе честно назови конкретное расхождение и сохрани полезный предварительный вывод. Их source IDs не разрешены в factsUsed.',
-            'factsUsed[].sourceEventIds — только точные строки из availableEvidenceSources.allowedSourceIds (tool request id для фактов из инструментов, ledger event id для ledger, verified_fact:<id> для verifiedProductFacts). toolResultIds — только текущие tool request ids. Чистый handoff без точного статуса — factsUsed пуст.',
+            'factsUsed[].sourceEventIds — только точные строки из availableEvidenceSources.allowedSourceIds. Для каждого факта из инструмента evidenceItemIds обязателен и содержит точные id из availableEvidenceSources.evidenceItems; productName и attribute должны совпасть с выбранной единицей доказательства, value хранит само проверяемое значение, а не пересказ предложения. claimKind=confirmed_value только для confirmed/observed evidence; source_label передаёт дословную маркировку источника, absence_or_unknown — подтверждённый пробел или отсутствие маркировки. Нельзя связывать число с общим request id или с вложенным catalog context web-результата. Для ledger/verified_fact evidenceItemIds можно оставить пустым. toolResultIds — только текущие tool request ids.',
             'requiredResponseClauses — обязательная смысловая часть ответа. Клауза о неподтвержденной базе расчета: не выдавай число за подтвержденное/покупочное, но не прячь полезную ориентацию калькулятора. Порог требования покупателя в одном предложении с именами товаров — только через numericClaimBinding (dimension/value, semanticRole=buyer_requirement_threshold, точный sourceId) с дословным verifiedSourceQuote; пороги калькулятора — отдельным предложением до товаров, никогда как цена/характеристика товара.',
             'web answerGuidance.directAnswer — используй прежде широкого контекста; coverage "not_confirmed" ≠ «нет». confirmed подтверждает достоверность конкретного value, включая отсутствие свойства, а не само наличие свойства. Сохраняй отрицание, условность и принадлежность факта указанной модели; слова в названии атрибута, типе документа или evidence не заменяют значение факта. preliminary_fit с неполным web — это отсутствие подтверждения, не конфликт: при eligible кандидатах по детерминированным ограничениям canShowProductCards=true, предварительная рекомендация, точные неподтвержденные факты в missingFacts; comparison_reference_only не повышается до кандидата.',
             technicalGapResponseGuidance,

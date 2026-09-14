@@ -15,6 +15,7 @@ import { createStructuredJsonResponse } from './openaiStructured.js';
 import { extractPdfText, PdfTextExtractionError } from './pdfTextExtraction.js';
 import { bindDocumentEvidence, createEvidenceDocuments, documentEvidenceRefSchema, documentPassageKey, DOCUMENT_PASSAGE_GAP, type DocumentEvidenceTrace } from './documentEvidence.js';
 import { safeError } from './responseUtils.js';
+import { hostMatchesManufacturerDomain, manufacturerDomainsForBrandKey } from './manufacturerDomainRegistry.js';
 
 export interface ProductComparisonResearchFact {
   productName: string;
@@ -755,17 +756,6 @@ function responseDiscoveredSourceCandidates(response: unknown) {
       ...(source.title ? { title: source.title.slice(0, 300) } : {}) }])).values()];
 }
 
-const approvedManufacturerDomainsByBrand = new Map<string, readonly string[]>([
-  ['firman', ['firman.biz']],
-  ['honda', ['honda.com', 'honda.co.jp', 'honda.ca']],
-  ['husqvarna', ['husqvarna.com', 'husqvarnaconstruction.com']],
-  ['stihl', ['stihl.com', 'stihlusa.com', 'stihl.co.uk', 'stihl.de']]
-]);
-
-function hostMatchesApprovedDomain(host: string, domain: string) {
-  return host === domain || host.endsWith(`.${domain}`);
-}
-
 function sourceDocumentKind(sourceUrl: string, sourceTitle?: string) {
   const text = compactModelText([sourceUrl, sourceTitle].filter(Boolean).join(' '));
   const path = new URL(sourceUrl).pathname.toLocaleLowerCase('en-US');
@@ -790,10 +780,10 @@ export function classifyProductResearchSource(input: {
   const normalizedHost = parsed.hostname.toLocaleLowerCase('en-US');
   const host = normalizedHost.startsWith('www.') ? normalizedHost.slice(4) : normalizedHost;
   const brandKey = compactModelText(input.product?.brand ?? '');
-  const approvedDomains = approvedManufacturerDomainsByBrand.get(brandKey) ?? [];
+  const approvedDomains = manufacturerDomainsForBrandKey(brandKey);
   const reservedTestManufacturerHost = host === 'manufacturer.example' || host.endsWith('.manufacturer.example');
   const manufacturerBound = reservedTestManufacturerHost || approvedDomains.some((domain) =>
-    hostMatchesApprovedDomain(host, domain)
+    hostMatchesManufacturerDomain(host, domain)
   );
   const documentKind = sourceDocumentKind(
     input.sourceUrl,

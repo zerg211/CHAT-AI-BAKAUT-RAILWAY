@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { AgentIntentContract, ToolResult } from '../src/ai/agentManagerContracts.js';
 import { injectFirstPartyPageReads, unreadFirstPartyUrls } from '../src/ai/firstPartyTurnInjection.js';
-import { deriveTaskOutcome, firstPartyAnswerReviewIssues, stalledRepetitionReviewIssues, summarizeTurnOutcome, detectStalledRepetition } from '../src/ai/taskOutcome.js';
+import { deriveTaskOutcome, firstPartyAnswerReviewIssues, requiredToolResultSatisfied, stalledRepetitionReviewIssues, summarizeTurnOutcome, detectStalledRepetition } from '../src/ai/taskOutcome.js';
 
 const okPageRead = (canonicalUrl: string): ToolResult => ({
   requestId: 'fp1',
@@ -77,6 +77,43 @@ describe('task outcome', () => {
   it('failed tools without evidence block on tool failure', () => {
     const outcome = deriveTaskOutcome({ goal: 'x', userMessage: 'x', toolResults: [], toolFailures: ['web.timeout'] });
     expect(outcome.status).toBe('blocked_tool_failure');
+  });
+
+  it('keeps named research gaps when an ok research tool timed out partially', () => {
+    const outcome = deriveTaskOutcome({
+      goal: 'verify exact net weight',
+      userMessage: 'Что можно безопасно заключить?',
+      toolResults: [{
+        requestId: 'research', tool: 'web.researchProductFacts', status: 'ok', warnings: [],
+        payload: {
+          researchOutcome: 'partial', searchDisposition: 'timed_out', sourcesExhausted: false,
+          unconfirmedFacts: [{ requirementIds: [], productName: 'Fubag BS 8000', attribute: 'weight_net_kg', status: 'not_confirmed', reason: 'No net label' }],
+          facts: [{ productName: 'Fubag BS 8000', attribute: 'noise_value', value: '84 dB' }]
+        }
+      }]
+    });
+    expect(outcome.status).toBe('partially_resolved');
+    expect(outcome.unresolvedFacts).toContain('Fubag BS 8000:weight_net_kg');
+    expect(outcome.evidenceIds).toContain('research');
+  });
+
+  it('keeps readiness gaps even when the answer contract status is not_applicable', () => {
+    const outcome = deriveTaskOutcome({
+      goal: 'explain label', userMessage: 'Что означает надпись?', toolResults: [],
+      resolvedFacts: ['published label'], unresolvedFacts: ['net weight']
+    });
+    expect(outcome.status).toBe('partially_resolved');
+    expect(outcome.unresolvedFacts).toEqual(['net weight']);
+  });
+
+  it('distinguishes incomplete research from completed exhausted search', () => {
+    const result = (researchOutcome: string): ToolResult => ({
+      requestId: researchOutcome, tool: 'web.researchProductFacts', status: 'ok', warnings: [],
+      payload: { researchOutcome, searchDisposition: 'completed', sourcesExhausted: researchOutcome === 'exhausted' }
+    });
+    expect(requiredToolResultSatisfied(result('answered'))).toBe(true);
+    expect(requiredToolResultSatisfied(result('partial'))).toBe(false);
+    expect(requiredToolResultSatisfied(result('exhausted'))).toBe(true);
   });
 });
 

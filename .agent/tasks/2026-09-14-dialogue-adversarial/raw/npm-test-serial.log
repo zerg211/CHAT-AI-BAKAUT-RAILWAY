@@ -1,0 +1,12 @@
+
+> bakaut-ai-sales-assistant@0.1.0 test
+> vitest run --maxWorkers=1
+
+
+ RUN  v4.1.5 C:/Projects/chatAI
+
+
+ Test Files  126 passed | 1 skipped (127)
+      Tests  1502 passed | 1 skipped (1503)
+   Start at  23:34:19
+   Duration  102.13s (transform 4.41s, setup 0ms, import 43.10s, tests 27.46s, environment 2.14s)

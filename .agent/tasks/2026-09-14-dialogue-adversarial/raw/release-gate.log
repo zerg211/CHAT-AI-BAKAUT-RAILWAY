@@ -1,0 +1,316 @@
+
+> bakaut-ai-sales-assistant@0.1.0 verify
+> node tests/aiManagerReleaseGate.mjs
+
+[release-gate] PASS Node.js >=22 runtime (24.14.1)
+
+[release-gate] offline acceptance-oracle and transport regression checks (not real-agent evals)
+✔ backend audit accepts retained fact and isolation (5.6648ms)
+✔ backend audit detects lost fact after price change (1.2571ms)
+✔ calibration accepts both correct positives and negatives (50.2299ms)
+✔ always-reject evaluator is detected, not rewarded (27.3906ms)
+✔ always-accept evaluator is detected (26.7041ms)
+✔ all-unknown is not valid rejection (18.9617ms)
+✔ missing judge result is not a correct rejection (9.87ms)
+✔ sensitivity: flipping known label CAL_short_fact_good is detected (24.4873ms)
+✔ sensitivity: flipping known label CAL_short_fact_bad is detected (17.5509ms)
+✔ sensitivity: flipping known label CAL_nominal_good is detected (18.8472ms)
+✔ sensitivity: flipping known label CAL_nominal_bad is detected (15.6673ms)
+✔ sensitivity: flipping known label CAL_delivery_good is detected (17.1074ms)
+✔ sensitivity: flipping known label CAL_delivery_bad is detected (19.7173ms)
+✔ sensitivity: flipping known label CAL_known_pump_good is detected (17.4411ms)
+✔ sensitivity: flipping known label CAL_known_pump_bad is detected (17.3987ms)
+✔ sensitivity: flipping known label CAL_preliminary_good is detected (20.3975ms)
+✔ sensitivity: flipping known label CAL_preliminary_bad is detected (20.5992ms)
+✔ sensitivity: flipping known label CAL_helpful_good is detected (12.671ms)
+✔ sensitivity: flipping known label CAL_helpful_bad is detected (11.9868ms)
+✔ sensitivity: flipping known label CAL_negative_fact_good is detected (11.7643ms)
+✔ sensitivity: flipping known label CAL_negative_fact_bad is detected (14.6183ms)
+✔ sensitivity: flipping known label CAL_scope_good is detected (11.9824ms)
+✔ sensitivity: flipping known label CAL_scope_bad is detected (12.0827ms)
+✔ judge input is structured and response scope is validated (20.5636ms)
+✔ judge incomplete not green (3.9215ms)
+✔ judge failed not green (3.1814ms)
+✔ judge cancelled not green (3.6019ms)
+✔ oversized judge evidence is not silently truncated (3.0929ms)
+✔ does not penalize length or truthful qualification: 85 кг. (16.6173ms)
+✔ does not penalize length or truthful qualification: Масса этой модели — 85 килограммов. (5.6343ms)
+✔ does not penalize length or truthful qualification: Предварительно подходит по цене. Пуск насоса пока не подтверждён. (3.9362ms)
+✔ accept valid: current card required (6.7766ms)
+✔ reject defect: current card required (3.475ms)
+✔ accept valid: budget numerical constraint (4.2562ms)
+✔ reject defect: budget numerical constraint (3.6934ms)
+✔ accept valid: price cannot be invented (2.7893ms)
+✔ reject defect: price cannot be invented (4.0746ms)
+✔ accept valid: exact suffix preserved (2.956ms)
+✔ reject defect: exact suffix preserved (2.5409ms)
+✔ accept valid: exact requested product (2.4797ms)
+✔ reject defect: exact requested product (2.4587ms)
+✔ accept valid: nominal rather than peak (2.0788ms)
+✔ reject defect: nominal rather than peak (3.3265ms)
+✔ accept valid: correct current class (2.6904ms)
+✔ reject defect: correct current class (2.3672ms)
+✔ accept valid: latest independent price ranking (5.0018ms)
+✔ reject defect: latest independent price ranking (3.5366ms)
+✔ accept valid: known catalogue absence (3.1444ms)
+✔ reject defect: known catalogue absence (2.2493ms)
+✔ accept valid: completed tool, not plan (2.2667ms)
+✔ reject defect: completed tool, not plan (2.0451ms)
+✔ accept valid: successful tool required (2.0026ms)
+✔ reject defect: successful tool required (2.0417ms)
+✔ accept valid: retrieval evidence independent of card (2.2393ms)
+✔ reject defect: retrieval evidence independent of card (2.8385ms)
+✔ accept valid: retrieval belongs to correct model (2.0853ms)
+✔ reject defect: retrieval belongs to correct model (2.027ms)
+✔ accept valid: idempotency public payload (2.1512ms)
+✔ reject defect: idempotency public payload (2.4904ms)
+✔ accept valid: privacy-preserving no contact (2.2253ms)
+✔ reject defect: privacy-preserving no contact (2.674ms)
+✔ accept valid: lead exactly once (2.3082ms)
+✔ reject defect: lead exactly once (2.0772ms)
+✔ accept valid: first useful latency, not typing (2.0023ms)
+✔ reject defect: first useful latency, not typing (1.9588ms)
+✔ accept valid: final latency (1.8424ms)
+✔ reject defect: final latency (2.505ms)
+✔ accept valid: no duplicated cards (2.564ms)
+✔ reject defect: no duplicated cards (2.2289ms)
+✔ accept valid: no unknown product IDs (1.9154ms)
+✔ reject defect: no unknown product IDs (1.8307ms)
+✔ accept valid: correct card specifications (2.1294ms)
+✔ reject defect: correct card specifications (3.3234ms)
+✔ independent constraint fuel (1.8227ms)
+✔ independent constraint voltage (2.3293ms)
+✔ independent constraint electricStart (1.8198ms)
+✔ independent constraint autoStart (3.0333ms)
+✔ independent constraint remoteStart (2.7601ms)
+✔ independent constraint weightMax (2.9702ms)
+✔ independent constraint weightMin (1.8776ms)
+✔ independent constraint nominalMax (2.1595ms)
+✔ old card cannot satisfy new card request (2.8089ms)
+✔ old tool cannot satisfy current fresh tool obligation (2.3221ms)
+✔ source outage can be accepted as attempted research, not success (2.427ms)
+✔ verified partial research survives later failed tier (2.4277ms)
+✔ unverified snippet cannot prove web fact (1.6958ms)
+✔ recovery is not inherently wrong (1.7735ms)
+✔ metadata self-declared gap cannot waive required tools (1.277ms)
+✔ scoped memory uses current active facts, not history (2.8443ms)
+✔ cancelled budget not reintroduced (3.1533ms)
+✔ equivalent units 5 кВт (0.2581ms)
+✔ equivalent units 70 кг (0.2349ms)
+✔ equivalent units 5,0 кВт  (0.2464ms)
+✔ equivalent units 90000 RUB (0.2051ms)
+✔ not equivalent 5 кВт/кг (0.2082ms)
+✔ not equivalent 5 кВт/кВт (0.1221ms)
+✔ not equivalent null кг/кг (0.2218ms)
+✔ infrastructure errors do not become accepted behavior: HARNESS_UNBOUND_AUDIT (1.2059ms)
+✔ infrastructure errors do not become accepted behavior: HARNESS_WORLD_CHANGED (1.0299ms)
+✔ infrastructure errors do not become accepted behavior: HARNESS_COLLECTION (1.3662ms)
+✔ infrastructure errors do not become accepted behavior: HARNESS_BUYER_MISMATCH (1.5397ms)
+✔ infrastructure errors do not become accepted behavior: HARNESS_LEAD_EVIDENCE (1.3679ms)
+✔ infrastructure errors do not become accepted behavior: HARNESS_INVALID_SCENARIO (0.9428ms)
+✔ unhelpful keyword answer fails independent semantic criterion (5.5256ms)
+✔ no semantic result is NOT success (2.0729ms)
+✔ semantic result from previous answer is rejected (3.0626ms)
+✔ invented judge quotations are rejected (4.3778ms)
+✔ unknown cannot be averaged into green (2.9143ms)
+✔ cached research is allowed when fresh external research is forbidden (3.2141ms)
+✔ source outage produces not-proven, not a false successful capability check (1.6632ms)
+✔ price revision changes only the subsequent expected snapshot (2.8368ms)
+✔ known memory fact must be present, not only mentioned by the assistant (2.7184ms)
+✔ durable outbox checked independently of agent confirmation (2.856ms)
+✔ duplicate scenario reports cannot hide a failed result behind a good one (3.2946ms)
+✔ nonfinite card price is not a valid catalogue price (3.3178ms)
+✔ malformed semantic checks are inconclusive, not a crashed correct rejection (3.8076ms)
+✔ invalid numeric expectation is a test configuration error (0.8986ms)
+✔ null product in independent fixture is a harness error (1.0021ms)
+✔ contradictory card limits are not a valid acceptance requirement (1.1376ms)
+✔ schema and dependency changes invalidate evidence while unrelated private data does not (142.722ms)
+✔ SSE preserves multi-line data and CRLF (4.8133ms)
+✔ malformed SSE not silently accepted (2.2364ms)
+✔ body timeout stays active after headers and status events (132.1466ms)
+✔ oversized body rejected (65.7569ms)
+✔ status events are not counted as useful answer (53.7322ms)
+✔ private admin join success without public metadata (32.5385ms)
+✔ private admin join mismatch rejected (25.1169ms)
+✔ HTTP call cap prevents hidden unlimited retry (1.9062ms)
+✔ collector keeps failed turn and does not retry until green (2.7202ms)
+✔ mixed deployment invalidates collection (1.9232ms)
+✔ deliberate replay uses the same client message ID (4.0801ms)
+✔ calibration computes known perfect agreement on controlled calculator fixtures (6.8083ms)
+✔ synthetic calibration cannot replace human production labels (1.1714ms)
+✔ session leakage and duplicate cases cannot inflate a holdout (4.3349ms)
+✔ critical false negatives and constant labels cannot pass through average quality (2.472ms)
+✔ price-boundary metamorphism keeps the same model and changes only the current limit: G3 (25.3619ms)
+✔ price-boundary metamorphism keeps the same model and changes only the current limit: G5 (11.2926ms)
+✔ price-boundary metamorphism keeps the same model and changes only the current limit: G5R (8.2068ms)
+✔ price-boundary metamorphism keeps the same model and changes only the current limit: G6 (10.211ms)
+✔ price-boundary metamorphism keeps the same model and changes only the current limit: P60 (9.346ms)
+✔ price-boundary metamorphism keeps the same model and changes only the current limit: P85 (5.1823ms)
+✔ price-boundary metamorphism keeps the same model and changes only the current limit: P110 (8.5533ms)
+✔ requirement order and removing an optional limit preserve suitability (4.5713ms)
+✔ a fresh turn cannot inherit a successful tool from an earlier turn after a provider or web failure (4.213ms)
+✔ expands mandatory variants and their exact level overrides (1.9175ms)
+✔ accepts explicit reuse only when the actual receipt covers both variants (3.2372ms)
+✔ rejects a missing variant even if all remaining cells pass (0.9812ms)
+✔ rejects incorrect level, hidden mocks and stale configuration (2.7107ms)
+✔ rejects receipt reuse for a variant that its assertions did not cover (0.9037ms)
+✔ rejects disabled required workers and altered or escaped raw artifacts (3.5913ms)
+✔ preserves NOT_RUN as incomplete and never substitutes D evidence for S or L (0.7864ms)
+✔ executable scenario preconditions A01 (exact) (4.5868ms)
+✔ executable scenario preconditions A02 (exact) (0.3501ms)
+✔ executable scenario preconditions A03 (identity) (0.294ms)
+✔ executable scenario preconditions A04 (identity) (0.5035ms)
+✔ executable scenario preconditions A05 (budget) (1.2147ms)
+✔ executable scenario preconditions A06 (budget) (0.5828ms)
+✔ executable scenario preconditions A07 (budget) (0.4995ms)
+✔ executable scenario preconditions A08 (no-match) (0.5709ms)
+✔ executable scenario preconditions A09 (ranking) (0.4738ms)
+✔ executable scenario preconditions A10 (ranking) (0.3724ms)
+✔ executable scenario preconditions A11 (constraints) (0.3372ms)
+✔ executable scenario preconditions A12 (constraints) (0.2668ms)
+✔ executable scenario preconditions A13 (dialogue) (0.2874ms)
+✔ executable scenario preconditions A14 (dialogue) (0.3805ms)
+✔ executable scenario preconditions A15 (references) (0.1801ms)
+✔ executable scenario preconditions A16 (rejection) (1.3901ms)
+✔ executable scenario preconditions A17 (budget) (0.3494ms)
+✔ executable scenario preconditions A18 (autonomy) (0.1059ms)
+✔ executable scenario preconditions A19 (autonomy) (0.2721ms)
+✔ executable scenario preconditions A20 (contact) (0.1644ms)
+✔ executable scenario preconditions A21 (correction) (0.1656ms)
+✔ executable scenario preconditions A22 (identity) (0.1109ms)
+✔ executable scenario preconditions A23 (commercial) (0.1082ms)
+✔ executable scenario preconditions A24 (commercial) (0.1799ms)
+✔ executable scenario preconditions A25 (helpfulness) (0.155ms)
+✔ executable scenario preconditions A26 (helpfulness) (0.1051ms)
+✔ executable scenario preconditions A27 (references) (0.1393ms)
+✔ executable scenario preconditions A28 (units) (0.1385ms)
+✔ executable scenario preconditions A29 (commercial) (0.1206ms)
+✔ executable scenario preconditions A30 (injection) (0.104ms)
+✔ executable scenario preconditions A31 (memory) (0.172ms)
+✔ executable scenario preconditions A32 (memory) (0.1637ms)
+✔ executable scenario preconditions A33 (recovery) (0.1357ms)
+✔ executable scenario preconditions A34 (dialogue) (0.9493ms)
+✔ executable scenario preconditions A35 (typo) (0.1031ms)
+✔ executable scenario preconditions A36 (accessory) (0.1276ms)
+✔ executable scenario preconditions A37 (contact) (0.111ms)
+✔ executable scenario preconditions A38 (memory) (0.0986ms)
+✔ executable scenario preconditions A39 (web) (0.1267ms)
+✔ executable scenario preconditions A40 (web) (0.1445ms)
+✔ executable scenario preconditions A41 (lead) (0.4045ms)
+✔ executable scenario preconditions A42 (lead) (0.2872ms)
+✔ executable scenario preconditions A43 (lead) (0.3799ms)
+✔ executable scenario preconditions A44 (memory) (0.1737ms)
+✔ executable scenario preconditions A45 (memory) (0.1552ms)
+✔ unknown constraints fail loudly instead of being ignored (0.9118ms)
+✔ all criterion IDs are globally unique (0.4894ms)
+✔ paid execution requires explicit approval before calls (3.0025ms)
+✔ budget must cover the selected plan before calls (0.5593ms)
+✔ unknown CLI switch cannot silently weaken tests (0.4028ms)
+✔ unknown or duplicate test IDs rejected (0.3329ms)
+✔ only genuine completed matching evidence can authorize this suite (0.6996ms)
+✔ mock cannot authorize release (0.3713ms)
+✔ different commit cannot authorize release (0.1846ms)
+✔ changed data cannot authorize release (0.1614ms)
+✔ changed tests cannot authorize release (0.1444ms)
+✔ failed cannot authorize release (0.3507ms)
+✔ unknown cannot authorize release (0.1648ms)
+✔ not run cannot authorize release (0.1403ms)
+✔ stale cannot authorize release (0.2075ms)
+✔ earlier failed attempt cannot authorize release (0.1593ms)
+✔ absent evidence is not green (0.3049ms)
+ℹ tests 213
+ℹ suites 0
+ℹ pass 213
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 871.4218
+OFFLINE_ORACLE_PASS — evaluator/transport regression checks only; real-agent acceptance remains NOT_RUN.
+[release-gate] PASS offline acceptance-oracle and transport regression checks (not real-agent evals)
+
+[release-gate] acceptance-oracle seeded mutation checks
+KILLED ALWAYS_ACCEPT: 59/117 failed as expected
+KILLED ALWAYS_REJECT: 87/117 failed as expected
+KILLED IGNORE_BUDGET_AND_CONSTRAINTS: 11/117 failed as expected
+KILLED IGNORE_CURRENT_CARDS: 2/117 failed as expected
+KILLED IGNORE_MODIFICATION: 1/117 failed as expected
+KILLED ERROR_AS_TOOL_SUCCESS: 3/117 failed as expected
+KILLED BORROW_OLD_TOOLS: 1/117 failed as expected
+KILLED IGNORE_JUDGE_FAIL: 3/117 failed as expected
+KILLED IGNORE_JUDGE_UNKNOWN: 1/117 failed as expected
+KILLED IGNORE_USEFUL_LATENCY: 1/117 failed as expected
+KILLED IGNORE_PRICE_REVISION: 3/117 failed as expected
+KILLED IGNORE_MEMORY_REQUIREMENT: 2/117 failed as expected
+[release-gate] PASS acceptance-oracle seeded mutation checks
+
+[release-gate] no new regex constructs relative to HEAD
+No new regex constructs. Legacy baseline: 203.
+[release-gate] PASS no new regex constructs relative to HEAD
+
+[release-gate] production dependency audit (high severity)
+# npm audit report
+
+csv-parse  <7.0.2
+Severity: moderate
+node-csv: Prototype replacement still reachable via columns path - https://github.com/advisories/GHSA-8cw4-87c7-c6xx
+fix available via `npm audit fix --force`
+Will install csv-parse@7.0.2, which is a breaking change
+node_modules/csv-parse
+
+1 moderate severity vulnerability
+
+To address all issues (including breaking changes), run:
+  npm audit fix --force
+[release-gate] PASS production dependency audit (high severity)
+
+[release-gate] TypeScript typecheck
+
+> bakaut-ai-sales-assistant@0.1.0 typecheck
+> tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.server.json
+
+[release-gate] PASS TypeScript typecheck
+
+[release-gate] full test suite (serial files)
+
+> bakaut-ai-sales-assistant@0.1.0 test
+> vitest run --fileParallelism=false
+
+
+ RUN  v4.1.5 C:/Projects/chatAI
+
+
+ Test Files  126 passed | 1 skipped (127)
+      Tests  1502 passed | 1 skipped (1503)
+   Start at  23:36:55
+   Duration  98.48s (transform 4.26s, setup 0ms, import 41.93s, tests 27.16s, environment 1.87s)
+
+[release-gate] PASS full test suite (serial files)
+
+[release-gate] production build
+
+> bakaut-ai-sales-assistant@0.1.0 build
+> vite build && tsc -p tsconfig.server.json
+
+vite v7.3.6 building client environment for production...
+transforming...
+✓ 35 modules transformed.
+rendering chunks...
+computing gzip size...
+../../dist/client/index.html                   0.53 kB │ gzip:  0.36 kB
+../../dist/client/assets/index-azFKGNNq.css   35.25 kB │ gzip:  7.49 kB
+../../dist/client/assets/index-XFBjgTAX.js   252.66 kB │ gzip: 79.16 kB
+✓ built in 1.10s
+[release-gate] PASS production build
+
+[release-gate] summary
+- PASS: offline acceptance-oracle and transport regression checks (not real-agent evals)
+- PASS: acceptance-oracle seeded mutation checks
+- PASS: no new regex constructs relative to HEAD
+- PASS: production dependency audit (high severity)
+- PASS: TypeScript typecheck
+- PASS: full test suite (serial files)
+- PASS: production build
+[code-and-oracle-gate] PASS: local code/oracle checks only. REAL_AGENT_ACCEPTANCE=NOT_RUN. This is NOT permission to deploy.
+(node:31204) [DEP0190] DeprecationWarning: Passing args to a child process with shell option true can lead to security vulnerabilities, as the arguments are not escaped, only concatenated.
+(Use `node --trace-deprecation ...` to show where the warning was created)

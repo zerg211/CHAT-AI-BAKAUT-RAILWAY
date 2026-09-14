@@ -49,6 +49,62 @@ export interface TaskOutcomeInput {
   unresolvedFacts?: string[];
 }
 
+function uniqueNonEmpty(values: unknown[]): string[] {
+  return [...new Set(values
+    .map((value) => typeof value === 'string' ? value.trim() : '')
+    .filter(Boolean))];
+}
+
+function researchUnresolvedFacts(toolResults: ToolResult[]): string[] {
+  const unresolved: string[] = [];
+  for (const result of toolResults) {
+    if (result.tool !== 'web.researchProductFacts') continue;
+    const payload = result.payload as {
+      researchOutcome?: unknown;
+      searchDisposition?: unknown;
+      sourcesExhausted?: unknown;
+      unconfirmedFacts?: unknown;
+      answerGuidance?: { coverage?: unknown };
+    };
+    const incomplete = payload.researchOutcome === 'partial' ||
+      ['timed_out', 'failed', 'aborted', 'skipped_budget'].includes(String(payload.searchDisposition ?? '')) ||
+      result.status === 'error' || result.status === 'timeout';
+    const named = Array.isArray(payload.unconfirmedFacts)
+      ? payload.unconfirmedFacts.flatMap((entry) => {
+          if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return [];
+          const item = entry as Record<string, unknown>;
+          const attribute = typeof item.attribute === 'string' ? item.attribute.trim() : '';
+          const productName = typeof item.productName === 'string' ? item.productName.trim() : '';
+          return attribute ? [`${productName ? `${productName}:` : ''}${attribute}`] : [];
+        })
+      : [];
+    const coverage = Array.isArray(payload.answerGuidance?.coverage)
+      ? payload.answerGuidance.coverage.flatMap((entry) => {
+          if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return [];
+          const item = entry as Record<string, unknown>;
+          if (item.status === 'confirmed') return [];
+          const attribute = typeof item.attribute === 'string' ? item.attribute.trim() : '';
+          const productName = typeof item.productName === 'string' ? item.productName.trim() : '';
+          return attribute ? [`${productName ? `${productName}:` : ''}${attribute}`] : [];
+        })
+      : [];
+    unresolved.push(...named, ...coverage);
+    if (incomplete && named.length === 0 && coverage.length === 0) {
+      unresolved.push(`${result.requestId}:research_incomplete`);
+    }
+  }
+  return uniqueNonEmpty(unresolved);
+}
+
+export function requiredToolResultSatisfied(result: ToolResult) {
+  if (result.status !== 'ok') return false;
+  if (result.tool !== 'web.researchProductFacts') return true;
+  const payload = result.payload as { researchOutcome?: unknown; searchDisposition?: unknown };
+  if (payload.researchOutcome === 'partial') return false;
+  return !['timed_out', 'failed', 'aborted', 'skipped_budget']
+    .includes(String(payload.searchDisposition ?? ''));
+}
+
 function readAttempted(toolResults: ToolResult[]): boolean {
   return toolResults.some((result) => result.tool === 'site.readFirstPartyPage');
 }
@@ -68,6 +124,10 @@ export function deriveTaskOutcome(input: TaskOutcomeInput): TaskOutcome {
     }
   }
   const unreadUrls = unreadFirstPartyUrls(input.userMessage, input.toolResults);
+  const unresolvedFacts = uniqueNonEmpty([
+    ...(input.unresolvedFacts ?? []),
+    ...researchUnresolvedFacts(input.toolResults)
+  ]);
   const base = {
     goal: input.goal,
     evidenceIds,
@@ -79,7 +139,7 @@ export function deriveTaskOutcome(input: TaskOutcomeInput): TaskOutcome {
       ...base,
       status: 'failed_agent_capability',
       resolvedFacts: [...(input.resolvedFacts ?? [])],
-      unresolvedFacts: [...(input.unresolvedFacts ?? []), input.capabilityFailure],
+      unresolvedFacts: uniqueNonEmpty([...unresolvedFacts, input.capabilityFailure]),
       requiredNextAction: null,
       humanOperationReason: null
     };
@@ -89,7 +149,7 @@ export function deriveTaskOutcome(input: TaskOutcomeInput): TaskOutcome {
       ...base,
       status: 'needs_human_operation',
       resolvedFacts: [...(input.resolvedFacts ?? []), 'buyer contact collected exactly once'],
-      unresolvedFacts: [...(input.unresolvedFacts ?? [])],
+      unresolvedFacts,
       requiredNextAction: null,
       humanOperationReason: input.humanOperationReason ?? 'manager callback pending'
     };
@@ -99,7 +159,7 @@ export function deriveTaskOutcome(input: TaskOutcomeInput): TaskOutcome {
       ...base,
       status: 'blocked_missing_evidence',
       resolvedFacts: [...(input.resolvedFacts ?? [])],
-      unresolvedFacts: [...(input.unresolvedFacts ?? []), ...unreadUrls.map((url) => `unread buyer-supplied page: ${url}`)],
+      unresolvedFacts: uniqueNonEmpty([...unresolvedFacts, ...unreadUrls.map((url) => `unread buyer-supplied page: ${url}`)]),
       requiredNextAction: 'read the buyer-supplied first-party page before any absence claim',
       humanOperationReason: null
     };
@@ -109,7 +169,7 @@ export function deriveTaskOutcome(input: TaskOutcomeInput): TaskOutcome {
       ...base,
       status: 'blocked_tool_failure',
       resolvedFacts: [...(input.resolvedFacts ?? [])],
-      unresolvedFacts: [...(input.unresolvedFacts ?? []), ...toolFailures],
+      unresolvedFacts: uniqueNonEmpty([...unresolvedFacts, ...toolFailures]),
       requiredNextAction: 'retry with a materially different source or strategy',
       humanOperationReason: null
     };
@@ -120,17 +180,17 @@ export function deriveTaskOutcome(input: TaskOutcomeInput): TaskOutcome {
       ...base,
       status: 'blocked_missing_evidence',
       resolvedFacts: [...(input.resolvedFacts ?? [])],
-      unresolvedFacts: [...(input.unresolvedFacts ?? []), ...blockers],
+      unresolvedFacts: uniqueNonEmpty([...unresolvedFacts, ...blockers]),
       requiredNextAction: blockers[0] ?? null,
       humanOperationReason: null
     };
   }
-  if ((input.unresolvedFacts ?? []).length > 0) {
+  if (unresolvedFacts.length > 0) {
     return {
       ...base,
       status: 'partially_resolved',
       resolvedFacts: [...(input.resolvedFacts ?? [])],
-      unresolvedFacts: [...(input.unresolvedFacts ?? [])],
+      unresolvedFacts,
       requiredNextAction: input.contactOffered ? 'await buyer contact or continue consultation' : null,
       humanOperationReason: null
     };
