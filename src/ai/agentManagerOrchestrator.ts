@@ -51,6 +51,8 @@ import { readCurrentSitePrice } from '../catalog/currentSitePrice.js';
 import { verifyBudgetPrices } from '../catalog/verifyBudgetPrices.js';
 import { buildRequirementProofs, combinedRequirementProofStatus, requirementUsesGenericReadProof, requirementProofsFor, resolvedRequirementEligibilityStatus, selectionRequirementAttributeMatches } from './requirementProofs.js';
 import { injectFirstPartyPageReads, unreadFirstPartyUrls } from './firstPartyTurnInjection.js';
+import { extractEvidenceInput } from './evidenceInput.js';
+import { canonicalizeFirstPartyUrl } from './siteFirstParty.js';
 
 export interface AgentManagerGenerateInput {
   sessionId: string;
@@ -827,6 +829,28 @@ export function validateAgentSemanticDecision(input: {
     history: input.history,
     provenExhaustedHandoffContinuation: input.provenExhaustedHandoffContinuation
   }));
+  const externalEvidenceUrls = extractEvidenceInput(input.userMessage ?? '').urls.filter((url) =>
+    !canonicalizeFirstPartyUrl(url.canonical, config.CATALOG_BASE_URL)
+  );
+  const webResearchPlanned = input.decision.intent.toolRequests.some((request) =>
+    request.tool === 'web.researchProductFacts'
+  );
+  for (const request of input.decision.intent.toolRequests) {
+    if (request.tool !== 'site.readFirstPartyPage') continue;
+    const requestedUrl = typeof request.args.url === 'string' ? request.args.url.trim() : '';
+    if (!canonicalizeFirstPartyUrl(requestedUrl, config.CATALOG_BASE_URL)) {
+      issues.push(`external_url_misrouted_to_first_party_reader:${request.id}`);
+    }
+  }
+  if (
+    externalEvidenceUrls.length > 0 &&
+    input.decision.intent.grounding.technicalAttributes.length > 0 &&
+    (input.decision.intent.grounding.taskType === 'technical_answer' ||
+      input.decision.intent.grounding.taskType === 'comparison') &&
+    !webResearchPlanned
+  ) {
+    issues.push('external_evidence_url_requires_web_research');
+  }
   const activeNeed = getActiveDialogueNeed(ledgerState);
   const policy = input.decision.intent.selectionPolicy;
   const ledgerClass = coerceVisibleCardIntent(activeNeed?.productClass);
