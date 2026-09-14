@@ -1,6 +1,7 @@
-import type { ProductElectricalLoadItem, ProductSelectionClass } from '../shared/types.js';
+import type { ProductApparentPower, ProductElectricalLoadItem, ProductSelectionClass } from '../shared/types.js';
 import type { ToolRequest, ToolResult } from './agentManagerContracts.js';
-import { calculateGeneratorLoadProfile, canonicalElectricalLoadKind } from './loadProfile.js';
+import { ApparentPowerInputSchema } from './agentManagerContracts.js';
+import { calculateGeneratorLoadProfile, canonicalElectricalLoadKind, resolveElectricalActivePower } from './loadProfile.js';
 
 const loadProductClassAliases = new Set(['generator', 'weldinggenerator', 'welding_generator', 'platecompactor', 'plate_compactor']);
 const ambiguousWeldingLoadAliases = new Set(['weldinggenerator', 'welding_generator']);
@@ -102,6 +103,18 @@ function isObjectRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === 'object' && !Array.isArray(value));
 }
 
+function apparentPowerFromArg(value: unknown): ProductApparentPower | undefined {
+  const parsed = ApparentPowerInputSchema.safeParse(value);
+  return parsed.success ? parsed.data : undefined;
+}
+
+function activePower(kw: number | undefined, apparent: ProductApparentPower | undefined, warnings: Set<string>) {
+  if (apparent) warnings.add('generator_load_active_power_conversion_only');
+  const result = resolveElectricalActivePower(kw, apparent);
+  if (result.issue) warnings.add(result.issue);
+  return result.kw;
+}
+
 function isProductClassLoadKind(value: unknown) {
   return loadProductClassAliases.has(compactLoadToken(value));
 }
@@ -135,12 +148,18 @@ function loadsFromArgs(args: { loads?: unknown[] }): {
       warnings.add('generator_load_missing_llm_semantic_fields');
       continue;
     }
+    const runningApparentPower = apparentPowerFromArg(item.runningApparentPower);
+    const startingApparentPower = apparentPowerFromArg(item.startingApparentPower);
     const load: GeneratorLoadToolItem = {
       kind,
       name: typeof item.name === 'string' && item.name.trim() ? item.name : undefined,
       count: countFromToolArg(item.count),
-      runningKw: positiveNumberFromToolArg(item.runningKw),
-      startingKw: positiveNumberFromToolArg(item.startingKw),
+      runningObservedKw: positiveNumberFromToolArg(item.runningKw),
+      startingObservedKw: positiveNumberFromToolArg(item.startingKw),
+      runningKw: activePower(positiveNumberFromToolArg(item.runningKw), runningApparentPower, warnings),
+      startingKw: activePower(positiveNumberFromToolArg(item.startingKw), startingApparentPower, warnings),
+      runningApparentPower,
+      startingApparentPower,
       source,
       runningSource: powerSourceFromToolArg(item.runningSource),
       startingSource: powerSourceFromToolArg(item.startingSource),
@@ -152,7 +171,7 @@ function loadsFromArgs(args: { loads?: unknown[] }): {
       basisSignals: basisSignalsFromToolArg(item.basisSignals),
       basisKind: basisKindFromToolArg(item.basisKind)
     };
-    if (load.runningKw !== undefined || load.startingKw !== undefined) {
+    if (load.runningKw !== undefined || load.startingKw !== undefined || runningApparentPower || startingApparentPower) {
       loads.push(load);
       continue;
     }
@@ -227,6 +246,8 @@ function hasUnconfirmedGeneratorLoadBasisWarning(result: ToolResult) {
   const profile = result.payload.profile;
   return (isObjectRecord(profile) && Array.isArray(profile.missingStartingLoads) && profile.missingStartingLoads.length > 0) ||
     result.warnings.includes('generator_load_startup_unconfirmed') ||
+    result.warnings.includes('generator_load_power_factor_unconfirmed') ||
+    result.warnings.includes('generator_load_power_observation_conflict') ||
     result.warnings.includes('generator_load_estimate_only') ||
     result.warnings.includes('generator_load_bounded_assumption') ||
     result.warnings.includes('generator_load_unbounded_guess') ||

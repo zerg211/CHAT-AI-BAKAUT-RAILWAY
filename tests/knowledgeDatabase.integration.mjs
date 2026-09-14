@@ -80,9 +80,20 @@ try {
   assert.equal(Date.parse(saved.lastVerifiedAt),Date.parse(fact.observedAt));
   assert.equal(Date.parse(saved.validUntil),Date.parse(fact.observedAt)+90*86400000);
  });
+ await run('AUTHENTIC_FACT_FROM_ANOTHER_MODIFICATION_STAYS_ON_ITS_SUBJECT',async()=>{
+  const otherInput={...input,name:input.name+' OTHER',sourceUrl:input.sourceUrl+'/other',externalId:key+'-other'};
+  const other=await repo.upsertProduct(otherInput);
+  const otherFact=await repo.upsertVerifiedProductFact({...fact,productId:other.id,productName:other.name,value:'999 кг',sourceUrl:fact.sourceUrl+'/other'});
+  assert.ok(otherFact);
+  const targetFacts=await repo.searchVerifiedProductFacts({productIds:[p.id],sourceTypes:['manual'],attributes:['weight']});
+  assert.ok(targetFacts.some(item=>item.value==='70 кг'));
+  assert.ok(!targetFacts.some(item=>item.value==='999 кг'),'valid evidence for another product cannot satisfy this product slot');
+  const both=await repo.searchVerifiedProductFacts({productIds:[p.id,other.id],sourceTypes:['manual'],attributes:['weight']});
+  assert.ok(both.some(item=>item.productId===other.id&&item.value==='999 кг'));
+ });
  await run('PRICE_ONLY_PRESERVES_MEMORY_AND_EMBEDDING',async()=>{
   const before=await pool.query('SELECT * FROM products WHERE id=$1',[p.id]);
-  p=await repo.upsertProduct({...input,price:165,raw:{...input.raw,price:165},imageUrl:'https://fixtures.bakaut.invalid/new.jpg'});
+  p=await repo.upsertProduct({...input,price:165,priceObservedAt:new Date().toISOString(),raw:{...input.raw,price:165},imageUrl:'https://fixtures.bakaut.invalid/new.jpg'});
   const after=await pool.query('SELECT * FROM products WHERE id=$1',[p.id]);
   const reloaded=await repo.getProductsByIds([p.id]);
   assert.equal(reloaded.length,1);

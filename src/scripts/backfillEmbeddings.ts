@@ -43,7 +43,7 @@ async function createEmbeddingsWithFallback(texts: string[]) {
 async function updatePlannedEmbeddings<T>(
   planned: PlannedEmbedding<T>[],
   batchSize: number,
-  update: (item: T, embedding: number[], metadata: EmbeddingMetadata) => Promise<void>
+  update: (item: T, embedding: number[], metadata: EmbeddingMetadata) => Promise<void | boolean>
 ) {
   const stats = { updated: 0, failed: 0 };
   for (let index = 0; index < planned.length; index += batchSize) {
@@ -56,8 +56,9 @@ async function updatePlannedEmbeddings<T>(
         continue;
       }
       try {
-        await update(chunk[offset].item, embedding, chunk[offset].metadata);
-        stats.updated += 1;
+        const published = await update(chunk[offset].item, embedding, chunk[offset].metadata);
+        if (published === false) stats.failed += 1;
+        else stats.updated += 1;
       } catch {
         stats.failed += 1;
       }
@@ -88,7 +89,7 @@ async function backfill() {
     const planned: PlannedEmbedding<(typeof candidates)[number]>[] = [];
     for (const item of candidates) {
       const text = productToEmbeddingText(item.product);
-      const metadata = embeddingMetadataForText(text);
+      const metadata = { ...embeddingMetadataForText(text), expectedSourceRevision: item.product.technicalVersion };
       if (item.hasEmbedding && item.embeddingModel === metadata.model && item.embeddingSourceHash === metadata.sourceHash) {
         stats.products.skippedFresh += 1;
         if (!dryRun) await repository.touchProductEmbeddingMetadata(item.product.id, metadata);
@@ -111,7 +112,7 @@ async function backfill() {
     const planned: PlannedEmbedding<(typeof candidates)[number]>[] = [];
     for (const item of candidates) {
       const text = pageToEmbeddingText(item.page);
-      const metadata = embeddingMetadataForText(text);
+      const metadata = { ...embeddingMetadataForText(text), expectedSourceRevision: item.page.sourceContentHash };
       if (item.hasEmbedding && item.embeddingModel === metadata.model && item.embeddingSourceHash === metadata.sourceHash) {
         stats.catalogPages.skippedFresh += 1;
         if (!dryRun) await repository.touchCatalogPageEmbeddingMetadata(item.page.id, metadata);

@@ -2,6 +2,11 @@ import { describe, expect, it } from 'vitest';
 import { evidenceFingerprint, evidenceStrength, extractEvidenceInput } from '../src/ai/evidenceInput.js';
 
 describe('evidence input normalization', () => {
+  it('preserves path Unicode, port and significant query bytes/order while removing only tracking', () => {
+    const original = 'https://bakautprof.ru:8443/catalog/Ａ?variant=left/&city=ufa&utm_source=test&variant=right%2F';
+    expect(extractEvidenceInput(original).urls[0]?.canonical).toBe('https://bakautprof.ru:8443/catalog/%EF%BC%A1?variant=left/&city=ufa&variant=right%2F');
+    expect(extractEvidenceInput('артикул ００１２３４５').identifiers[0]?.normalized).toBe('0012345');
+  });
   it('extracts a pure-digit article without LLM or embeddings', () => {
     const input = extractEvidenceInput('Подскажите по артикулу 1110511');
     expect(input.identifiers).toEqual([

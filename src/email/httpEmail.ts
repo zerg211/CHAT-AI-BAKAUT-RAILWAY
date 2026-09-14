@@ -148,7 +148,7 @@ function shortDialogueContext(messages: EmailMessageContext[]) {
 
 function leadSubject(lead: Lead, _conversation: EmailConversationContext | null) {
   const contact = lead.phone || lead.email;
-  return `Новый лид из AI-чата: ${lead.name}${contact ? `, ${contact}` : ''}`;
+  return `Новый лид из AI-чата: ${lead.name || 'имя не указано'}${contact ? `, ${contact}` : ''}`;
 }
 
 function preferredContactLabel(preferredContact?: EmailHandoffContext['preferredContact']) {
@@ -169,7 +169,7 @@ function leadText(
     'Новый лид из AI-чата',
     '',
     'Контакт:',
-    `Имя: ${lead.name}`,
+    `Имя: ${lead.name || 'не указано'}`,
     `Телефон: ${lead.phone || 'не указан'}`,
     `Email: ${lead.email || 'не указан'}`,
     contactPreference ? `Предпочтительный способ связи: ${contactPreference}` : null,

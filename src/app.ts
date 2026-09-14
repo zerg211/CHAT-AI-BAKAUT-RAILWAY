@@ -3,6 +3,7 @@ import rateLimit from '@fastify/rate-limit';
 import Fastify from 'fastify';
 import { config } from './config.js';
 import { ConversationRepository } from './db/repositories.js';
+import { createReadinessProbe } from './db/readiness.js';
 import { startLeadOutboxWorker } from './ai/leadOutbox.js';
 import { startKnowledgeEnrichmentWorker } from './ai/knowledgeEnrichment.js';
 import { AI_MANAGER_RUNTIME_MANIFEST } from './ai/aiManagerRuntimeManifest.js';
@@ -78,17 +79,33 @@ export async function buildApp() {
   await registerWidgetRoutes(app);
 
   const conversations = new ConversationRepository();
-  setInterval(() => {
-    Promise.all([
+  let maintenanceInFlight: Promise<unknown> | undefined;
+  const maintenanceTimer = setInterval(() => {
+    if (maintenanceInFlight) return;
+    maintenanceInFlight = Promise.all([
       conversations.expireInactiveSessions(),
       conversations.deleteOldEmptyWidgetSessions(),
       conversations.deleteEmptyNonWidgetSessions()
-    ]).catch((error: unknown) => {
-      app.log.warn({ error: error instanceof Error ? error.message : String(error) }, 'failed to maintain sessions');
-    });
+    ]).catch(() => {
+      app.log.warn({ error: 'session_maintenance_failed' }, 'failed to maintain sessions');
+    }).finally(() => { maintenanceInFlight = undefined; });
   }, 60_000).unref();
+  app.addHook('onClose', async () => {
+    clearInterval(maintenanceTimer);
+    await maintenanceInFlight;
+  });
 
-  if (config.NODE_ENV !== 'test') startLeadOutboxWorker({ log: app.log });
+  const readiness = createReadinessProbe(config.DATABASE_URL, () => Boolean(config.OPENAI_API_KEY?.trim()));
+  app.get('/api/ready', async (_request, reply) => {
+    const ready = await readiness.check();
+    return reply.code(ready ? 200 : 503).send({ ready });
+  });
+  app.addHook('onClose', () => readiness.close());
+
+  if (config.NODE_ENV !== 'test') {
+    const stopOutbox = startLeadOutboxWorker({ log: app.log });
+    app.addHook('onClose', stopOutbox);
+  }
   if (config.NODE_ENV !== 'test') {
     const stopEnrichment = startKnowledgeEnrichmentWorker();
     app.addHook('onClose', stopEnrichment);

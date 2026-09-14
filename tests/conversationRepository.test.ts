@@ -1064,7 +1064,7 @@ describe('LeadRepository partial contact drafts', () => {
     expect(sql).toContain('ORDER BY turn.created_at DESC');
     expect(sql).toContain("'purpose', draft.purpose");
     expect(sql).toContain("'question', draft.buyer_question");
-    expect(sql).toContain("'preferredContact', draft.preferred_contact");
+    expect(sql).toContain("'preferredContact', coalesce($8::text, draft.preferred_contact)");
     expect(sql).toContain('payload = lead_outbox.payload || EXCLUDED.payload');
     expect(sql).toContain("SET status = 'consumed'");
     expect(sql).toContain('phone = NULL');

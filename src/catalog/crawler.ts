@@ -169,6 +169,7 @@ export function extractProduct(html: string, pageUrl: string, baseUrl: string): 
     name,
     category: category || undefined,
     price: parsePrice(priceText),
+    priceObservedAt: new Date().toISOString(),
     currency: 'RUB',
     imageUrl,
     description,

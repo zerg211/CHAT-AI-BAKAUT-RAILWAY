@@ -4,6 +4,20 @@ import { validateToolResultOutput } from '../src/ai/agentManagerToolRegistry.js'
 import type { Product } from '../src/shared/types.js';
 
 describe('company price evidence before budget selection', () => {
+  it('does not persist or start another read when cancellation arrives with a completed read', async () => {
+    const abort = new AbortController();
+    const product = { id: 'cancelled', name: 'Cancelled product', price: 10, specs: {} } as Product;
+    const read = vi.fn(async () => {
+      abort.abort();
+      return { productId: product.id, productName: product.name, previousPrice: 10, price: 12,
+        currency: 'RUB' as const, sourceUrl: 'https://bakautprof.ru/catalog/cancelled', observedAt: new Date().toISOString(), evidence: '12 RUB' };
+    });
+    const persist = vi.fn(async () => product);
+    const result = await verifyBudgetPrices({ products: [product, { ...product, id: 'next' }], read, persist, signal: abort.signal, maxConcurrency: 1 });
+    expect(read).toHaveBeenCalledTimes(1);
+    expect(persist).not.toHaveBeenCalled();
+    expect(result.proofs.every(proof => proof.status === 'unavailable')).toBe(true);
+  });
   const products = [
     {id:'sgg5000',name:'SGG 5000Ei',price:64558,currency:'RUB',specs:{power:'5 кВт'}},
     {id:'sgg6000',name:'SGG 6000Ei',price:80377,currency:'RUB',specs:{power:'6 кВт'}}

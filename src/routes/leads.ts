@@ -7,7 +7,8 @@ import { safeError } from '../ai/responseUtils.js';
 const leadSchema = z.object({
   sessionId: z.string().uuid(),
   clientLeadId: z.string().uuid(),
-  name: z.string().trim().min(2).max(120),
+  name: z.preprocess(value => value === '' ? undefined : value, z.string().trim().min(1).max(120).optional()),
+  preferredContact: z.enum(['message', 'call']).optional(),
   phone: z.string().trim().min(5).max(40).optional(),
   email: z.string().trim().max(254).email().optional(),
   question: z.string().trim().min(1).max(3000).optional()
@@ -18,6 +19,7 @@ const leadSchema = z.object({
 function requestHash(input: z.infer<typeof leadSchema>) {
   return createHash('sha256').update(JSON.stringify({
     name: input.name,
+    preferredContact: input.preferredContact ?? null,
     phone: input.phone ?? null,
     email: input.email ?? null,
     question: input.question ?? null

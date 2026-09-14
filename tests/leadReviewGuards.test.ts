@@ -63,7 +63,7 @@ describe('lead review guards', () => {
     expect(leadCaptureMissingName([missingName])).toBe(true);
   });
 
-  it('returns the missing-name repair when phone is present but name is absent', () => {
+  it('handles a legacy missing-name result without imposing the removed name requirement or claiming submission', () => {
     const base = 'По каталожным данным модель выглядит подходящей, но совместимость разъёма пока не подтверждена.';
     const text = leadCaptureRepairText({
       contact: { phone: '+7 900 000-00-11' },
@@ -72,9 +72,8 @@ describe('lead review guards', () => {
     });
 
     expect(text).toContain(base);
-    expect(text).toContain('Телефон вижу');
-    expect(text).toContain('Напишите, пожалуйста, имя');
-    expect(text).toContain('сообщением или звонком');
+    expect(text).toContain('Контакт сохранён, но заявка ещё не оформлена');
+    expect(text).not.toContain('Напишите, пожалуйста, имя');
     expect(text).not.toContain('передам');
   });
 });
@@ -90,8 +89,8 @@ describe('lead review fail-closed repair', () => {
     });
 
     expect(text).toContain(base);
-    expect(text).toContain('Оставьте, пожалуйста, имя и номер телефона');
-    expect(text).toContain('сообщением или звонком');
+    expect(text).toContain('номер телефона или email');
+    expect(text).toContain('написать или позвонить');
     expect(text).not.toContain(removedContactSentence);
     expect(text).not.toContain('передам');
   });

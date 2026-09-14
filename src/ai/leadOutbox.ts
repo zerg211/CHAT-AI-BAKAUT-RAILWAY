@@ -80,11 +80,13 @@ export async function processLeadOutboxBatch(input: {
   conversations?: ConversationRepository;
   leads?: LeadRepository;
   limit?: number;
+  shouldContinue?: () => boolean;
 } = {}) {
   const conversations = input.conversations ?? new ConversationRepository();
   const leads = input.leads ?? new LeadRepository();
   const results = [];
   for (let i = 0; i < (input.limit ?? 10); i += 1) {
+    if (input.shouldContinue && !input.shouldContinue()) break;
     // Claim just before sending: queued items must not consume their lease while
     // this worker is awaiting earlier provider requests.
     const [item] = await leads.claimDueLeadOutbox(1);
@@ -99,13 +101,22 @@ export function startLeadOutboxWorker(input: {
   intervalMs?: number;
 } = {}) {
   const intervalMs = input.intervalMs ?? 30_000;
+  let stopped = false;
+  let inFlight: Promise<unknown> | undefined;
   const run = () => {
-    processLeadOutboxBatch().catch((error) => {
+    if (stopped || inFlight) return;
+    inFlight = processLeadOutboxBatch({ shouldContinue: () => !stopped }).catch((error) => {
       input.log?.warn({ error: safeError(error) }, 'lead outbox worker failed');
-    });
+    }).finally(() => { inFlight = undefined; });
   };
   run();
   const timer = setInterval(run, intervalMs);
   timer.unref?.();
-  return timer;
+  return async () => {
+    stopped = true;
+    clearInterval(timer);
+    // Let an already claimed dispatch record its receipt/unknown result. Do not
+    // claim another item while shutting down or interrupt provider reconciliation.
+    await inFlight;
+  };
 }

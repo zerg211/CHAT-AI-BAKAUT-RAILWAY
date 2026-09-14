@@ -12,6 +12,10 @@ import { createHash } from 'node:crypto';
 import { cleanText } from '../catalog/normalize.js';
 import { outboundText, safeFetchBytes, type SafeOutboundFetchResult } from '../security/outboundHttp.js';
 import { classifyCompanyPath } from './companyKnowledge.js';
+import { extractReadableSourceText } from '../catalog/sourceText.js';
+import { hasPageSpecificProductEvidence } from '../catalog/productPageIdentity.js';
+import { extractPdfText, PdfTextExtractionError } from './pdfTextExtraction.js';
+import type { CatalogPageInput } from '../shared/types.js';
 
 export type FirstPartyPageKind = 'product' | 'company' | 'other';
 
@@ -27,17 +31,23 @@ export interface FirstPartyCompanyInfo {
 }
 
 export interface FirstPartyPageRead {
+  /** Internal durable source candidate; never added wholesale to model context. */
+  cacheCandidate?: CatalogPageInput;
   canonicalUrl: string;
   pageKind: FirstPartyPageKind;
   title: string;
   text: string;
+  requestedUrl: string;
+  format: 'html' | 'pdf';
+  sourceTruncated: boolean;
+  readRange: { start: number; end: number; totalChars: number; complete: boolean; nextOffset: number | null };
   productIdentity?: FirstPartyProductIdentity;
   companyInfo?: FirstPartyCompanyInfo;
   sourceFingerprint: string;
   observedAt: string;
 }
 
-export type FirstPartyReadFailureCode = 'denied' | 'timeout' | 'http_status' | 'unreadable' | 'unsupported';
+export type FirstPartyReadFailureCode = 'denied' | 'timeout' | 'http_status' | 'unreadable' | 'unsupported' | 'source_changed';
 
 export interface FirstPartyReadFailure {
   code: FirstPartyReadFailureCode;
@@ -54,10 +64,13 @@ export interface FirstPartyReadOptions {
   maxBytes?: number;
   maxRedirects?: number;
   textLimit?: number;
+  offset?: number;
+  expectedSourceFingerprint?: string;
+  signal?: AbortSignal;
   now?: () => string;
   fetchBytes?: (url: string, options: {
     allowedOrigin: string; timeoutMs: number; maxBytes: number; maxRedirects: number;
-    headers: Record<string, string>;
+    headers: Record<string, string>; signal?: AbortSignal;
   }) => Promise<SafeOutboundFetchResult>;
 }
 
@@ -65,7 +78,7 @@ function canonicalizeSameOrigin(raw: string, baseUrl: string): { canonical: stri
   let parsed: URL;
   let base: URL;
   try {
-    parsed = new URL(raw.normalize('NFKC'));
+    parsed = new URL(raw);
     base = new URL(baseUrl);
   } catch {
     return null;
@@ -73,16 +86,8 @@ function canonicalizeSameOrigin(raw: string, baseUrl: string): { canonical: stri
   if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return null;
   if (parsed.username !== '' || parsed.password !== '') return null;
   if (parsed.origin !== base.origin) return null;
-  let pathname = parsed.pathname;
-  if (pathname.length > 1 && pathname.endsWith('/')) pathname = pathname.slice(0, -1);
-  return { canonical: parsed.origin + pathname, host: parsed.hostname.toLowerCase(), pathname };
-}
-
-function isProductPath(pathname: string): boolean {
-  const parts = pathname.split('/').filter((part) => part.length > 0);
-  if (parts[0] !== 'catalog' || parts.length < 3) return false;
-  const last = parts[parts.length - 1] ?? '';
-  return last.length > 8 && !last.startsWith('filter') && !last.includes('clear');
+  const pathname = parsed.pathname;
+  return { canonical: parsed.origin + pathname + parsed.search, host: parsed.hostname.toLowerCase(), pathname };
 }
 
 const WRAP = new Set(['.', ',', ';', ':', '!', '?', '(', ')', '[', ']', '{', '}', '"', "'", '«', '»', '„', '“', '”', '…']);
@@ -117,8 +122,8 @@ function extractArticle(heading: string, text: string): string | undefined {
   return nextTokenAfter(heading, 'артикул') ?? nextTokenAfter(text, 'артикул');
 }
 
-function pageFingerprint(canonicalUrl: string, title: string, article?: string): string {
-  return createHash('sha256').update(JSON.stringify([canonicalUrl, title, article ?? null])).digest('hex');
+function pageFingerprint(canonicalUrl: string, title: string, text: string): string {
+  return createHash('sha256').update(JSON.stringify([canonicalUrl, title, text])).digest('hex');
 }
 
 function failureCodeOf(error: unknown): FirstPartyReadFailureCode {
@@ -134,7 +139,7 @@ export async function readFirstPartyPage(
   options: FirstPartyReadOptions
 ): Promise<FirstPartyPageResult> {
   const observedAt = (options.now ?? (() => new Date().toISOString()))();
-  const canonical = canonicalizeSameOrigin(url, options.baseUrl);
+  let canonical = canonicalizeSameOrigin(url, options.baseUrl);
   if (!canonical) {
     return { ok: false, failure: { code: 'denied', canonicalUrl: url, observedAt } };
   }
@@ -146,7 +151,8 @@ export async function readFirstPartyPage(
       timeoutMs: options.timeoutMs ?? 15_000,
       maxBytes: options.maxBytes ?? 1_500_000,
       maxRedirects: options.maxRedirects ?? 2,
-      headers: { 'user-agent': 'Bakaut first-party page read' }
+      headers: { 'user-agent': 'Bakaut first-party page read' },
+      signal: options.signal
     });
   } catch (error) {
     return { ok: false, failure: { code: failureCodeOf(error), canonicalUrl: canonical.canonical, observedAt } };
@@ -154,45 +160,73 @@ export async function readFirstPartyPage(
   if (result.status !== 200) {
     return { ok: false, failure: { code: 'http_status', canonicalUrl: canonical.canonical, status: result.status, observedAt } };
   }
-  const contentType = String(result.headers.get('content-type') ?? '');
-  if (contentType && !contentType.includes('text/html')) {
+  canonical = canonicalizeSameOrigin(result.url, options.baseUrl);
+  if (!canonical) return { ok: false, failure: { code: 'denied', canonicalUrl: url, observedAt } };
+  const contentType = String(result.headers.get('content-type') ?? '').toLowerCase();
+  const isPdf = contentType.includes('application/pdf') || new TextDecoder().decode(result.bytes.subarray(0, 5)) === '%PDF-';
+  if (contentType && !contentType.includes('text/html') && !isPdf) {
     return { ok: false, failure: { code: 'unsupported', canonicalUrl: canonical.canonical, status: result.status, observedAt } };
   }
-  let html: string;
+  let html = '';
+  let pdfText: string | undefined;
+  let sourceTruncated = false;
   try {
-    html = outboundText(result);
-  } catch {
-    return { ok: false, failure: { code: 'unreadable', canonicalUrl: canonical.canonical, status: result.status, observedAt } };
+    if (isPdf) {
+      const parsed = await extractPdfText(result.bytes, { signal: options.signal });
+      pdfText = parsed.text;
+      sourceTruncated = parsed.truncated;
+    } else html = outboundText(result);
+  } catch (error) {
+    const code = error instanceof PdfTextExtractionError && error.code === 'timed_out' ? 'timeout' : failureCodeOf(error);
+    return { ok: false, failure: { code, canonicalUrl: canonical.canonical, status: result.status, observedAt } };
   }
   const $ = cheerio.load(html);
-  const title = cleanText($('h1').first().text() || $('title').first().text());
+  const title = isPdf ? canonical.pathname.split('/').at(-1) ?? 'PDF' : cleanText($('h1').first().text() || $('title').first().text());
   if (!title || title.length < 3) {
     return { ok: false, failure: { code: 'unreadable', canonicalUrl: canonical.canonical, status: result.status, observedAt } };
   }
-  const limit = options.textLimit ?? 8_000;
-  const text = cleanText($('body').text()).slice(0, limit);
+  const fullText = pdfText ?? extractReadableSourceText($);
+  if (!fullText.trim()) return { ok: false, failure: { code: 'unreadable', canonicalUrl: canonical.canonical, observedAt } };
+  const limit = Math.max(1, Math.min(12_000, options.textLimit ?? 8_000));
+  const start = Math.max(0, Math.min(fullText.length, Math.trunc(options.offset ?? 0)));
+  const end = Math.min(fullText.length, start + limit);
+  const text = fullText.slice(start, end);
+  const representation = {
+    requestedUrl: url,
+    format: isPdf ? 'pdf' as const : 'html' as const,
+    sourceTruncated,
+    readRange: { start, end, totalChars: fullText.length, complete: !sourceTruncated && start === 0 && end === fullText.length,
+      nextOffset: end < fullText.length ? end : null },
+    sourceFingerprint: pageFingerprint(canonical.canonical, title, fullText)
+  };
+  if (options.expectedSourceFingerprint && options.expectedSourceFingerprint !== representation.sourceFingerprint) {
+    return { ok: false, failure: { code: 'source_changed', canonicalUrl: canonical.canonical, observedAt } };
+  }
   const company = classifyCompanyPath(canonical.pathname);
   if (company) {
     const page: FirstPartyPageRead = {
       canonicalUrl: canonical.canonical,
       pageKind: 'company',
+      ...(!sourceTruncated && !new URL(canonical.canonical).search ? { cacheCandidate: {
+        sourceUrl: canonical.canonical, pageType: company.kind, title, content: fullText, sourceObservedAt: observedAt
+      } } : {}),
       title,
       text,
+      ...representation,
       companyInfo: { kind: company.kind, volatility: company.volatility, snippet: text.slice(0, 2_000) },
-      sourceFingerprint: pageFingerprint(canonical.canonical, title),
       observedAt
     };
     return { ok: true, page };
   }
-  if (isProductPath(canonical.pathname)) {
-    const article = extractArticle(title, text);
+  const article = extractArticle(title, fullText);
+  if (hasPageSpecificProductEvidence(html, canonical.canonical)) {
     const page: FirstPartyPageRead = {
       canonicalUrl: canonical.canonical,
       pageKind: 'product',
       title,
       text,
+      ...representation,
       productIdentity: article ? { title, article } : { title },
-      sourceFingerprint: pageFingerprint(canonical.canonical, title, article),
       observedAt
     };
     return { ok: true, page };
@@ -204,7 +238,7 @@ export async function readFirstPartyPage(
       pageKind: 'other',
       title,
       text,
-      sourceFingerprint: pageFingerprint(canonical.canonical, title),
+      ...representation,
       observedAt
     }
   };

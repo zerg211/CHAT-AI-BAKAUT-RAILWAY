@@ -7,6 +7,7 @@ vi.mock('../src/ai/openaiUsageGuard.js', () => ({
   bindOpenAIUsageReservation: vi.fn(), releaseOpenAIUsageReservation: vi.fn(), recordOpenAIUsageOnce: vi.fn()
 }));
 import { createOpenAIClient } from '../src/ai/openaiClient.js';
+import { releaseOpenAIUsageReservation } from '../src/ai/openaiUsageGuard.js';
 import { AgentManagerTurnBudget, runWithAgentManagerTurnBudget } from '../src/ai/agentManagerTurnBudget.js';
 
 describe('Responses transport turn reservation', () => {
@@ -23,6 +24,7 @@ describe('Responses transport turn reservation', () => {
       await expect(client.responses.create(request)).rejects.toThrow('connection lost');
       expect(budget.snapshot().usage).toMatchObject({ providerCalls: 2, providerReconciledCalls: 1 });
       expect(budget.snapshot().usage.providerEstimatedTotalTokens).toBeGreaterThan(200);
+      expect(releaseOpenAIUsageReservation).not.toHaveBeenCalled();
     });
   });
 });

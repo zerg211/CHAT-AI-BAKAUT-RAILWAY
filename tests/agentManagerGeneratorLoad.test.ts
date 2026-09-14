@@ -5,6 +5,7 @@ import {
   hasUnconfirmedGeneratorLoadBasisResult
 } from '../src/ai/agentManagerGeneratorLoad.js';
 import type { ToolRequest, ToolResult } from '../src/ai/agentManagerContracts.js';
+import { calculateGeneratorLoadProfile } from '../src/ai/loadProfile.js';
 
 function generatorLoadRequest(loads: Array<Record<string, unknown>>): ToolRequest {
   return {
@@ -47,6 +48,55 @@ function toolResultFromPayload(payload: ReturnType<typeof buildGeneratorLoadTool
 }
 
 describe('Agent Manager generator load payload', () => {
+  it('converts independently evidenced running and starting kVA using their own known power factors', () => {
+    const request = generatorLoadRequest([{ kind: 'pump', count: 1, source: 'explicit_user',
+      runningSource: 'explicit_user', startingSource: 'explicit_user', operationMode: 'continuous',
+      evidence: 'running 2.5 kVA PF 0.8; starting 5 kVA PF 0.6',
+      runningApparentPower: { kva: 2.5, powerFactor: 0.8, evidence: 'running nameplate PF 0.8' },
+      startingApparentPower: { kva: 5, powerFactor: 0.6, evidence: 'measured starting PF 0.6' } }]);
+    const payload = buildGeneratorLoadToolPayload({ request, userMessage: 'Calculate this known load.' });
+    expect(payload.loads[0]).toMatchObject({ runningKw: 2, startingKw: 3 });
+    expect(payload.profile?.totalRunningKw).toBe(2);
+    expect(payload.profile?.calculation).toContain('2.5 kVA × 0.8 = 2 kW');
+    expect(payload.profile?.calculation).toContain('5 kVA × 0.6 = 3 kW');
+    expect(payload.warnings).toContain('generator_load_active_power_conversion_only');
+    expect(hasUnconfirmedGeneratorLoadBasisResult([toolResultFromPayload(payload)])).toBe(false);
+    expect(hasGeneratorLoadBasisThatBlocksPreliminaryFit([toolResultFromPayload(payload)])).toBe(false);
+  });
+
+  it('retains kVA with unknown PF and never drops that consumer from a partial calculation', () => {
+    const request = generatorLoadRequest([
+      { kind: 'pump', count: 1, source: 'explicit_user', runningSource: 'explicit_user', startingSource: 'not_provided',
+        operationMode: 'continuous', evidence: 'pump 2.5 kVA, PF not supplied',
+        runningApparentPower: { kva: 2.5, powerFactor: null, evidence: '2.5 kVA' } },
+      { kind: 'lighting', count: 1, runningKw: 0.5, startingKw: 0.5, source: 'explicit_user',
+        runningSource: 'explicit_user', startingSource: 'explicit_user', operationMode: 'continuous', evidence: '500 W lighting' }
+    ]);
+    const payload = buildGeneratorLoadToolPayload({ request, userMessage: 'Both consumers work.' });
+    expect(payload.loads).toHaveLength(2);
+    expect(payload.loads[0]?.runningKw).toBeUndefined();
+    expect(payload.profile?.requiredNominalKw).toBeUndefined();
+    expect(payload.warnings).toContain('generator_load_power_factor_unconfirmed');
+    const replay = calculateGeneratorLoadProfile(JSON.parse(JSON.stringify(payload.profile!.items)));
+    expect(replay?.items).toHaveLength(2);
+    expect(replay?.missingRunningLoads).toHaveLength(1);
+    expect(replay?.requiredNominalKw).toBeUndefined();
+  });
+
+  it('does not silently resolve conflicting kW and kVA/PF observations', () => {
+    const request = generatorLoadRequest([{ kind: 'pump', count: 1, runningKw: 4, startingKw: 4,
+      runningApparentPower: { kva: 2.5, powerFactor: 0.8, evidence: '2.5 kVA PF 0.8' },
+      source: 'explicit_user', runningSource: 'explicit_user', startingSource: 'explicit_user',
+      operationMode: 'continuous', evidence: '4 kW conflicts with 2.5 kVA PF 0.8' }]);
+    const payload = buildGeneratorLoadToolPayload({ request, userMessage: 'Which figure is correct?' });
+    expect(payload.warnings).toContain('generator_load_power_observation_conflict');
+    expect(payload.profile?.requiredNominalKw).toBeUndefined();
+    const replay = calculateGeneratorLoadProfile(JSON.parse(JSON.stringify(payload.profile!.items)));
+    expect(replay?.items[0]?.runningObservedKw).toBe(4);
+    expect(replay?.items[0]?.runningKw).toBeUndefined();
+    expect(replay?.requiredNominalKw).toBeUndefined();
+  });
+
   it('derives the running floor before display rounding with startup still unknown', () => {
     const request = generatorLoadRequest([{ kind: 'pump', name: 'pump', count: 1, runningKw: 0.501,
       source: 'explicit_user', runningSource: 'explicit_user', startingSource: 'not_provided',

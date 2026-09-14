@@ -19,9 +19,8 @@ import { matchingVerifiedFactsForRequest, reusableVerifiedFact, researchFactConf
 import { canonicalFactAttribute, verifiedFactValueKey } from './verifiedFactNormalization.js';
 import { readCurrentSitePrice } from '../catalog/currentSitePrice.js';
 import { verifyBudgetPrices } from '../catalog/verifyBudgetPrices.js';
-import { extractEvidenceInput } from './evidenceInput.js';
 import { readFirstPartyPage } from './siteFirstParty.js';
-import { bindEphemeralPageIdentity } from './productIdentityResolver.js';
+import { articleCandidates, bindEphemeralPageIdentity } from './productIdentityResolver.js';
 import { classifyCompanyPath } from './companyKnowledge.js';
 import { buildRequirementProofs, combinedRequirementProofStatus, requirementUsesGenericReadProof, requirementProofsFor, resolvedRequirementEligibilityStatus, selectionRequirementAttributeMatches } from './requirementProofs.js';
 
@@ -268,6 +267,33 @@ export function hardSelectionNumber(intent: AgentIntentContract, kinds: string[]
     if (Number.isFinite(value) && value >= 0) return value;
   }
   return undefined;
+}
+
+function structuredCandidateTradeoffs(product: Product, intent: AgentIntentContract) {
+  const tradeoffs: string[] = [];
+  const budgetMax = hardSelectionNumber(intent, ['budget_max_rub', 'price_max_rub']);
+  if (budgetMax !== undefined && typeof product.price === 'number' && product.price > budgetMax) {
+    tradeoffs.push(`price_rub:${product.price}>${budgetMax}`);
+  }
+  const powerMin = hardSelectionNumber(intent, ['nominal_power_min_kw', 'power_min_kw']);
+  const powerMax = hardSelectionNumber(intent, ['nominal_power_max_kw', 'power_max_kw']);
+  const nominalPower = qualifiedNominalActivePowerKw(product);
+  if (powerMin !== undefined && nominalPower !== undefined && nominalPower < powerMin) {
+    tradeoffs.push(`nominal_power_kw:${nominalPower}<${powerMin}`);
+  }
+  if (powerMax !== undefined && nominalPower !== undefined && nominalPower > powerMax) {
+    tradeoffs.push(`nominal_power_kw:${nominalPower}>${powerMax}`);
+  }
+  const weightMin = hardSelectionNumber(intent, ['weight_min_kg']);
+  const weightMax = hardSelectionNumber(intent, ['weight_max_kg']);
+  const weight = extractWeightKg(product);
+  if (weightMin !== undefined && weight !== undefined && weight < weightMin) {
+    tradeoffs.push(`weight_kg:${weight}<${weightMin}`);
+  }
+  if (weightMax !== undefined && weight !== undefined && weight > weightMax) {
+    tradeoffs.push(`weight_kg:${weight}>${weightMax}`);
+  }
+  return uniqueStrings(tradeoffs);
 }
 
 export function resolvedEligibilityStatusForStrictKinds(input: {
@@ -1403,7 +1429,14 @@ async executeTools(input: {
       let result: ToolResult | undefined;
       let attempt = 0;
       let budgetStopError: AgentManagerTurnBudgetExceededError | undefined;
-      const catalogResolvedProducts = request.tool === 'web.researchProductFacts'
+      if (request.tool === 'web.researchProductFacts' && request.args.researchScope === 'public_information' &&
+        buyerQuestionContainsContactPii([request.args.query, request.args.semanticQuery, request.args.reason,
+          request.args.notes, ...(request.args.comparisonAttributes ?? [])].filter(Boolean).join(' '))) {
+        result = ToolResultSchema.parse({ requestId: request.id, tool: request.tool, status: 'denied',
+          payload: { error: { code: 'public_search_contact_data' } }, warnings: ['public_search_contact_data'],
+          errorCode: 'public_search_contact_data' });
+      }
+      const catalogResolvedProducts = request.tool === 'web.researchProductFacts' && request.args.researchScope !== 'public_information'
         ? catalogCandidatesSatisfyingConditionalWebRequest({
             request,
             intent: input.intent,
@@ -1496,6 +1529,7 @@ async executeTools(input: {
           const productIntent = resolvedToolProductIntent(request, input.intent);
           let search = await this.searchCatalogProducts({
               query,
+              identifiers: request.args.identifiers,
               limit,
               signal: toolSignal,
               productIntent,
@@ -1542,6 +1576,7 @@ async executeTools(input: {
                   vectorCount: search.vectorCount,
                   usedEmbeddings: search.vectorCount > 0,
                   candidateTiers: search.candidateTiers,
+                  identityMatches: search.identityMatches,
                   primaryExpansion: search.primaryExpansion ?? null
                 }
               },
@@ -1659,7 +1694,8 @@ async executeTools(input: {
             warnings: profile ? warnings : [...warnings, 'no_usable_loads_for_generator_calculation']
           });
         } else if (request.tool === 'web.researchProductFacts') {
-          let targetProductNames = targetProductNamesForRequest(request, input.intent);
+          const publicInformation = request.args.researchScope === 'public_information';
+          let targetProductNames = publicInformation ? [] : targetProductNamesForRequest(request, input.intent);
           const suppressedTargetProductNames = suppressedContextTargetProductNamesForRequest(request, input.intent);
           const comparisonAttributes = comparisonAttributesForRequest(request);
           const webProductClassKey = typedProductClassKey(
@@ -1678,6 +1714,7 @@ async executeTools(input: {
             return webProductClassKey !== null && sourceProductClassKey === webProductClassKey;
           };
           const scopedProductsForWeb = () => {
+            if (publicInformation) return [];
             const products = productsMatchingToolRequestIntent({
               products: [...productsById.values()],
               request,
@@ -1805,7 +1842,7 @@ async executeTools(input: {
               : catalogCandidatesAfterExactModelLookup.length < 2
           );
           let currentWebCatalogLookupCompleted = false;
-          if (needsCatalogLookup) {
+          if (!publicInformation && needsCatalogLookup) {
             const scopedQuery = toolRequestScopedQuery(request);
             const lookupQuery = targetProductNames.length
               ? targetProductNames.join(' ')
@@ -1862,12 +1899,12 @@ async executeTools(input: {
           // Reuse only the same completed reading inside this buyer turn. The
           // full card content is part of the key; changed facts cannot hit it.
           const catalogResearchKey = createHash('sha256').update(JSON.stringify([
-            input.userMessage, [...targetProductNames].sort(), [...comparisonAttributes].sort(),
+            publicInformation, input.userMessage, [...targetProductNames].sort(), [...comparisonAttributes].sort(),
             [...selectedProducts].sort((left, right) => left.id.localeCompare(right.id)),
             priorCatalogLookupCompleted || currentWebCatalogLookupCompleted
           ])).digest('hex');
           const cachedCatalogResearch = catalogResearchCache.get(catalogResearchKey);
-          const catalogResearch = priorMemory?.attributesCovered ? null : cachedCatalogResearch ? structuredClone(cachedCatalogResearch) : await extractCatalogProductComparisonFacts({
+          const catalogResearch = publicInformation || priorMemory?.attributesCovered ? null : cachedCatalogResearch ? structuredClone(cachedCatalogResearch) : await extractCatalogProductComparisonFacts({
             userMessage: input.userMessage,
             products: selectedProducts,
             targetProductNames,
@@ -1903,7 +1940,7 @@ async executeTools(input: {
             ? uniqueStrings(catalogMissingFactSlots.map((slot) => slot.attribute))
             : comparisonAttributes;
           const priorMemoryResearch = priorMemory?.research;
-          const memory = catalogCoversRequest
+          const memory = publicInformation || catalogCoversRequest
             ? null
             : memoryCheckedFirst ? (priorMemory ? {...priorMemory,attributesCovered:Boolean(priorMemoryResearch && catalogMissingFactSlots.every(slot=>
                 researchResultCoversFactSlot({result:priorMemoryResearch,productName:slot.productName,attribute:slot.attribute,sourceTypes:['web']})))} : null)
@@ -1953,7 +1990,7 @@ async executeTools(input: {
               : memory?.missingAttributes ?? comparisonAttributes;
             const researchedGaps = await researchProductComparisonFacts({
               documentReadContext: input.documentReadContext,
-              userMessage: input.userMessage,
+              userMessage: publicInformation ? request.args.query!.trim() : input.userMessage,
               researchGoal: {
                 query: typeof request.args.query === 'string' ? request.args.query : undefined,
                 semanticQuery: typeof request.args.semanticQuery === 'string' ? request.args.semanticQuery : undefined,
@@ -1961,7 +1998,8 @@ async executeTools(input: {
                 notes: typeof request.args.notes === 'string' ? request.args.notes : undefined
               },
               previousResearch: toolResults
-                .filter((result) => result.tool === 'web.researchProductFacts')
+                .filter((result) => result.tool === 'web.researchProductFacts' &&
+                  (result.payload as { researchScope?: string }).researchScope === (publicInformation ? 'public_information' : undefined))
                 .map((result) => ({
                   requestId: result.requestId,
                   status: result.status,
@@ -2053,6 +2091,7 @@ async executeTools(input: {
               : 'ok',
             payload: {
               ...research,
+              ...(publicInformation ? { researchScope: 'public_information' } : {}),
               products: selectedProducts,
               answerGuidance,
               researchOutcome,
@@ -2086,40 +2125,40 @@ async executeTools(input: {
               errorCode: 'first_party_url_missing'
             });
           } else {
-            const read = await readFirstPartyPage(pageUrl, { baseUrl: config.CATALOG_BASE_URL });
+            const read = await readFirstPartyPage(pageUrl, { baseUrl: config.CATALOG_BASE_URL,
+              offset: request.args.offset ?? undefined, expectedSourceFingerprint: request.args.expectedSourceFingerprint ?? undefined, signal: toolSignal });
             if (read.ok) {
               const page = read.page;
+              let knowledgePublication: 'queued' | 'not_queued' | 'failed' | undefined;
+              if (page.cacheCandidate) {
+                try { knowledgePublication = await this.products.enqueuePublicCompanyPage(page.cacheCandidate) ? 'queued' : 'not_queued'; }
+                catch { knowledgePublication = 'failed'; }
+              }
               // F13 reconciliation: bind the verified page to the local catalog when
               // possible. An absent match stays an ephemeral verified page identity —
               // the answer may use it without requiring full catalog ingestion.
               let catalogProductId: string | undefined;
-              let catalogMatch: 'matched' | 'absent' | undefined;
+              let catalogMatch: 'matched' | 'absent' | 'ambiguous' | 'error' | undefined;
+              let catalogCandidateIds: string[] = [];
               if (page.pageKind === 'product') {
                 try {
-                  const exactLookup = this.products as ProductRepository & {
-                    getProductByExactArticle?: (article: string) => Promise<Product | null>;
-                    getProductByExactExternalId?: (externalId: string) => Promise<Product | null>;
-                    getProductBySourceUrl?: (sourceUrl: string) => Promise<Product | null>;
-                  };
-                  const candidates: Array<Promise<Product | null>> = [];
-                  if (page.productIdentity?.article && typeof exactLookup.getProductByExactArticle === 'function') {
-                    candidates.push(exactLookup.getProductByExactArticle(page.productIdentity.article));
-                  }
-                  if (typeof exactLookup.getProductBySourceUrl === 'function') {
-                    candidates.push(exactLookup.getProductBySourceUrl(page.canonicalUrl));
-                  }
-                  for (const candidate of candidates) {
-                    const hit = await candidate;
-                    if (hit) {
-                      catalogProductId = hit.id;
-                      catalogMatch = 'matched';
-                      productsById.set(hit.id, hit);
-                      break;
-                    }
-                  }
-                  if (!catalogProductId) catalogMatch = 'absent';
+                  const [articles, urlHit] = await Promise.all([
+                    page.productIdentity?.article && typeof this.products.getProductByExactArticle === 'function'
+                      ? articleCandidates(this.products, page.productIdentity.article) : Promise.resolve([]),
+                    typeof this.products.getProductBySourceUrl === 'function'
+                      ? this.products.getProductBySourceUrl(page.canonicalUrl) : Promise.resolve(null)
+                  ]);
+                  catalogCandidateIds = [...new Set([...articles.map(p => p.id), ...(urlHit ? [urlHit.id] : [])])];
+                  const compatible = urlHit ? (articles.length ? articles.filter(p => p.id === urlHit.id) : [urlHit]) :
+                    articles.filter(p => productMatchesExactTargetIdentity(p, page.title));
+                  if (compatible.length === 1) {
+                    const hit = compatible[0]!;
+                    catalogProductId = hit.id;
+                    catalogMatch = 'matched';
+                    productsById.set(hit.id, hit);
+                  } else catalogMatch = catalogCandidateIds.length ? 'ambiguous' : 'absent';
                 } catch (error) {
-                  catalogMatch = 'absent';
+                  catalogMatch = 'error';
                 }
               }
               // Single ownership (F13): the ephemeral verified-page identity is built
@@ -2140,16 +2179,22 @@ async executeTools(input: {
                   canonicalUrl: page.canonicalUrl,
                   pageKind: page.pageKind,
                   title: page.title,
-                  text: page.text.slice(0, 4000),
+                  text: page.text,
+                  requestedUrl: page.requestedUrl,
+                  readRange: page.readRange,
+                  format: page.format,
+                  sourceTruncated: page.sourceTruncated,
+                  ...(knowledgePublication ? { knowledgePublication } : {}),
                   ...(page.productIdentity ? { productIdentity: page.productIdentity } : {}),
                   ...(page.companyInfo ? { companyInfo: page.companyInfo } : {}),
                   ...(catalogProductId ? { catalogProductId } : {}),
-                  ...(catalogMatch ? { catalogMatch } : {}),
+                  ...(catalogMatch ? { catalogMatch, catalogCandidateIds } : {}),
                   ...(ephemeralPageIdentity ? { ephemeralPageIdentity } : {}),
                   sourceFingerprint: page.sourceFingerprint,
                   observedAt: page.observedAt
                 },
-                warnings: catalogMatch === 'absent' ? ['first_party_page_without_catalog_match'] : []
+                warnings: [...(catalogMatch && catalogMatch !== 'matched' ? ['first_party_catalog_' + catalogMatch] : []),
+                  ...(knowledgePublication === 'failed' ? ['company_knowledge_publication_failed'] : [])]
               });
             } else {
               const failure = read.failure;
@@ -2199,7 +2244,8 @@ async executeTools(input: {
               errorCode: 'company_knowledge_query_missing'
             });
           } else {
-            let companyPages: Array<{ url: string; title: string; pageKind: string; volatility?: 'STABLE' | 'SEMI_VOLATILE'; snippet: string }> = [];
+            let companyPages: Array<{ url: string; title: string; pageKind: string; volatility?: 'STABLE' | 'SEMI_VOLATILE'; snippet: string;
+              sourceContentHash?: string; totalChars: number; complete: boolean }> = [];
             let companyError: unknown = null;
             try {
               const rows = await this.products.searchCatalogPages(companyQuery, companyLimit);
@@ -2211,13 +2257,16 @@ async executeTools(input: {
                   pathname = row.sourceUrl;
                 }
                 const classified = classifyCompanyPath(pathname);
-                const snippet = (row.summary ?? row.content ?? '').slice(0, 1200);
+                const snippet = (row.content ?? '').slice(0, 1200);
                 return {
                   url: row.sourceUrl,
                   title: row.title,
                   pageKind: classified?.kind ?? row.pageType,
                   ...(classified ? { volatility: classified.volatility } : {}),
-                  snippet
+                  snippet,
+                  sourceContentHash: row.sourceContentHash ?? undefined,
+                  totalChars: row.content.length,
+                  complete: row.content.length <= snippet.length
                 };
               });
             } catch (error) {
@@ -2363,52 +2412,6 @@ async executeTools(input: {
                 payload: { missing: 'contact', missingFields: ['contact'] },
                 warnings: ['lead_contact_missing']
               });
-            } else if (!contact.name) {
-              const draft = pendingDraft ?? await this.leads.upsertLeadCaptureDraft({
-                sessionId: input.session.id,
-                originTurnId: input.turnId,
-                originToolRequestId: request.id,
-                purpose: leadPurpose,
-                buyerQuestion: leadBuyerQuestion,
-                preferredContact,
-                phone: contact.phone,
-                email: contact.email,
-                consentEvidenceHash: leadCaptureHash([input.session.id, authorizationEvidence]),
-                scopeHash: authorization.handoffKind === 'technical_followup' && authorization.handoffOfferMessageId
-                  ? leadCaptureHash([
-                      input.session.id,
-                      leadPurpose,
-                      leadBuyerQuestion,
-                      `technical_handoff_offer:${authorization.handoffOfferMessageId}`
-                    ])
-                  : leadCaptureHash([input.session.id, leadPurpose, leadBuyerQuestion])
-              });
-              if (!draft) throw new Error('lead_capture_draft_not_persisted');
-              if (!pendingDraft) {
-                await this.trace(input.session.id, input.turnId, 'lead', 'lead_capture_draft_saved', {
-                  draftId: draft.id,
-                  scopeHash: draft.scopeHash,
-                  hasPhone: Boolean(draft.phone),
-                  hasEmail: Boolean(draft.email),
-                  preferredContact: draft.preferredContact ?? null,
-                  expiresAt: draft.expiresAt
-                });
-              }
-              result = ToolResultSchema.parse({
-                requestId: request.id,
-                tool: request.tool,
-                status: 'not_found',
-                payload: {
-                  missing: 'name',
-                  missingFields: ['name'],
-                  draftId: draft.id,
-                  draftSaved: true,
-                  contactStored: true,
-                  ...(draft.preferredContact ? { preferredContact: draft.preferredContact } : {}),
-                  originalQuestionPreserved: true
-                },
-                warnings: ['lead_name_missing', 'lead_capture_partial_contact_persisted']
-              });
             } else {
               let lead: { id: string };
               let outbox: unknown;
@@ -2418,7 +2421,7 @@ async executeTools(input: {
                   draftId: pendingDraft.id,
                   sessionId: input.session.id,
                   turnId: input.turnId,
-                  name: String(contact.name),
+                  name: contact.name,
                   phone: extractedContact.phone,
                   email: extractedContact.email,
                   preferredContact
@@ -2439,7 +2442,7 @@ async executeTools(input: {
                   sessionId: input.session.id,
                   originTurnId: input.turnId,
                   originToolRequestId: request.id,
-                  name: String(contact.name),
+                  name: contact.name,
                   phone: typeof contact.phone === 'string' ? contact.phone : undefined,
                   email: typeof contact.email === 'string' ? contact.email : undefined,
                   question: leadBuyerQuestion
@@ -2676,6 +2679,7 @@ async createCachedQueryEmbedding(text: string, signal?: AbortSignal) {
   }
 
 async searchCatalogProducts(input: {
+    identifiers?: Array<{ kind: 'article' | 'external_id'; value: string; namespace?: string }>;
     query: string;
     limit: number;
     signal?: AbortSignal;
@@ -2725,25 +2729,38 @@ async searchCatalogProducts(input: {
     // Deterministic exact-identifier pass (F12): numeric articles and catalog ids from
     // the request text resolve via exact DB selectors with no embeddings. A miss only
     // means "not proven by this selector" — broad retrieval still runs for it.
-    const evidenceIdentifiers = extractEvidenceInput(`${query} ${embeddingQuery}`).identifiers
-      .filter((identifier) => identifier.kind === 'numeric_article' || identifier.kind === 'catalog_id');
+    // The planner determines roles and namespace; code never promotes a price,
+    // power or phone-shaped number to a product selector on its own.
+    const evidenceIdentifiers = input.identifiers ?? [];
     const resolvedIdentifierKeys = new Set<string>();
+    const foundIdentifierKeys = new Set<string>();
+    const ambiguousProductIds = new Set<string>();
+    const identityMatches: Array<{ kind: string; value: string; namespace?: string;
+      status: 'matched' | 'ambiguous' | 'not_found'; productIds: string[] }> = [];
     const exactIdentifierSearch = this.products as ProductRepository & {
       getProductByExactArticle?: (article: string) => Promise<Product | null>;
+      getProductsByExactArticle?: (article: string, namespace?: string) => Promise<Product[]>;
       getProductByExactExternalId?: (externalId: string) => Promise<Product | null>;
     };
     for (const identifier of evidenceIdentifiers) {
       try {
-        const lookup = identifier.kind === 'numeric_article'
+        const lookup = identifier.kind === 'article'
           ? exactIdentifierSearch.getProductByExactArticle
           : exactIdentifierSearch.getProductByExactExternalId;
         if (typeof lookup !== 'function') continue;
-        const hit = identifier.kind === 'numeric_article'
-          ? await exactIdentifierSearch.getProductByExactArticle!(identifier.normalized)
-          : await exactIdentifierSearch.getProductByExactExternalId!(identifier.normalized);
-        if (hit) {
-          textProducts.push(hit);
-          resolvedIdentifierKeys.add(identifier.kind + ':' + identifier.normalized);
+        const candidates = identifier.kind === 'article'
+          ? await articleCandidates(this.products, identifier.value, identifier.namespace)
+          : [await exactIdentifierSearch.getProductByExactExternalId!(identifier.value)].filter((p): p is Product => p !== null);
+        identityMatches.push({ ...identifier, status: candidates.length > 1 ? 'ambiguous' : candidates.length ? 'matched' : 'not_found',
+          productIds: candidates.map(p => p.id) });
+        if (candidates.length) {
+          textProducts.push(...candidates);
+          foundIdentifierKeys.add(identifier.kind + ':' + identifier.value);
+          if (candidates.length === 1) resolvedIdentifierKeys.add(identifier.kind + ':' + identifier.value);
+          else {
+            candidates.forEach(p => ambiguousProductIds.add(p.id));
+            warnings.push(`catalog_exact_identifier_ambiguous:${identifier.kind}:${identifier.value}:${candidates.length}`);
+          }
         }
       } catch (error) {
         warnings.push(`catalog_exact_identifier_error:${safeError(error).code ?? safeError(error).message}`);
@@ -2754,7 +2771,7 @@ async searchCatalogProducts(input: {
     }
     for (const key of resolvedIdentifierKeys) warnings.push(`catalog_exact_identifier_match:${key}`);
     const exactEvidenceSaturated = evidenceIdentifiers.length > 0 &&
-      evidenceIdentifiers.every((identifier) => resolvedIdentifierKeys.has(identifier.kind + ':' + identifier.normalized));
+      evidenceIdentifiers.every((identifier) => foundIdentifierKeys.has(identifier.kind + ':' + identifier.value));
     if (preciseTargets && exactTargets.length <= 4 && typeof exactModelSearch === 'function') {
       for (const name of exactTargets) {
         try {
@@ -2892,7 +2909,7 @@ async searchCatalogProducts(input: {
     let candidateTier: Exclude<SelectionCandidateTier, 'rejected'> = input.intent
       ? visibleSelectionTier(input.intent)
       : 'preliminary_match';
-    const candidateTradeoffs = new Map<string, string[]>();
+    const structuredCandidatesById = new Map(sourceFilteredProducts.map(product => [product.id, product]));
     const desiredStructuredCandidateCount = Math.max(
       1,
       Math.min(limit, input.intent?.selectionPolicy?.maxCards ?? Math.min(limit, 3))
@@ -2927,6 +2944,7 @@ async searchCatalogProducts(input: {
             product,
             input.intent?.selectionPolicy?.powerSource
           ));
+        for (const product of matchingExpansionPool) structuredCandidatesById.set(product.id, product);
         const expandedEvidence = filterProductsByStructuredSelectionPolicy({
           products: matchingExpansionPool,
           intent: input.intent!,
@@ -2986,11 +3004,12 @@ async searchCatalogProducts(input: {
       products,
       textCount: textProducts.length,
       vectorCount: vectorProducts.length,
+      identityMatches,
       candidateTiers: [
         ...products.map((product) => ({
           productId: product.id,
-          tier: candidateTier,
-          tradeoffs: candidateTradeoffs.get(product.id) ?? []
+          tier: ambiguousProductIds.has(product.id) ? 'preliminary_match' as const : candidateTier,
+          tradeoffs: [] as string[]
         })),
         ...structuredEvidence.droppedProductIds
           .filter((productId) => !products.some((product) => product.id === productId))
@@ -2998,7 +3017,9 @@ async searchCatalogProducts(input: {
           .map((productId) => ({
             productId,
             tier: 'rejected' as const,
-            tradeoffs: [] as string[]
+            tradeoffs: structuredCandidatesById.has(productId)
+              ? structuredCandidateTradeoffs(structuredCandidatesById.get(productId)!, input.intent!)
+              : [] as string[]
           }))
       ],
       primaryExpansion,

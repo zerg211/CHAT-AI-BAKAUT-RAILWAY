@@ -60,6 +60,9 @@ const optionalPositiveLimit = (max: number) => optionalPlaceholder(z.number().in
 const stringList = (max: number) => z.array(nonEmptyString).max(max).optional();
 
 export const CatalogSearchToolArgsSchema = z.object({
+  identifiers: optionalPlaceholder(z.array(z.object({
+    kind: z.enum(['article','external_id']), value: nonEmptyString.max(160), namespace: optionalText
+  }).strict()).max(8)).describe('Product identifiers explicitly understood from dialogue: article or external_id with optional supplier namespace. Never use price, power, quantity or customer contact as an identifier. Preserve leading zeros. Use [] when none.'),
   query: optionalText,
   semanticQuery: optionalText,
   productIntent: optionalProductClass,
@@ -88,12 +91,20 @@ export const ProductDetailsToolArgsSchema = z.object({
   notes: optionalText
 }).strict();
 
+export const ApparentPowerInputSchema = z.object({
+  kva: z.number().positive(),
+  powerFactor: optionalPlaceholder(z.number().positive().max(1)),
+  evidence: nonEmptyString
+}).strict();
+
 const generatorLoadItemSchema = z.object({
   kind: nonEmptyString,
   name: optionalText,
   count: optionalPlaceholder(z.number().positive()),
   runningKw: optionalPlaceholder(z.number().nonnegative()),
   startingKw: optionalPlaceholder(z.number().nonnegative()),
+  runningApparentPower: optionalPlaceholder(ApparentPowerInputSchema),
+  startingApparentPower: optionalPlaceholder(ApparentPowerInputSchema),
   source: z.enum(['explicit_user', 'estimated_average', 'catalog_fact', 'web_average']),
   runningSource: z.enum(['explicit_user', 'estimated_average', 'catalog_fact', 'web_average', 'not_provided']),
   startingSource: z.enum(['explicit_user', 'estimated_average', 'catalog_fact', 'web_average', 'not_provided']),
@@ -130,6 +141,7 @@ export const GeneratorLoadToolArgsSchema = z.object({
 }).strict();
 
 export const WebResearchToolArgsSchema = z.object({
+  researchScope: optionalPlaceholder(z.enum(['product', 'public_information'])),
   query: optionalText,
   semanticQuery: optionalText,
   productIntent: optionalProductClass,
@@ -145,7 +157,11 @@ export const WebResearchToolArgsSchema = z.object({
   limit: optionalPositiveLimit(12),
   reason: optionalText,
   notes: optionalText
-}).strict();
+}).strict().superRefine((args, context) => {
+  if (args.researchScope !== 'public_information') return;
+  if (!args.query?.trim()) context.addIssue({ code: 'custom', path: ['query'], message: 'public information requires a standalone question' });
+  if (args.productNames?.length) context.addIssue({ code: 'custom', path: ['productNames'], message: 'public information must not bind product identities' });
+});
 
 const leadContactSchema = z.object({
   name: optionalText,
@@ -163,6 +179,8 @@ export const LeadCaptureToolArgsSchema = z.object({
 
 export const FirstPartyPageToolArgsSchema = z.object({
   url: nonEmptyString,
+  offset: z.preprocess(value => value === null ? undefined : value, z.number().int().min(0).optional()),
+  expectedSourceFingerprint: optionalText,
   expectedKind: optionalPlaceholder(z.enum(['product', 'company', 'other'])),
   expectedProductIdentity: optionalText,
   reason: optionalText,
@@ -256,6 +274,8 @@ export function canonicalToolObservationStatus(input: {
 }
 
 export interface ToolRequestArgs {
+  researchScope?: 'product' | 'public_information' | null;
+  identifiers?: Array<{ kind: 'article' | 'external_id'; value: string; namespace?: string }>;
   verifyCurrentPrice?: boolean | null;
   query?: string | null;
   semanticQuery?: string | null;
@@ -286,6 +306,8 @@ export interface ToolRequestArgs {
   reason?: string | null;
   notes?: string | null;
   url?: string | null;
+  offset?: number | null;
+  expectedSourceFingerprint?: string | null;
   expectedKind?: 'product' | 'company' | 'other' | null;
   expectedProductIdentity?: string | null;
 }
@@ -484,11 +506,18 @@ export const AgentIntentContractSchema = z.object({
   selectionPolicy: AgentSelectionPolicySchema.optional(),
   leadCaptureAuthorization: LeadCaptureAuthorizationSchema.optional(),
   buyerRequestedTechnicalHandoff: z.object({
+    requestKind: z.enum(['research_followup', 'explicit_human_request']).optional(),
     evidence: nonEmptyString,
     buyerQuestion: nonEmptyString,
-    researchMessageId: z.string().uuid(),
-    researchRequestIds: z.array(nonEmptyString).min(1).max(8)
-  }).strict().nullable().optional(),
+    researchMessageId: z.string().uuid().nullable(),
+    researchRequestIds: z.array(nonEmptyString).max(8)
+  }).strict().superRefine((request, context) => {
+    if (request.requestKind === 'explicit_human_request') {
+      if (request.researchMessageId !== null || request.researchRequestIds.length) context.addIssue({ code: 'custom', message: 'direct human request does not claim research proof' });
+    } else if (!request.researchMessageId || !request.researchRequestIds.length) {
+      context.addIssue({ code: 'custom', message: 'research followup requires research references' });
+    }
+  }).nullable().optional(),
   policyRuleIds: z.array(nonEmptyString).default([]),
   mustNotAskQuestionIds: z.array(z.string()).default([]),
   riskFlags: z.array(z.string()).default([])

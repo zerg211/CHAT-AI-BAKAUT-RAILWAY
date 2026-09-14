@@ -1,4 +1,5 @@
 import * as cheerio from 'cheerio';
+import { extractReadableSourceText } from './sourceText.js';
 import { createEmbedding } from '../ai/openaiClient.js';
 import { embeddingMetadataForText } from '../ai/embeddingUtils.js';
 import { config } from '../config.js';
@@ -43,6 +44,7 @@ type FetchResult = {
   url: string;
   status: number;
   html: string;
+  observedAt?: string;
 };
 
 const defaultContentRoots = new Set([
@@ -305,7 +307,7 @@ async function fetchText(
     headers: { 'user-agent': 'Bakaut AI catalog sync (+local development; respects sitemap)' },
     signal,
   });
-  return { url: response.url, status: response.status, html: outboundText(response) };
+  return { url: response.url, status: response.status, html: outboundText(response), observedAt: new Date().toISOString() };
 }
 
 async function collectSitemapEntries(
@@ -556,6 +558,7 @@ export function extractProduct(response: FetchResult, baseUrl: string, sitemapLa
     brand: extractBrand(specs, name, jsonProduct),
     category,
     price: parsePrice(priceText),
+    priceObservedAt: response.observedAt,
     currency: 'RUB',
     imageUrl: images[0],
     description,
@@ -578,10 +581,7 @@ export function extractProduct(response: FetchResult, baseUrl: string, sitemapLa
 }
 
 function readablePageText($: cheerio.CheerioAPI) {
-  $('script, style, noscript, svg, form, header, footer, nav, .breadcrumbs, .header, .footer').remove();
-  const preferred = $('article, main, .page, .content, .section').first();
-  const text = cleanText((preferred.length ? preferred : $('body')).text());
-  return text.slice(0, 40_000);
+  return extractReadableSourceText($);
 }
 
 function extractCatalogPage(response: FetchResult, baseUrl: string, pageType: string, sitemapLastmod?: string): CatalogPageInput | null {
@@ -595,6 +595,7 @@ function extractCatalogPage(response: FetchResult, baseUrl: string, pageType: st
   return {
     sourceUrl: response.url,
     pageType,
+    sourceObservedAt: response.observedAt,
     title,
     content,
     summary,

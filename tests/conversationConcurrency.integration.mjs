@@ -1,0 +1,32 @@
+import assert from 'node:assert/strict';
+import {randomUUID} from 'node:crypto';
+const target=new URL(process.env.DATABASE_URL||'file:///missing');
+assert.ok(['127.0.0.1','localhost','[::1]'].includes(target.hostname)&&target.pathname.startsWith('/bakaut_acceptance_'));
+process.env.NODE_ENV='test';
+const {pool}=await import('../src/db/pool.ts');
+const {ConversationRepository}=await import('../src/db/repositories.ts');
+const repo=new ConversationRepository(),sessions=[];
+try{
+ const started=Date.now();
+ const visitors=Array.from({length:5},()=>randomUUID());
+ sessions.push(...await Promise.all(visitors.map(visitorId=>repo.createSession({visitorId}))));
+ const inputs=sessions.map((session,i)=>({sessionId:session.id,visitorCapability:visitors[i],clientMessageId:randomUUID(),requestHash:'isolated-'+i,content:'Isolated accepted request '+i,deadlineAt:new Date(Date.now()+60000).toISOString()}));
+ const turns=await Promise.all(inputs.map(input=>repo.createTurnWithUserMessage(input)));
+ assert.equal(new Set(turns.map(t=>t.id)).size,5);
+ const replay=await Promise.all(Array.from({length:5},()=>repo.createTurnWithUserMessage(inputs[0])));
+ assert.ok(replay.every(t=>t.id===turns[0].id));
+ assert.equal((await pool.query("SELECT count(*)::int AS n FROM messages WHERE session_id=ANY($1::uuid[]) AND role='user'",[sessions.map(s=>s.id)])).rows[0].n,5);
+ await assert.rejects(repo.createTurnWithUserMessage({...inputs[0],requestHash:'changed',content:'changed'}),error=>error.name==='ClientMessagePayloadConflictError');
+ assert.equal(await repo.restoreSession(sessions[0].id,visitors[1]),null);
+ const owners=[randomUUID(),randomUUID()];
+ const claims=await Promise.all(owners.map(ownerId=>repo.claimTurnExecution({sessionId:sessions[0].id,turnId:turns[0].id,ownerId,leaseMs:10000})));
+ assert.equal(claims.filter(Boolean).length,1);
+ const oldOwner=owners[claims.findIndex(Boolean)];
+ await pool.query("UPDATE conversation_turns SET execution_lease_expires_at=now()-interval '1 second' WHERE id=$1",[turns[0].id]);
+ const newOwner=randomUUID();
+ assert.ok(await repo.claimTurnExecution({sessionId:sessions[0].id,turnId:turns[0].id,ownerId:newOwner,leaseMs:10000}));
+ await assert.rejects(repo.updateTurn({sessionId:sessions[0].id,turnId:turns[0].id,executionOwner:oldOwner,stage:'stale',status:'answering'}),error=>error.code==='turn_mutation_not_owner_or_not_live');
+ assert.ok(await repo.updateTurn({sessionId:sessions[0].id,turnId:turns[0].id,executionOwner:newOwner,stage:'current',status:'answering'}));
+ for(const session of sessions)assert.equal((await repo.getHistorySnapshot(session.id)).messages.filter(m=>m.role==='user').length,1);
+ console.log(JSON.stringify({status:'PASS',level:'I',concurrency:5,elapsedMs:Date.now()-started,checks:['accepted-five-independent','same-operation-replay','payload-conflict','visitor-isolation','competing-owner','stale-owner-fence','history-replay'],modelCalls:0,scope:'real PostgreSQL repository transport state; no model or SSE network claims'}));
+}finally{await pool.query('DELETE FROM conversation_sessions WHERE id=ANY($1::uuid[])',[sessions.map(s=>s.id)]);await pool.end();}

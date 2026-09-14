@@ -73,7 +73,8 @@ describe('product identity resolver', () => {
       findProductsByNormalizedModel: async () => [product('a', 'X'), product('b', 'Y')]
     });
     const multi = await resolveProductIdentity(r2, extractEvidenceInput('TE6000GLIS'));
-    expect(multi.resolved).toMatchObject({ confidence: 'ambiguous' });
+    expect(multi.resolved).toBeNull();
+    expect(multi.candidates.map(p => p.id)).toEqual(['a','b']);
   });
 
   it('never resolves from text alone and records the fingerprint', async () => {
