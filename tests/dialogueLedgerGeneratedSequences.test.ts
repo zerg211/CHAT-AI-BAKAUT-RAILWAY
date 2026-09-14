@@ -13,12 +13,16 @@ describe('long dialogue snapshots under generated requirement changes',()=>{
       events.push({sessionId:'11111111-1111-4111-8111-111111111111',turnId:'22222222-2222-4222-8222-222222222222',
         eventId:`${seed}-${turn}-${events.length}`,eventType,payload,scope:'need',source:'llm_state_delta',
         evidence:'generated explicit buyer change',status:'active',createdAt:new Date(1700000000000+turn*1000).toISOString()});
+      return events.at(-1)!.eventId;
     };
     for(let turn=0;turn<160;turn++) {
       const needId=next()%2?'generator':'plate';
       append(turn,'need.opened',{needId,productClass:needId,summary:needId,activate:true});
-      append(turn,'fact.confirmed',{needId,productClass:needId,factKey:'budget.max_rub',value:10000+next()%100000,role:'hard_requirement'});
-      if(next()%4===0)append(turn,'fact.negated',{needId,factKey:'budget.max_rub'});
+      const budgetEventId=append(turn,'fact.confirmed',{needId,productClass:needId,factKey:'budget.max_rub',value:10000+next()%100000,role:'hard_requirement'});
+      if(next()%4===0){
+        append(turn,'fact.negated',{needId,targetEventIds:[budgetEventId]});
+        expect(reduceDialogueLedger(events).factsByKey[`${needId}::budget.max_rub`]?.status).toBe('negated');
+      }
       if(next()%5===0)append(turn,'fact.confirmed',{needId,productClass:needId,factKey:'weight.max_kg',value:40+next()%60,role:'hard_requirement'});
     }
     const full=reduceDialogueLedger(events);

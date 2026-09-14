@@ -66,6 +66,7 @@ export type ProductRetrievalSource = 'text' | 'exact' | 'vector' | 'unknown';
 export interface EmbeddingMetadata {
   model: string;
   sourceHash: string;
+  expectedSourceRevision?: string | null;
 }
 
 export interface ProductCard {
@@ -123,6 +124,8 @@ export interface VerifiedProductFact {
 }
 
 export interface VerifiedProductFactInput {
+  /** Facts in the same explicit group must publish together. */
+  atomicGroup?: string;
   expectedTechnicalVersion?: string | null;
   productId?: string | null;
   productName: string;
@@ -137,6 +140,13 @@ export interface VerifiedProductFactInput {
   sourceAuthority?: 'manufacturer' | 'secondary' | null;
   observedAt?: string | null;
   confidence: VerifiedProductFactConfidence;
+}
+
+export interface EnrichmentItemOutcome {
+  index: number;
+  status: 'published' | 'reused' | 'superseded' | 'rejected' | 'retryable_failure';
+  reason?: string;
+  factId?: string;
 }
 
 export interface TroubleshootingCase {
@@ -182,11 +192,13 @@ export interface CatalogPage {
   lastSyncedAt?: string | null;
   isActive?: boolean;
   sourceContentHash?: string | null;
+  sourceObservedAt?: string | null;
   createdAt: string;
   updatedAt: string;
 }
 
 export interface CatalogPageInput {
+  sourceObservedAt?: string;
   sourceUrl: string;
   pageType: string;
   title: string;
@@ -211,7 +223,7 @@ export interface Lead {
   clientRequestHash?: string | null;
   originTurnId?: string | null;
   originToolRequestId?: string | null;
-  name: string;
+  name: string | null;
   phone?: string | null;
   email?: string | null;
   question?: string | null;
@@ -351,12 +363,22 @@ export interface ProductSelectionCompatibilityTarget {
 
 export type ProductElectricalLoadSource = 'explicit_user' | 'estimated_average' | 'web_average' | 'catalog_fact';
 
+export interface ProductApparentPower {
+  kva: number;
+  powerFactor?: number;
+  evidence: string;
+}
+
 export interface ProductElectricalLoadItem {
   kind: string;
   name?: string;
   count: number;
   runningKw?: number;
   startingKw?: number;
+  runningObservedKw?: number;
+  startingObservedKw?: number;
+  runningApparentPower?: ProductApparentPower;
+  startingApparentPower?: ProductApparentPower;
   source: ProductElectricalLoadSource;
   runningSource?: ProductElectricalLoadSource | 'not_provided';
   startingSource?: ProductElectricalLoadSource | 'not_provided';
@@ -374,6 +396,7 @@ export interface ProductGeneratorLoadScenario {
   requiredNominalKw?: number;
   runningOnlyNominalFloorKw?: number;
   missingStartingLoads?: string[];
+  missingRunningLoads?: string[];
   calculation?: string;
 }
 
@@ -384,6 +407,7 @@ export interface ProductGeneratorLoadProfile {
   requiredNominalKw?: number;
   runningOnlyNominalFloorKw?: number;
   missingStartingLoads?: string[];
+  missingRunningLoads?: string[];
   simultaneousRunning?: boolean;
   simultaneousStarting?: boolean;
   simultaneousStartingKinds?: string[];
@@ -937,6 +961,8 @@ export interface ChatResponsePayload {
 }
 
 export interface CatalogProductInput {
+  priceObservedAt?: string;
+  priceOnRequest?: boolean;
   externalId?: string;
   sourceUrl?: string;
   slug?: string;

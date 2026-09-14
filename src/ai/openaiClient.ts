@@ -3,8 +3,7 @@ import { config } from '../config.js';
 import {
   assertOpenAIUsageBudget,
   bindOpenAIUsageReservation,
-  recordOpenAIUsageOnce,
-  releaseOpenAIUsageReservation
+  recordOpenAIUsageOnce
 } from './openaiUsageGuard.js';
 import { embeddingInputText } from './embeddingUtils.js';
 import {
@@ -51,7 +50,8 @@ export function createOpenAIClient() {
       bindOpenAIUsageReservation(response, reservationId);
       return response;
     } catch (error) {
-      await releaseOpenAIUsageReservation(reservationId);
+      // A transport failure does not prove the provider did no billable work.
+      // Keep the durable daily reserve until usage is known or its window ends.
       throw error;
     }
   };
@@ -125,7 +125,7 @@ export async function createEmbedding(text: string, signal?: AbortSignal) {
       await recordOpenAIUsageOnce('embedding', config.OPENAI_EMBEDDING_MODEL, response);
       return response.data?.[0]?.embedding as number[] | undefined;
     } catch (error) {
-      await releaseOpenAIUsageReservation(reservationId);
+      // Preserve unknown provider usage, including failure while recording it.
       throw error;
     }
   }, 2, signal);
@@ -162,7 +162,7 @@ export async function createEmbeddings(texts: string[], signal?: AbortSignal) {
       }
       return texts.map((_, index) => byIndex.get(index) ?? null);
     } catch (error) {
-      await releaseOpenAIUsageReservation(reservationId);
+      // Preserve unknown provider usage, including failure while recording it.
       throw error;
     }
   }, 2, signal);

@@ -115,7 +115,7 @@ function hostIsFirstParty(host: string, firstPartyHosts: string[]): boolean {
 function canonicalizeUrl(raw: string, firstPartyHosts: string[]): CanonicalUrlEvidence | null {
   let parsed: URL;
   try {
-    parsed = new URL(raw.normalize('NFKC'));
+    parsed = new URL(raw);
   } catch {
     return null;
   }
@@ -123,16 +123,16 @@ function canonicalizeUrl(raw: string, firstPartyHosts: string[]): CanonicalUrlEv
   if (parsed.username !== '' || parsed.password !== '') return null;
   const host = parsed.hostname.toLowerCase();
   if (host.length === 0) return null;
-  const kept: Array<[string, string]> = [];
-  parsed.searchParams.forEach((value, key) => {
-    if (!TRACKING_PARAMS.has(key.toLowerCase())) kept.push([key, value]);
-  });
+  // Remove known tracking keys without rewriting representation values/order.
+  const kept = parsed.search.slice(1).split('&').filter(part => {
+    const key = new URLSearchParams(part).keys().next().value ?? '';
+    return !TRACKING_PARAMS.has(key.toLowerCase());
+  }).join('&');
   let pathname = parsed.pathname;
   if (pathname.length > 1 && pathname.endsWith('/')) pathname = pathname.slice(0, -1);
-  let canonical = parsed.protocol + '//' + host + pathname;
+  let canonical = parsed.origin + pathname;
   if (kept.length > 0) {
-    kept.sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
-    canonical += '?' + kept.map(([key, value]) => encodeURIComponent(key) + '=' + encodeURIComponent(value)).join('&');
+    canonical += '?' + kept;
   }
   return { raw, canonical, host, pathname, firstParty: hostIsFirstParty(host, firstPartyHosts), provenance: 'user_message' };
 }
@@ -193,7 +193,7 @@ function findRawRanges(text: string, raws: string[]): Array<{ start: number; end
  * Lookup misses later simply drop the candidate — a miss is never proof of absence.
  */
 export function extractEvidenceInput(message: string, options?: EvidenceUrlOptions): EvidenceInput {
-  const text = (message ?? '').normalize('NFKC');
+  const text = message ?? '';
   const firstPartyHosts = options?.firstPartyHosts ?? DEFAULT_FIRST_PARTY_HOSTS;
   const rawUrls = extractRawUrls(text);
   const urls: CanonicalUrlEvidence[] = [];
@@ -204,7 +204,7 @@ export function extractEvidenceInput(message: string, options?: EvidenceUrlOptio
     seenUrls.add(canonical.canonical);
     urls.push(canonical);
   }
-  const masked = maskRanges(text, findRawRanges(text, rawUrls));
+  const masked = maskRanges(text, findRawRanges(text, rawUrls)).normalize('NFKC');
   const identifiers: IdentifierEvidence[] = [];
   const seenIdentifiers = new Set<string>();
   let current = '';

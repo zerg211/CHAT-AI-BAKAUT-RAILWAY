@@ -72,7 +72,9 @@ export async function verifyBudgetPrices(input: {
       }
       let stage: 'read_page' | 'persist_price' = 'read_page';
       try {
+        input.signal?.throwIfAborted();
         const proof = await input.read(product, input.signal);
+        input.signal?.throwIfAborted();
         stage = 'persist_price';
         const updated = await input.persist(proof);
         if (!updated) throw new Error('site_price_persistence_conflict');

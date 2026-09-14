@@ -1,7 +1,7 @@
 /**
  * Single ownership point for product identity resolution (F03/F12/F13).
  *
- * Resolution order is fixed and deterministic:
+ * Selectors are checked deterministically; conflicting rows are never first-row truth:
  *   1. internal catalog id (`bakaut:<slug>` external id);
  *   2. exact SKU / numeric article (`specs.артикул`);
  *   3. canonical first-party URL / slug (`source_url`);
@@ -21,6 +21,7 @@ export type IdentityConfidence = 'exact' | 'strong' | 'preliminary' | 'ambiguous
 export interface ExactProductLookup {
   getProductByExactExternalId(externalId: string): Promise<Product | null>;
   getProductByExactArticle(article: string): Promise<Product | null>;
+  getProductsByExactArticle?(article: string, namespace?: string): Promise<Product[]>;
   getProductBySourceUrl(sourceUrl: string): Promise<Product | null>;
   /** Model-code candidates (LIKE retrieval + exact in-memory match), no embeddings. */
   findProductsByNormalizedModel?(normalizedModel: string): Promise<Product[]>;
@@ -43,6 +44,8 @@ export interface EphemeralPageIdentity {
 
 export interface IdentityResolution {
   resolved: ResolvedProductIdentity | null;
+  candidates: Product[];
+  selectorMatches: Array<{ selector: string; productIds: string[] }>;
   /** First-party URLs with no DB match yet (page read can still verify them). */
   unmatchedFirstPartyUrls: string[];
   ephemeral: EphemeralPageIdentity | null;
@@ -55,65 +58,55 @@ function productIdOf(product: Product): string {
   return String((product as { id?: unknown }).id ?? '');
 }
 
-export async function resolveProductIdentity(
-  repo: ExactProductLookup,
-  input: EvidenceInput
-): Promise<IdentityResolution> {
+export async function articleCandidates(repo: Pick<ExactProductLookup, 'getProductByExactArticle' | 'getProductsByExactArticle'>,
+  article: string, namespace?: string): Promise<Product[]> {
+  const candidates = repo.getProductsByExactArticle
+    ? await repo.getProductsByExactArticle(article, namespace)
+    : namespace ? [] : [await repo.getProductByExactArticle(article)].filter((p): p is Product => p !== null);
+  return [...new Map(candidates.filter(p => productIdOf(p)).map(p => [p.id, p])).values()];
+}
+
+export async function resolveProductIdentity(repo: ExactProductLookup, input: EvidenceInput,
+  options: { sameSubject?: boolean } = {}): Promise<IdentityResolution> {
   const attemptedSelectors: string[] = [];
   const unmatchedFirstPartyUrls: string[] = [];
-  const fingerprint = evidenceFingerprint(input);
-  const strength = evidenceStrength(input);
-
-  for (const id of input.identifiers) {
-    if (id.kind === 'catalog_id') {
-      const selector = 'exact_external_id:' + id.normalized;
-      attemptedSelectors.push(selector);
-      const product = await repo.getProductByExactExternalId(id.normalized);
-      if (product && productIdOf(product)) {
-        return { resolved: { product, confidence: 'exact', selector }, unmatchedFirstPartyUrls, ephemeral: null, evidenceFingerprint: fingerprint, strength, attemptedSelectors };
-      }
-    }
-  }
-
-  for (const id of input.identifiers) {
-    if (id.kind === 'numeric_article') {
-      const selector = 'exact_article:' + id.normalized;
-      attemptedSelectors.push(selector);
-      const product = await repo.getProductByExactArticle(id.normalized);
-      if (product && productIdOf(product)) {
-        return { resolved: { product, confidence: 'exact', selector }, unmatchedFirstPartyUrls, ephemeral: null, evidenceFingerprint: fingerprint, strength, attemptedSelectors };
-      }
-    }
-  }
-
-  for (const url of input.urls) {
-    if (!url.firstParty) continue;
-    const selector = 'exact_source_url:' + url.canonical;
+  const matches: Array<{ selector: string; products: Product[]; confidence: 'exact' | 'strong' }> = [];
+  const add = (selector: string, products: Product[], confidence: 'exact' | 'strong' = 'exact') => {
     attemptedSelectors.push(selector);
+    matches.push({ selector, products: [...new Map(products.filter(p => productIdOf(p)).map(p => [p.id,p])).values()], confidence });
+  };
+  for (const id of input.identifiers.filter(id => id.kind === 'catalog_id')) {
+    const product = await repo.getProductByExactExternalId(id.normalized);
+    add('exact_external_id:' + id.normalized, product ? [product] : []);
+  }
+  for (const id of input.identifiers.filter(id => id.kind === 'numeric_article')) {
+    add('exact_article:' + id.normalized, await articleCandidates(repo,id.normalized));
+  }
+  for (const url of input.urls.filter(url => url.firstParty)) {
     const product = await repo.getProductBySourceUrl(url.canonical);
-    if (product && productIdOf(product)) {
-      return { resolved: { product, confidence: 'exact', selector }, unmatchedFirstPartyUrls, ephemeral: null, evidenceFingerprint: fingerprint, strength, attemptedSelectors };
-    }
-    unmatchedFirstPartyUrls.push(url.canonical);
+    add('exact_source_url:' + url.canonical, product ? [product] : []);
+    if (!product) unmatchedFirstPartyUrls.push(url.canonical);
   }
-
+  // A model selector can expose a genuine disagreement with a SKU. Do not skip
+  // it just because an earlier selector produced one row.
   if (repo.findProductsByNormalizedModel) {
-    for (const id of input.identifiers) {
-      if (id.kind !== 'model_code') continue;
-      const selector = 'normalized_model:' + id.normalized;
-      attemptedSelectors.push(selector);
-      const candidates = await repo.findProductsByNormalizedModel(id.normalized);
-      const valid = candidates.filter((candidate) => productIdOf(candidate));
-      if (valid.length === 1) {
-        return { resolved: { product: valid[0]!, confidence: 'strong', selector }, unmatchedFirstPartyUrls, ephemeral: null, evidenceFingerprint: fingerprint, strength, attemptedSelectors };
-      }
-      if (valid.length > 1) {
-        return { resolved: { product: valid[0]!, confidence: 'ambiguous', selector }, unmatchedFirstPartyUrls, ephemeral: null, evidenceFingerprint: fingerprint, strength, attemptedSelectors };
-      }
+    for (const id of input.identifiers.filter(id => id.kind === 'model_code')) {
+      add('normalized_model:' + id.normalized, await repo.findProductsByNormalizedModel(id.normalized), 'strong');
     }
   }
-
-  return { resolved: null, unmatchedFirstPartyUrls, ephemeral: null, evidenceFingerprint: fingerprint, strength, attemptedSelectors };
+  const found = matches.filter(match => match.products.length);
+  const candidates = [...new Map(found.flatMap(match => match.products).map(p => [p.id,p])).values()];
+  const eligible = options.sameSubject && found.length
+    ? candidates.filter(p => found.every(match => match.products.some(candidate => candidate.id === p.id)))
+    : candidates;
+  const unique = eligible.length === 1 ? eligible[0]! : undefined;
+  const binding = unique ? found.find(match => match.products.some(p => p.id === unique.id)) : undefined;
+  return {
+    resolved: unique && binding ? { product: unique, confidence: binding.confidence, selector: binding.selector } : null,
+    candidates, selectorMatches: matches.map(match => ({ selector: match.selector, productIds: match.products.map(p => p.id) })),
+    unmatchedFirstPartyUrls, ephemeral: null, evidenceFingerprint: evidenceFingerprint(input),
+    strength: evidenceStrength(input), attemptedSelectors
+  };
 }
 
 /**

@@ -116,6 +116,7 @@ async function recoverCompletedAnswerAfterStreamFailure(input: {
 }
 
 type LeadForm = {
+  preferredContact?: 'message' | 'call' | '';
   name: string;
   phone: string;
   email: string;
@@ -784,6 +785,7 @@ function LeadPanel({ latestQuestion, autoOpenKey, disabled = false, onSessionUna
         sessionId: activeSessionId,
         clientLeadId,
         name: form.name,
+        preferredContact: form.preferredContact || undefined,
         phone: form.phone || undefined,
         email: form.email || undefined,
         question: form.question || latestQuestion || undefined
@@ -814,10 +816,9 @@ function LeadPanel({ latestQuestion, autoOpenKey, disabled = false, onSessionUna
         <>
           <input
             aria-label="Имя"
-            placeholder="Имя"
+            placeholder="Имя (необязательно)"
             value={form.name}
             onChange={(event) => setForm({ ...form, name: event.target.value })}
-            required
           />
           <input
             aria-label="Телефон"
@@ -838,7 +839,13 @@ function LeadPanel({ latestQuestion, autoOpenKey, disabled = false, onSessionUna
             value={form.question}
             onChange={(event) => setForm({ ...form, question: event.target.value })}
           />
-          <button type="submit" disabled={disabled || status === 'sending' || !form.name || (!form.phone && !form.email)}>
+          <select aria-label="Способ связи" value={form.preferredContact ?? ''}
+            onChange={event => setForm({ ...form, preferredContact: event.target.value as LeadForm['preferredContact'] })}>
+            <option value="">Как удобнее связаться (необязательно)</option>
+            <option value="message">Написать</option>
+            <option value="call">Позвонить</option>
+          </select>
+          <button type="submit" disabled={disabled || status === 'sending' || (!form.phone && !form.email)}>
             {status === 'sending' ? 'Отправляю...' : 'Отправить заявку'}
           </button>
         </>

@@ -28,6 +28,7 @@ import { extractConfirmedGeneratorNominalPowerKw, extractWeightKg, fromEscaped, 
 import { emptyNeedState } from './needState.js';
 import { safeError } from './responseUtils.js';
 import { getAgentManagerRuntimeDecision } from './agentManagerRuntime.js';
+import { ApparentPowerInputSchema } from './agentManagerContracts.js';
 import { extractContact, hasLeadContact } from './contactExtraction.js';
 import { leadCaptureMissingContact, leadCaptureMissingName, leadOfferWithoutReviewableResult } from './leadReviewGuards.js';
 import { deriveTaskOutcome } from './taskOutcome.js';
@@ -472,6 +473,11 @@ function semanticLoadDeclaresPower(value: unknown) {
   );
 }
 
+function semanticApparentPowerFields(value: unknown) {
+  const parsed = ApparentPowerInputSchema.safeParse(value);
+  return parsed.success ? { kva: parsed.data.kva, powerFactor: parsed.data.powerFactor ?? null } : null;
+}
+
 function semanticLoadExecutionFields(value: unknown) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
   const item = value as Record<string, unknown>;
@@ -480,6 +486,8 @@ function semanticLoadExecutionFields(value: unknown) {
     name: item.name ?? null,
     count: item.count ?? null,
     runningKw: item.runningKw ?? null,
+    runningApparentPower: semanticApparentPowerFields(item.runningApparentPower),
+    startingApparentPower: semanticApparentPowerFields(item.startingApparentPower),
     startingKw: item.startingKw ?? null,
     source: item.source ?? null,
     runningSource: item.runningSource ?? null,
@@ -516,8 +524,10 @@ function generatorLoadSemanticFieldIssues(request: ToolRequest) {
     if (!['explicit_user', 'estimated_average', 'catalog_fact', 'web_average', 'not_provided'].includes(String(item.startingSource))) {
       issues.push(`generator_load_starting_source_missing:${index}`);
     }
-    const hasRunning = typeof item.runningKw === 'number' && Number.isFinite(item.runningKw) && item.runningKw > 0;
-    const hasStarting = typeof item.startingKw === 'number' && Number.isFinite(item.startingKw) && item.startingKw > 0;
+    const hasRunning = (typeof item.runningKw === 'number' && Number.isFinite(item.runningKw) && item.runningKw > 0) ||
+      ApparentPowerInputSchema.safeParse(item.runningApparentPower).success;
+    const hasStarting = (typeof item.startingKw === 'number' && Number.isFinite(item.startingKw) && item.startingKw > 0) ||
+      ApparentPowerInputSchema.safeParse(item.startingApparentPower).success;
     if (hasRunning === (item.runningSource === 'not_provided')) {
       issues.push(`generator_load_running_provenance_mismatch:${index}`);
     }

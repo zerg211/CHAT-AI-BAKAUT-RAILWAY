@@ -574,9 +574,9 @@ function typedToolRequirementProof(input: {
     ) {
       return { blocker: blocker('generator_load_result_not_final_fit_safe') };
     }
-    const profile = (result.payload as { profile?: { requiredNominalKw?: unknown } }).profile;
+    const profile = (result.payload as { profile?: { requiredNominalKw?: unknown; missingRunningLoads?: unknown[] } }).profile;
     const requiredNominalKw = profile?.requiredNominalKw;
-    if (selectionGoal !== 'final_fit' && result.warnings.includes('generator_load_startup_unconfirmed') &&
+    if (selectionGoal !== 'final_fit' && (result.warnings.includes('generator_load_startup_unconfirmed') || Boolean(profile?.missingRunningLoads?.length)) &&
       !hasGeneratorLoadBasisThatBlocksPreliminaryFit([result])) {
       return {};
     }

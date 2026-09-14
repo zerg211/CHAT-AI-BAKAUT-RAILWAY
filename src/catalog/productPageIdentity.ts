@@ -6,7 +6,6 @@ function normalizedHttpUrl(value: unknown, baseUrl: string) {
   try {
     const url = new URL(value, baseUrl);
     url.hash = '';
-    url.search = '';
     while (url.pathname.length > 1 && url.pathname.endsWith('/')) {
       url.pathname = url.pathname.slice(0, -1);
     }

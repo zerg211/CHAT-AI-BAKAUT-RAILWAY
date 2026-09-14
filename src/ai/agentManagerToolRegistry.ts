@@ -39,6 +39,8 @@ const productResult = z.object({
 }).strict();
 
 const retrievalResult = z.object({
+  identityMatches: z.array(z.object({ kind: z.string(), value: z.string(), namespace: z.string().optional(),
+    status: z.enum(['matched','ambiguous','not_found']), productIds: z.array(nonEmpty).max(51) }).strict()).max(8).optional(),
   intent: nonEmpty,
   query: z.string(),
   embeddingQuery: z.string(),
@@ -127,6 +129,7 @@ const webResearchResult = z.object({
   usedWebSearch: z.boolean().optional(),
   searchDisposition: z.enum(['completed', 'memory_hit', 'not_needed', 'skipped_budget', 'timed_out', 'failed', 'aborted']).optional(),
   researchOutcome: z.enum(['answered', 'partial', 'exhausted']).optional(),
+  researchScope: z.enum(['public_information', 'product']).optional(),
   sourcesExhausted: z.boolean().optional(),
   sourceAttempts: z.array(z.object({
     tier: z.enum(['catalog', 'official_page', 'official_manual', 'reliable_secondary']),
@@ -159,6 +162,12 @@ const webResearchResult = z.object({
 
 const firstPartyPageResult = z.object({
   canonicalUrl: nonEmpty,
+  requestedUrl: z.string().optional(),
+  format: z.enum(['html', 'pdf']).optional(),
+  sourceTruncated: z.boolean().optional(),
+  knowledgePublication: z.enum(['queued', 'not_queued', 'failed']).optional(),
+  readRange: z.object({ start: z.number().int().nonnegative(), end: z.number().int().nonnegative(),
+    totalChars: z.number().int().nonnegative(), complete: z.boolean(), nextOffset: z.number().int().nonnegative().nullable() }).strict().optional(),
   pageKind: z.enum(['product', 'company', 'other']).optional(),
   title: z.string().optional(),
   text: z.string().optional(),
@@ -167,7 +176,10 @@ const firstPartyPageResult = z.object({
     article: z.string().optional()
   }).strict().optional(),
   catalogProductId: nonEmpty.optional(),
-  catalogMatch: z.enum(['matched', 'absent']).optional(),
+  catalogMatch: z.enum(['matched', 'absent', 'ambiguous', 'error']).optional(),
+  catalogCandidateIds: z.array(nonEmpty).max(52).optional(),
+  ephemeralPageIdentity: z.object({ canonicalUrl: z.string(), status: z.enum(['page_read_pending','page_verified']),
+    title: z.string().optional(), article: z.string().optional(), model: z.string().optional() }).strict().optional(),
   companyInfo: z.object({
     kind: z.string(),
     volatility: z.enum(['STABLE', 'SEMI_VOLATILE']),
@@ -175,7 +187,8 @@ const firstPartyPageResult = z.object({
   }).strict().optional(),
   sourceFingerprint: z.string().optional(),
   observedAt: z.string().optional(),
-  failureCode: z.enum(['denied', 'timeout', 'http_status', 'unreadable', 'unsupported']).optional(),
+  failureCode: z.enum(['denied', 'timeout', 'http_status', 'unreadable', 'unsupported', 'source_changed']).optional(),
+  status: z.number().int().optional(),
   error: z.unknown().optional()
 }).strict();
 
@@ -186,7 +199,10 @@ const companyKnowledgeResult = z.object({
     title: z.string(),
     pageKind: z.string(),
     volatility: z.enum(['STABLE', 'SEMI_VOLATILE']).optional(),
-    snippet: z.string()
+    snippet: z.string(),
+    sourceContentHash: z.string().optional(),
+    totalChars: z.number().int().nonnegative().optional(),
+    complete: z.boolean().optional()
   }).strict()).max(6).optional(),
   reason: z.string().optional(),
   error: z.unknown().optional()

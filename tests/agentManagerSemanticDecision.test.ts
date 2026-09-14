@@ -333,6 +333,23 @@ function generatorDecision(): AgentSemanticDecision {
 }
 
 describe('combined semantic decision validation', () => {
+  it('accepts evidenced kVA in the ledger and calculator without demanding fabricated kW', () => {
+    const decision = generatorDecision();
+    const request = decision.intent.toolRequests.find(item => item.tool === 'calculator.generatorLoad')!;
+    const actual = request.args.loads![0] as Record<string, unknown>;
+    const event = decision.ledgerDelta.events.find(item => item.payload.factKey === 'generator_load_scenario')!;
+    const expected = (event.payload.value as { loads: Record<string, unknown>[] }).loads[0]!;
+    for (const load of [actual, expected]) {
+      load.runningKw = null;
+      load.runningApparentPower = { kva: 2.5, powerFactor: 0.8, evidence: 'Nameplate 2.5 kVA and PF0.8' };
+      load.runningSource = 'explicit_user';
+    }
+    const input = { decision, previousLedgerState: reduceDialogueLedger([]),
+      sessionId: '11111111-1111-4111-8111-111111111111', turnId: '22222222-2222-4222-8222-222222222222' };
+    expect(validateAgentSemanticDecision(input).issues).toEqual([]);
+    (actual.runningApparentPower as { powerFactor: number }).powerFactor = 0.9;
+    expect(validateAgentSemanticDecision(input).issues.some(issue => issue.includes('load_semantics_mismatch'))).toBe(true);
+  });
   it.each(['missing', 'wrong_value', 'wrong_unit'] as const)('rejects an old active hard requirement with $0 on a later turn', (change) => {
     const { decision, previousLedgerState } = continuingSelection();
     const oldBudget = Object.values(previousLedgerState.factsByKey).find((fact) => fact.factKey === 'budget_max_rub')!;

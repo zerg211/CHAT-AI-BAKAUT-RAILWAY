@@ -50,7 +50,7 @@ Dockerfile содержит эквивалентный безопасный fall
 Healthcheck:
 
 ```text
-/api/health
+/api/ready
 ```
 
 ## Перед продом

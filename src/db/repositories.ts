@@ -2,6 +2,7 @@ import { Query } from 'pg';
 import type { Pool, PoolClient, QueryResult, QueryResultRow } from 'pg';
 import { pool } from './pool.js';
 import { config } from '../config.js';
+import { classifyCompanyPath } from '../ai/companyKnowledge.js';
 import type {
   CatalogProductInput,
   CatalogPage,
@@ -12,6 +13,7 @@ import type {
   CustomerNeedState,
   DataConflict,
   EmbeddingMetadata,
+  EnrichmentItemOutcome,
   Lead,
   LeadCaptureDraft,
   LeadPreferredContact,
@@ -162,7 +164,11 @@ function freshnessHashInput(input: CatalogProductInput | CatalogPageInput) {
   delete raw.crawledAt;
   delete raw.importedAt;
   delete raw.syncedAt;
-  return { ...input, raw };
+  const snapshot = { ...input, raw };
+  if ('priceObservedAt' in snapshot) delete snapshot.priceObservedAt;
+  if ('sourceObservedAt' in snapshot) delete snapshot.sourceObservedAt;
+  if ('priceOnRequest' in snapshot && !snapshot.priceOnRequest) delete snapshot.priceOnRequest;
+  return snapshot;
 }
 
 export class ActiveConversationTurnError extends Error {
@@ -454,6 +460,7 @@ function mapCatalogPage(row: QueryResultRow): CatalogPage {
     lastSyncedAt: row.last_synced_at ? row.last_synced_at.toISOString() : null,
     isActive: row.is_active === undefined ? true : Boolean(row.is_active),
     sourceContentHash: row.source_content_hash ?? null,
+    sourceObservedAt: row.source_observed_at?.toISOString() ?? null,
     createdAt: row.created_at.toISOString(),
     updatedAt: row.updated_at.toISOString()
   };
@@ -920,6 +927,11 @@ export class ConversationRepository {
       `UPDATE conversation_sessions
        SET status = 'expired', closed_at = now(), updated_at = now()
        WHERE status = 'active' AND last_heartbeat_at < now() - ($1 || ' minutes')::interval
+         AND NOT EXISTS (
+           SELECT 1 FROM conversation_turns t WHERE t.session_id = conversation_sessions.id
+             AND t.status IN ('received', 'need_extracted', 'planned', 'answering')
+             AND t.deadline_at > now()
+         )
        RETURNING id`,
       [maxInactiveMinutes]
     );
@@ -947,6 +959,10 @@ export class ConversationRepository {
       `DELETE FROM conversation_sessions s
        WHERE s.page_url IS NOT NULL
          AND s.created_at < now() - ($1 || ' hours')::interval
+         AND s.last_heartbeat_at < now() - interval '30 minutes'
+         AND NOT EXISTS (SELECT 1 FROM conversation_turns t WHERE t.session_id = s.id)
+         AND NOT EXISTS (SELECT 1 FROM leads l WHERE l.session_id = s.id)
+         AND NOT EXISTS (SELECT 1 FROM lead_outbox o WHERE o.session_id = s.id)
          AND NOT EXISTS (
            SELECT 1 FROM messages m WHERE m.session_id = s.id
          )`,
@@ -959,6 +975,10 @@ export class ConversationRepository {
     const result = await this.db.query(
       `DELETE FROM conversation_sessions s
        WHERE s.page_url IS NULL
+         AND s.last_heartbeat_at < now() - interval '30 minutes'
+         AND NOT EXISTS (SELECT 1 FROM conversation_turns t WHERE t.session_id = s.id)
+         AND NOT EXISTS (SELECT 1 FROM leads l WHERE l.session_id = s.id)
+         AND NOT EXISTS (SELECT 1 FROM lead_outbox o WHERE o.session_id = s.id)
          AND NOT EXISTS (
            SELECT 1 FROM messages m WHERE m.session_id = s.id
          )`
@@ -2942,16 +2962,17 @@ export class ProductRepository {
   ): Promise<EmbeddingCoverage> {
     const targets: Record<EmbeddingCoverageTarget, { table: string; where: string }> = {
       products: { table: 'products', where: PRODUCT_FILTER },
-      catalog_pages: { table: 'catalog_pages', where: 'true' },
+      catalog_pages: { table: 'catalog_pages', where: 'is_active IS NOT FALSE' },
       troubleshooting_cases: { table: 'troubleshooting_cases', where: 'true' }
     };
     const item = targets[target];
+    const revisionGuard = target === 'catalog_pages' ? ' AND embedding_source_revision = source_content_hash' : '';
     const result = await queryWithAbort(
       this.db,
       `SELECT
          COUNT(*)::int AS total,
          COUNT(*) FILTER (WHERE embedding IS NOT NULL)::int AS embedded,
-         COUNT(*) FILTER (WHERE embedding IS NOT NULL AND embedding_model = $1)::int AS usable
+         COUNT(*) FILTER (WHERE embedding IS NOT NULL AND embedding_model = $1${revisionGuard})::int AS usable
        FROM ${item.table}
        WHERE ${item.where}`,
       [model],
@@ -2990,27 +3011,30 @@ export class ProductRepository {
 
   async updateProductEmbedding(id: string, embedding: number[], metadata: EmbeddingMetadata) {
     const vector = `[${embedding.join(',')}]`;
-    await this.db.query(
+    const result = await this.db.query(
       `UPDATE products
        SET embedding = $2::vector,
            embedding_model = $3,
            embedding_source_hash = $4,
            embedding_updated_at = now()
-       WHERE id = $1`,
-      [id, vector, metadata.model, metadata.sourceHash]
+       WHERE id = $1 AND technical_version = $5 AND is_active IS NOT FALSE`,
+      [id, vector, metadata.model, metadata.sourceHash, metadata.expectedSourceRevision ?? null]
     );
+    return (result.rowCount ?? 0) > 0;
   }
 
   async touchProductEmbeddingMetadata(id: string, metadata: EmbeddingMetadata) {
-    await this.db.query(
+    const result = await this.db.query(
       `UPDATE products
        SET embedding_model = $2,
            embedding_source_hash = $3,
            embedding_updated_at = now()
        WHERE id = $1
-         AND embedding IS NOT NULL`,
-      [id, metadata.model, metadata.sourceHash]
+         AND embedding IS NOT NULL AND embedding_source_hash = $3
+         AND technical_version = $4 AND is_active IS NOT FALSE`,
+      [id, metadata.model, metadata.sourceHash, metadata.expectedSourceRevision ?? null]
     );
+    return (result.rowCount ?? 0) > 0;
   }
 
   async listCatalogPagesNeedingEmbeddings(limit = 100, model = config.OPENAI_EMBEDDING_MODEL) {
@@ -3021,6 +3045,7 @@ export class ProductRepository {
           OR embedding_model IS DISTINCT FROM $1
           OR embedding_source_hash IS NULL
           OR embedding_updated_at IS NULL
+          OR embedding_source_revision IS DISTINCT FROM source_content_hash
           OR updated_at > embedding_updated_at
        ORDER BY updated_at DESC
        LIMIT $2`,
@@ -3031,27 +3056,34 @@ export class ProductRepository {
 
   async updateCatalogPageEmbedding(id: string, embedding: number[], metadata: EmbeddingMetadata) {
     const vector = `[${embedding.join(',')}]`;
-    await this.db.query(
+    const result = await this.db.query(
       `UPDATE catalog_pages
        SET embedding = $2::vector,
            embedding_model = $3,
            embedding_source_hash = $4,
+           embedding_source_revision = $5,
            embedding_updated_at = now()
-       WHERE id = $1`,
-      [id, vector, metadata.model, metadata.sourceHash]
+       WHERE id = $1 AND source_content_hash = $5 AND is_active IS NOT FALSE`,
+      [id, vector, metadata.model, metadata.sourceHash, metadata.expectedSourceRevision ?? null]
     );
+    return (result.rowCount ?? 0) > 0;
   }
 
   async touchCatalogPageEmbeddingMetadata(id: string, metadata: EmbeddingMetadata) {
-    await this.db.query(
+    const result = await this.db.query(
       `UPDATE catalog_pages
        SET embedding_model = $2,
            embedding_source_hash = $3,
+           embedding_source_revision = $4,
            embedding_updated_at = now()
        WHERE id = $1
+         AND source_content_hash = $4
+         AND embedding_source_hash = $3
+         AND is_active IS NOT FALSE
          AND embedding IS NOT NULL`,
-      [id, metadata.model, metadata.sourceHash]
+      [id, metadata.model, metadata.sourceHash, metadata.expectedSourceRevision ?? null]
     );
+    return (result.rowCount ?? 0) > 0;
   }
 
   async upsertProduct(input: CatalogProductInput, embedding?: number[], embeddingMetadata?: EmbeddingMetadata) {
@@ -3063,10 +3095,12 @@ export class ProductRepository {
            external_id, source_url, slug, name, brand, category, price, currency, image_url,
            description, specs, raw, source_priority, embedding, embedding_model, embedding_source_hash, embedding_updated_at,
            last_seen_at, last_synced_at, is_active, source_content_hash
+           , price_observed_at, price_on_request, price_observation_source_type
          )
          VALUES (
            $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14::vector, $15, $16,
            CASE WHEN $14::vector IS NULL THEN NULL ELSE now() END, now(), now(), true, $17
+           , $18::timestamptz, $19, $20
          )
          ON CONFLICT (source_url) DO UPDATE SET
            external_id = coalesce(EXCLUDED.external_id, products.external_id),
@@ -3076,6 +3110,11 @@ export class ProductRepository {
            category = EXCLUDED.category,
            price = EXCLUDED.price,
            currency = EXCLUDED.currency,
+           price_observed_at = EXCLUDED.price_observed_at,
+           price_on_request = EXCLUDED.price_on_request,
+           price_observation_source_type = EXCLUDED.price_observation_source_type,
+           price_verified_at = NULL,
+           price_source_url = NULL,
            image_url = EXCLUDED.image_url,
            description = EXCLUDED.description,
            specs = EXCLUDED.specs,
@@ -3124,10 +3163,22 @@ export class ProductRepository {
           vector,
           embedding ? embeddingMetadata?.model ?? config.OPENAI_EMBEDDING_MODEL : null,
           embedding ? embeddingMetadata?.sourceHash ?? null : null,
-          sourceContentHash
+          sourceContentHash,
+          input.priceObservedAt ?? null,
+          input.priceOnRequest ?? false,
+          input.raw?.sourceType === 'csv' ? 'csv' : 'site'
         ]
       );
       const product = mapProduct(result.rows[0]);
+      // The DB price guard may retain a newer commercial observation. Hash the
+      // accepted snapshot, not the rejected incoming price.
+      const acceptedHash = catalogSourceContentHash(freshnessHashInput({ ...input,
+        price: product.price ?? undefined, currency: product.currency ?? undefined,
+        priceOnRequest: Boolean(result.rows[0]?.price_on_request) }));
+      if (acceptedHash !== sourceContentHash) {
+        await transactionDb.query('UPDATE products SET source_content_hash=$2 WHERE id=$1', [product.id, acceptedHash]);
+        product.sourceContentHash = acceptedHash;
+      }
       await this.replaceSourceFacts(transactionDb, product.id, input);
       return product;
     });
@@ -3143,13 +3194,13 @@ export class ProductRepository {
     if (product.sourceUrl) {
       await transactionDb.query(
         `DELETE FROM product_facts
-         WHERE product_id = $1 AND source_type = $2 AND source_url = $3`,
+         WHERE product_id = $1 AND source_type = $2 AND source_url = $3 AND attribute <> 'price'`,
         [productId, sourceType, product.sourceUrl]
       );
     }
 
     const facts: ProductFact[] = Object.entries(specs)
-      .filter(([, value]) => value !== null && value !== undefined && String(value).trim().length > 0)
+      .filter(([attribute, value]) => attribute !== 'price' && value !== null && value !== undefined && String(value).trim().length > 0)
       .map(([attribute, value]) => ({
         productId,
         attribute,
@@ -3158,18 +3209,6 @@ export class ProductRepository {
         sourceUrl: product.sourceUrl,
         confidence: product.raw?.sourceType === 'csv' ? 0.8 : 0.75
       }));
-
-    if (product.price !== undefined) {
-      facts.push({
-        productId,
-        attribute: 'price',
-        value: String(product.price),
-        unit: product.currency ?? 'RUB',
-        sourceType,
-        sourceUrl: product.sourceUrl,
-        confidence: 0.65
-      });
-    }
 
     for (const fact of facts) {
       await transactionDb.query(
@@ -3304,17 +3343,22 @@ export class ProductRepository {
     return result.rowCount ?? 0;
   }
 
-  async upsertCatalogPage(input: CatalogPageInput, embedding?: number[], embeddingMetadata?: EmbeddingMetadata) {
+  async upsertCatalogPage(input: CatalogPageInput, embedding?: number[], embeddingMetadata?: EmbeddingMetadata, transaction?: Db) {
+    const db = transaction ?? this.db;
     const vector = embedding ? `[${embedding.join(',')}]` : null;
     const sourceContentHash = catalogSourceContentHash(freshnessHashInput(input));
-    const result = await this.db.query(
+    const observedAt = input.sourceObservedAt ?? input.raw?.crawledAt;
+    const observationTime = typeof observedAt === 'string' && Number.isFinite(Date.parse(observedAt)) ? new Date(observedAt).toISOString() : null;
+    const result = await db.query(
       `INSERT INTO catalog_pages(
          source_url, page_type, title, content, summary, raw, embedding, embedding_model,
          embedding_source_hash, embedding_updated_at, last_seen_at, last_synced_at, is_active, source_content_hash
+         , embedding_source_revision, source_observed_at
        )
        VALUES (
          $1, $2, $3, $4, $5, $6, $7::vector, $8, $9,
          CASE WHEN $7::vector IS NULL THEN NULL ELSE now() END, now(), now(), true, $10
+         , CASE WHEN $7::vector IS NULL THEN NULL ELSE $10 END, $11::timestamptz
        )
        ON CONFLICT (source_url) DO UPDATE SET
          page_type = EXCLUDED.page_type,
@@ -3322,15 +3366,26 @@ export class ProductRepository {
          content = EXCLUDED.content,
          summary = EXCLUDED.summary,
          raw = catalog_pages.raw || EXCLUDED.raw,
-         embedding = coalesce(EXCLUDED.embedding, catalog_pages.embedding),
-         embedding_model = CASE WHEN EXCLUDED.embedding IS NULL THEN catalog_pages.embedding_model ELSE EXCLUDED.embedding_model END,
-         embedding_source_hash = CASE WHEN EXCLUDED.embedding IS NULL THEN catalog_pages.embedding_source_hash ELSE EXCLUDED.embedding_source_hash END,
-         embedding_updated_at = CASE WHEN EXCLUDED.embedding IS NULL THEN catalog_pages.embedding_updated_at ELSE EXCLUDED.embedding_updated_at END,
+         embedding = CASE WHEN EXCLUDED.embedding IS NOT NULL THEN EXCLUDED.embedding
+           WHEN catalog_pages.source_content_hash = EXCLUDED.source_content_hash THEN catalog_pages.embedding ELSE NULL END,
+         embedding_model = CASE WHEN EXCLUDED.embedding IS NOT NULL THEN EXCLUDED.embedding_model
+           WHEN catalog_pages.source_content_hash = EXCLUDED.source_content_hash THEN catalog_pages.embedding_model ELSE NULL END,
+         embedding_source_hash = CASE WHEN EXCLUDED.embedding IS NOT NULL THEN EXCLUDED.embedding_source_hash
+           WHEN catalog_pages.source_content_hash = EXCLUDED.source_content_hash THEN catalog_pages.embedding_source_hash ELSE NULL END,
+         embedding_updated_at = CASE WHEN EXCLUDED.embedding IS NOT NULL THEN EXCLUDED.embedding_updated_at
+           WHEN catalog_pages.source_content_hash = EXCLUDED.source_content_hash THEN catalog_pages.embedding_updated_at ELSE NULL END,
+         embedding_source_revision = CASE WHEN EXCLUDED.embedding IS NOT NULL THEN EXCLUDED.embedding_source_revision
+           WHEN catalog_pages.source_content_hash = EXCLUDED.source_content_hash THEN catalog_pages.embedding_source_revision ELSE NULL END,
          last_seen_at = now(),
          last_synced_at = now(),
          is_active = true,
          source_content_hash = EXCLUDED.source_content_hash,
+         source_observed_at = EXCLUDED.source_observed_at,
          updated_at = now()
+       WHERE (catalog_pages.is_active IS NOT FALSE OR EXCLUDED.source_observed_at > catalog_pages.updated_at) AND
+         (catalog_pages.source_observed_at IS NULL OR
+         (EXCLUDED.source_observed_at >= catalog_pages.source_observed_at AND
+           (EXCLUDED.source_observed_at > catalog_pages.source_observed_at OR catalog_pages.source_content_hash = EXCLUDED.source_content_hash)))
        RETURNING *`,
       [
         input.sourceUrl,
@@ -3342,10 +3397,12 @@ export class ProductRepository {
         vector,
         embedding ? embeddingMetadata?.model ?? config.OPENAI_EMBEDDING_MODEL : null,
         embedding ? embeddingMetadata?.sourceHash ?? null : null,
-        sourceContentHash
+        sourceContentHash, observationTime
       ]
     );
-    return mapCatalogPage(result.rows[0]);
+    const row = result.rows[0] ?? (await db.query('SELECT * FROM catalog_pages WHERE source_url=$1', [input.sourceUrl])).rows[0];
+    if (!row) throw new Error('catalog_page_publication_unavailable');
+    return mapCatalogPage(row);
   }
 
   async searchCatalogPages(query: string, limit = 6) {
@@ -3371,6 +3428,7 @@ export class ProductRepository {
        WHERE embedding IS NOT NULL
          AND is_active IS NOT FALSE
          AND embedding_model = $3
+         AND embedding_source_revision = source_content_hash
        ORDER BY embedding <=> $1::vector
        LIMIT $2`,
       [vector, limit, config.OPENAI_EMBEDDING_MODEL]
@@ -3382,18 +3440,63 @@ export class ProductRepository {
     if (!facts.length) return 0;
     const result = await this.db.query(
       `INSERT INTO verified_fact_enrichment_jobs(dedupe_key, facts)
-       SELECT $1, jsonb_agg(item || jsonb_build_object('expectedTechnicalVersion', p.technical_version))
-       FROM jsonb_array_elements($2::jsonb) item
-       LEFT JOIN products p ON p.id = (item->>'productId')::uuid
-       WHERE item->>'productId' IS NULL OR (
-         p.name = item->>'productName' AND p.is_active IS NOT FALSE
-         AND (item->>'expectedTechnicalVersion' IS NULL OR p.technical_version = item->>'expectedTechnicalVersion')
-       )
+       SELECT $1, jsonb_agg(item || jsonb_build_object('expectedTechnicalVersion',
+         coalesce(item->>'expectedTechnicalVersion', p.technical_version)) ORDER BY ordinal)
+       FROM jsonb_array_elements($2::jsonb) WITH ORDINALITY AS entries(item,ordinal)
+       LEFT JOIN products p ON p.id::text = item->>'productId'
        HAVING count(*) > 0
        ON CONFLICT (dedupe_key) DO NOTHING RETURNING jsonb_array_length(facts) AS count`,
       [dedupeKey, JSON.stringify(facts)]
     );
     return Number(result.rows[0]?.count ?? 0);
+  }
+
+  private publicCompanyPage(input: CatalogPageInput): CatalogPageInput | null {
+    try {
+      const url = new URL(input.sourceUrl);
+      const company = classifyCompanyPath(url.pathname);
+      if (url.origin !== new URL(config.CATALOG_BASE_URL).origin || url.username || url.password || url.search || url.hash ||
+        !company || input.pageType !== company.kind || !input.title?.trim() || !input.content?.trim() ||
+        input.content.length > 500_000 || !input.sourceObservedAt || !Number.isFinite(Date.parse(input.sourceObservedAt))) return null;
+      return { sourceUrl: url.href, pageType: company.kind, title: input.title, content: input.content,
+        sourceObservedAt: new Date(input.sourceObservedAt).toISOString(),
+        raw: { sourceType: 'site', companyKind: company.kind } };
+    } catch { return null; }
+  }
+
+  async enqueuePublicCompanyPage(input: CatalogPageInput) {
+    const page = this.publicCompanyPage(input);
+    if (!page) return false;
+    const dedupeKey = 'company-page:' + catalogSourceContentHash(page);
+    const result = await this.db.query(`INSERT INTO verified_fact_enrichment_jobs(dedupe_key,facts,page_payload)
+      VALUES($1,'[]'::jsonb,$2::jsonb) ON CONFLICT(dedupe_key) DO NOTHING RETURNING id`, [dedupeKey, JSON.stringify(page)]);
+    return (result.rowCount ?? 0) > 0;
+  }
+
+  async publishCompanyPageJob(job: { id: string; leaseToken: string }) {
+    return this.inTransaction(async db => {
+      await db.query("SET LOCAL statement_timeout = '5s'");
+      const row = (await db.query(`SELECT page_payload,item_outcomes FROM verified_fact_enrichment_jobs
+        WHERE id=$1 AND lease_token=$2 AND status='processing' AND available_at > clock_timestamp() FOR UPDATE`,
+      [job.id, job.leaseToken])).rows[0];
+      if (!row) return { leaseLost: true, outcomes: [] as EnrichmentItemOutcome[] };
+      const prior = row.item_outcomes?.['0'] as EnrichmentItemOutcome | undefined;
+      if (prior && prior.status !== 'retryable_failure') return { leaseLost: false, outcomes: [prior] };
+      const page = this.publicCompanyPage(row.page_payload);
+      let outcome: EnrichmentItemOutcome;
+      if (!page) outcome = { index: 0, status: 'rejected', reason: 'non_public_or_incomplete_company_page' };
+      else {
+        const published = await this.upsertCatalogPage(page, undefined, undefined, db);
+        const accepted = published.isActive !== false && published.sourceContentHash === catalogSourceContentHash(freshnessHashInput(page));
+        outcome = { index: 0, status: accepted ? (published.sourceObservedAt === page.sourceObservedAt ? 'published' : 'reused') : 'superseded',
+          ...(accepted ? { factId: published.id } : { reason: 'newer_page_observation' }) };
+      }
+      const recorded = await db.query(`UPDATE verified_fact_enrichment_jobs SET item_outcomes=jsonb_build_object('0',$3::jsonb)
+        WHERE id=$1 AND lease_token=$2 AND status='processing' AND available_at > clock_timestamp()`,
+      [job.id, job.leaseToken, JSON.stringify(outcome)]);
+      if (!recorded.rowCount) throw new Error('enrichment_lease_expired');
+      return { leaseLost: false, outcomes: [outcome] };
+    });
   }
 
   async updateVerifiedSitePrice(input: { productId: string; productName: string; sourceUrl: string;
@@ -3404,12 +3507,15 @@ export class ProductRepository {
       const locked = await db.query('SELECT * FROM products WHERE id=$1 AND name=$2 AND source_url=$3 AND is_active IS NOT FALSE FOR UPDATE',
         [input.productId,input.productName,input.sourceUrl]);
       const row = locked.rows[0];
-      if (!row || (row.price_verified_at && new Date(row.price_verified_at).getTime() > Date.parse(input.observedAt))) return null;
+      const priorObserved = row?.price_observed_at ?? row?.price_verified_at;
+      if (!row || (priorObserved && (new Date(priorObserved).getTime() > Date.parse(input.observedAt) ||
+        (new Date(priorObserved).getTime() === Date.parse(input.observedAt) && Number(row.price) !== input.price)))) return null;
       const sourceHash = catalogSourceContentHash(freshnessHashInput({ name:row.name, sourceUrl:row.source_url,
         externalId:row.external_id, slug:row.slug, brand:row.brand, category:row.category, price:input.price,
         currency:input.currency, imageUrl:row.image_url, description:row.description, specs:row.specs,
         raw:row.raw, sourcePriority:row.source_priority }));
       const updated = await db.query(`UPDATE products SET price=$2, currency=$3, price_verified_at=$4,
+        price_observed_at=$4, price_on_request=false, price_observation_source_type='site',
         price_source_url=$5, source_content_hash=$6, updated_at=now() WHERE id=$1 RETURNING *`,
         [input.productId,input.price,input.currency,input.observedAt,input.sourceUrl,sourceHash]);
       return mapProduct(updated.rows[0]);
@@ -3443,21 +3549,107 @@ export class ProductRepository {
     );
     const row = result.rows[0];
     return row ? { id: String(row.id), leaseToken: String(row.lease_token), attempts: Number(row.attempts),
-      facts: row.facts as VerifiedProductFactInput[] } : null;
+      facts: row.facts as VerifiedProductFactInput[], page: row.page_payload as CatalogPageInput | null } : null;
   }
 
   async finishVerifiedFactEnrichmentJob(job: { id: string; leaseToken: string; attempts: number }, errorCode?: string) {
-    await this.db.query(
+    const expectedItems = '(CASE WHEN page_payload IS NULL THEN jsonb_array_length(facts) ELSE 1 END)';
+    const result = await this.db.query(
       `UPDATE verified_fact_enrichment_jobs
-       SET status = $3, last_error = $4,
+       SET status = CASE WHEN $4::text IS NOT NULL
+           OR (SELECT count(*) FROM jsonb_each(item_outcomes)) <> ${expectedItems}
+           OR EXISTS (SELECT 1 FROM jsonb_each(item_outcomes) item WHERE item.value->>'status'='retryable_failure')
+         THEN CASE WHEN attempts >= 6 THEN 'failed' ELSE 'pending' END ELSE 'completed' END,
+         last_error = coalesce($4, CASE WHEN (SELECT count(*) FROM jsonb_each(item_outcomes)) <> ${expectedItems}
+           THEN 'unclassified_items' ELSE NULL END),
            available_at = now() + interval '1 minute' * least(60, power(2, attempts)),
-           completed_at = CASE WHEN $3 = 'completed' THEN now() ELSE NULL END
-       WHERE id = $1 AND lease_token = $2 AND status = 'processing'`,
+           completed_at = CASE WHEN $3 = 'completed'
+             AND (SELECT count(*) FROM jsonb_each(item_outcomes)) = ${expectedItems}
+             AND NOT EXISTS (SELECT 1 FROM jsonb_each(item_outcomes) item WHERE item.value->>'status'='retryable_failure')
+             THEN now() ELSE NULL END
+       WHERE id = $1 AND lease_token = $2 AND status = 'processing' AND available_at > clock_timestamp()`,
       [job.id, job.leaseToken, errorCode ? (job.attempts >= 6 ? 'failed' : 'pending') : 'completed', errorCode ?? null]
     );
+    return (result.rowCount ?? 0) > 0;
   }
 
-  async upsertVerifiedProductFact(input: VerifiedProductFactInput) {
+  async publishVerifiedFactEnrichmentGroup(job: { id: string; leaseToken: string }, indexes: number[]) {
+    return this.inTransaction(async db => {
+      await db.query("SET LOCAL statement_timeout = '5s'");
+      const locked = await db.query(`SELECT facts,item_outcomes FROM verified_fact_enrichment_jobs
+        WHERE id=$1 AND lease_token=$2 AND status='processing' AND available_at > clock_timestamp() FOR UPDATE`,
+      [job.id, job.leaseToken]);
+      if (!locked.rows[0]) return { leaseLost: true, outcomes: [] as EnrichmentItemOutcome[] };
+      const facts = locked.rows[0].facts as VerifiedProductFactInput[];
+      const prior = locked.rows[0].item_outcomes as Record<string, EnrichmentItemOutcome>;
+      if (!indexes.length || new Set(indexes).size !== indexes.length || indexes.some(i => !Number.isInteger(i) || i < 0 || i >= facts.length)) {
+        throw new Error('invalid_enrichment_group');
+      }
+      const group = facts[indexes[0]!]?.atomicGroup;
+      const expected = group ? facts.flatMap((fact, i) => fact?.atomicGroup === group ? [i] : []) : [indexes[0]!];
+      if (expected.length !== indexes.length || expected.some(i => !indexes.includes(i))) throw new Error('incomplete_enrichment_group');
+      const outcomes: EnrichmentItemOutcome[] = [];
+      await db.query('SAVEPOINT enrichment_group');
+      let failure: { status: 'rejected' | 'superseded' | 'retryable_failure'; reason: string } | undefined;
+      try {
+        for (const key of [...new Set(indexes.map(index => normalizeVerifiedProductKey(facts[index]?.productName ?? '')))].sort()) {
+          await db.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', ['verified-product:' + key]);
+        }
+        for (const index of indexes) {
+          const old = prior[String(index)];
+          if (old && old.status !== 'retryable_failure') { outcomes.push(old); continue; }
+          const fact = facts[index]!;
+          const required = [fact?.productName, fact?.attribute, fact?.value, fact?.sourceUrl, fact?.evidence];
+          if (required.some(value => typeof value !== 'string' || !value.trim()) ||
+            typeof fact?.observedAt !== 'string' || !Number.isFinite(Date.parse(fact.observedAt)) ||
+            !['web', 'catalog', 'manual'].includes(fact.sourceType) || !['high', 'medium', 'low'].includes(fact.confidence) ||
+            !['official_page', 'official_manual', 'reliable_secondary'].includes(fact.sourceTier ?? '') ||
+            !['manufacturer', 'secondary'].includes(fact.sourceAuthority ?? '')) {
+            failure = { status: 'rejected', reason: 'invalid_enrichment_evidence' }; break;
+          }
+          if (fact.productId) {
+            const product = (await db.query('SELECT name,technical_version,is_active FROM products WHERE id=$1 FOR SHARE', [fact.productId])).rows[0];
+            if (!product || product.is_active === false || product.name !== fact.productName ||
+              (fact.expectedTechnicalVersion && product.technical_version !== fact.expectedTechnicalVersion)) {
+              failure = { status: 'superseded', reason: 'subject_revision_changed' }; break;
+            }
+          }
+          const existing = (await db.query(`SELECT * FROM verified_product_facts
+            WHERE product_key=$1 AND attribute=$2 AND source_type=$3 AND coalesce(source_url,'')=$4 FOR UPDATE`,
+          [normalizeVerifiedProductKey(fact.productName), fact.attribute.trim(), fact.sourceType, fact.sourceUrl])).rows;
+          if (existing.some(row => row.status === 'rejected')) {
+            failure = { status: 'rejected', reason: 'source_withdrawn' }; break;
+          }
+          if (existing.some(row => new Date(row.last_verified_at).getTime() > Date.parse(fact.observedAt!))) {
+            failure = { status: 'superseded', reason: 'newer_source_evidence' }; break;
+          }
+          const owned = await db.query(`SELECT 1 FROM verified_fact_enrichment_jobs
+            WHERE id=$1 AND lease_token=$2 AND available_at > clock_timestamp()`, [job.id, job.leaseToken]);
+          if (!owned.rowCount) throw new Error('enrichment_lease_expired');
+          const saved = await this.upsertVerifiedProductFact(fact, db);
+          if (!saved) { failure = { status: 'retryable_failure', reason: 'unclassified_publication_null' }; break; }
+          outcomes.push({ index, status: existing.some(row => row.id === saved.id) ? 'reused' : 'published', factId: saved.id });
+        }
+      } catch (error) {
+        const code = typeof error === 'object' && error !== null && 'code' in error ? String(error.code) : '';
+        failure = { status: code.startsWith('22') || code.startsWith('23') ? 'rejected' : 'retryable_failure',
+          reason: code.startsWith('22') || code.startsWith('23') ? 'invalid_fact_data' : 'publication_dependency_failed' };
+      }
+      if (failure) {
+        await db.query('ROLLBACK TO SAVEPOINT enrichment_group');
+        outcomes.splice(0, outcomes.length, ...indexes.map(index => ({ index, ...failure! })));
+      }
+      await db.query('RELEASE SAVEPOINT enrichment_group');
+      const receipt = Object.fromEntries(outcomes.map(outcome => [String(outcome.index), outcome]));
+      const recorded = await db.query(`UPDATE verified_fact_enrichment_jobs SET item_outcomes=item_outcomes || $3::jsonb
+        WHERE id=$1 AND lease_token=$2 AND status='processing' AND available_at > clock_timestamp()`,
+      [job.id, job.leaseToken, JSON.stringify(receipt)]);
+      if (!recorded.rowCount) throw new Error('enrichment_lease_expired');
+      return { leaseLost: false, outcomes };
+    });
+  }
+
+  async upsertVerifiedProductFact(input: VerifiedProductFactInput, transaction?: Db) {
     const productName = input.productName.trim();
     const productKey = normalizeVerifiedProductKey(productName);
     const attribute = input.attribute.trim();
@@ -3470,7 +3662,11 @@ export class ProductRepository {
       evidence: input.evidence?.trim() || null,
       value
     });
-    return this.inTransaction(async (transactionDb) => {
+    const publish = async (transactionDb: Db) => {
+      await transactionDb.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', ['verified-product:' + productKey]);
+      // Lock before opening the statement snapshot used for replacement, including after a curator commits.
+      await transactionDb.query(`SELECT id FROM verified_product_facts WHERE product_key=$1 AND attribute=$2
+        AND source_type=$3 AND coalesce(source_url,'')=$4 FOR UPDATE`, [productKey, attribute, input.sourceType, input.sourceUrl ?? '']);
       const result = await transactionDb.query(
         `WITH product_snapshot AS MATERIALIZED (
          SELECT source_content_hash
@@ -3481,8 +3677,8 @@ export class ProductRepository {
          SELECT NOT EXISTS (
            SELECT 1 FROM verified_product_facts
            WHERE product_key = $2 AND attribute = $4 AND source_type = $6
-             AND coalesce(source_url, '') = coalesce($7, '') AND status = 'active'
-             AND last_verified_at > coalesce($14::timestamptz, now())
+             AND coalesce(source_url, '') = coalesce($7, '')
+             AND (status = 'rejected' OR last_verified_at > coalesce($14::timestamptz, now()))
          ) AS current
        ), superseded AS (
          UPDATE verified_product_facts
@@ -3519,20 +3715,14 @@ export class ProductRepository {
          SET
            product_id = coalesce($1, verified_product_facts.product_id),
             product_name = $3,
-            source_title = coalesce($8, verified_product_facts.source_title),
-            evidence = coalesce($9, verified_product_facts.evidence),
-            source_tier = coalesce($12, verified_product_facts.source_tier),
-            source_authority = coalesce($13, verified_product_facts.source_authority),
+            source_title = $8,
+            evidence = $9,
+            source_tier = $12,
+            source_authority = $13,
             observed_at = greatest(verified_product_facts.observed_at, coalesce($14::timestamptz, now())),
             catalog_source_hash = (SELECT source_content_hash FROM product_snapshot),
            source_fingerprint = $11,
-           confidence = CASE
-             WHEN verified_product_facts.confidence = 'high' THEN verified_product_facts.confidence
-             WHEN $10 = 'high' THEN 'high'
-             WHEN verified_product_facts.confidence = 'medium' THEN verified_product_facts.confidence
-             WHEN $10 = 'medium' THEN 'medium'
-             ELSE verified_product_facts.confidence
-           END,
+           confidence = $10,
            last_verified_at = greatest(verified_product_facts.last_verified_at, coalesce($14::timestamptz, now())),
            valid_until = greatest(verified_product_facts.last_verified_at, coalesce($14::timestamptz, now()))+interval '90 days',
            normalized_attribute = $16,
@@ -3574,7 +3764,8 @@ export class ProductRepository {
         ]
       );
       return result.rows[0] ? mapVerifiedProductFact(result.rows[0]) : null;
-    });
+    };
+    return transaction ? publish(transaction) : this.inTransaction(publish);
   }
 
   async searchVerifiedProductFacts(input: {
@@ -3601,6 +3792,9 @@ export class ProductRepository {
        FROM verified_product_facts AS fact
        LEFT JOIN products AS product ON product.id = fact.product_id
        WHERE fact.status = 'active'
+         AND NOT EXISTS (SELECT 1 FROM verified_product_facts revoked
+           WHERE revoked.status='rejected' AND revoked.product_key=fact.product_key AND revoked.attribute=fact.attribute
+             AND revoked.source_type=fact.source_type AND coalesce(revoked.source_url,'')=coalesce(fact.source_url,''))
          AND fact.source_type = ANY($3::text[])
          AND (
            (
@@ -3811,30 +4005,52 @@ export class ProductRepository {
   }
 
   async getProductByExactArticle(article: string) {
+    const candidates = await this.getProductsByExactArticle(article);
+    return candidates.length === 1 ? candidates[0]! : null;
+  }
+
+  async getProductsByExactArticle(article: string, namespace?: string) {
     const value = article.trim();
-    if (!value) return null;
+    if (!value) return [];
     const result = await this.db.query(
       `SELECT ${PRODUCT_RESPONSE_COLUMNS}, 1::numeric AS retrieval_score, 'exact'::text AS retrieval_source
        FROM products
        WHERE ${PRODUCT_FILTER}
-         AND (specs->>'артикул' = $1 OR lower(specs->>'артикул') = lower($1))
-       LIMIT 1`,
-      [value]
+         AND (
+           (($2::text IS NULL OR raw->>'supplierNamespace'=$2) AND (
+             lower(raw->>'article')=lower($1) OR EXISTS (
+               SELECT 1 FROM jsonb_each_text(specs) spec
+               WHERE lower(spec.key) IN ('артикул','sku','article','код товара') AND lower(spec.value)=lower($1)
+             )
+           )) OR EXISTS (
+             SELECT 1 FROM jsonb_array_elements(CASE WHEN jsonb_typeof(raw->'identifiers')='array'
+               THEN raw->'identifiers' ELSE '[]'::jsonb END) identifier
+             WHERE lower(identifier->>'value')=lower($1)
+               AND ($2::text IS NULL OR identifier->>'namespace'=$2)
+           )
+         )
+       ORDER BY id LIMIT 51`,
+      [value, namespace?.trim() || null]
     );
-    return result.rows.map(mapProduct)[0] ?? null;
+    return result.rows.map(mapProduct);
   }
 
   async getProductBySourceUrl(sourceUrl: string) {
-    let value = sourceUrl.trim();
-    while (value.length > 0 && value.endsWith('/')) value = value.slice(0, -1);
+    const value = sourceUrl.trim();
     if (!value) return null;
+    let alternative: string;
+    try {
+      const parsed = new URL(value);
+      parsed.pathname = parsed.pathname.endsWith('/') ? parsed.pathname.slice(0, -1) : parsed.pathname + '/';
+      alternative = parsed.href;
+    } catch { return null; }
     const result = await this.db.query(
       `SELECT ${PRODUCT_RESPONSE_COLUMNS}, 1::numeric AS retrieval_score, 'exact'::text AS retrieval_source
        FROM products
        WHERE ${PRODUCT_FILTER}
          AND (source_url = $1 OR source_url = $2)
-       LIMIT 1`,
-      [value, value + '/']
+       ORDER BY (source_url = $1) DESC LIMIT 2`,
+      [value, alternative]
     );
     return result.rows.map(mapProduct)[0] ?? null;
   }
@@ -3855,7 +4071,10 @@ export class ProductRepository {
               OR regexp_replace(lower(coalesce(specs::text, '')), '[^a-zа-яё0-9]+', '', 'g') LIKE '%' || regexp_replace(lower(token), '[^a-zа-яё0-9]+', '', 'g') || '%'
               OR regexp_replace(lower(coalesce(source_url, '')), '[^a-zа-яё0-9]+', '', 'g') LIKE '%' || regexp_replace(lower(token), '[^a-zа-яё0-9]+', '', 'g') || '%'
          )
-       ORDER BY updated_at DESC
+       ORDER BY
+         EXISTS (SELECT 1 FROM unnest($1::text[]) token WHERE lower(name)=lower(token)) DESC,
+         (SELECT count(*) FROM unnest($1::text[]) token WHERE lower(name) LIKE '%' || lower(token) || '%') DESC,
+         updated_at DESC
        LIMIT $2`,
       [tokens, limit],
       options.signal
@@ -4271,7 +4490,8 @@ export class LeadRepository {
     sessionId: string;
     clientLeadId: string;
     clientRequestHash: string;
-    name: string;
+    name?: string;
+    preferredContact?: 'message' | 'call';
     phone?: string;
     email?: string;
     question?: string;
@@ -4329,7 +4549,7 @@ export class LeadRepository {
              'leadId', lead.id,
              'purpose', draft.purpose,
              'question', draft.buyer_question,
-             'preferredContact', draft.preferred_contact,
+             'preferredContact', coalesce($8::text, draft.preferred_contact),
              'source', 'lead_form'
            )),
            'pending'
@@ -4349,6 +4569,7 @@ export class LeadRepository {
              phone = NULL,
              email = NULL,
              consumed_by_turn_id = (SELECT id FROM latest_turn),
+             preferred_contact = coalesce($8::text, draft.preferred_contact),
              consumed_lead_id = lead.id,
              updated_at = now()
          FROM target_draft target, created_lead lead, queued_outbox outbox
@@ -4373,7 +4594,8 @@ export class LeadRepository {
         input.name,
         input.phone ?? null,
         input.email ?? null,
-        input.question ?? null
+        input.question ?? null,
+        input.preferredContact ?? null
       ]
     );
     const row = result.rows[0];
@@ -4394,7 +4616,7 @@ export class LeadRepository {
     sessionId?: string;
     originTurnId?: string;
     originToolRequestId?: string;
-    name: string;
+    name?: string;
     phone?: string;
     email?: string;
     question?: string;

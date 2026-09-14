@@ -373,12 +373,14 @@ function mergeLoadProfile(
     removedKinds: update.removedKinds
   });
   const simultaneousStarting = update.simultaneousStarting ?? (!reset && current?.simultaneousStarting) ?? false;
+  const simultaneousRunning = update.simultaneousRunning ?? (!reset && current?.simultaneousRunning) ?? false;
   const simultaneousStartingKinds = update.simultaneousStartingKinds
     ? uniqueStrings(update.simultaneousStartingKinds, 8)
     : reset
       ? []
       : current?.simultaneousStartingKinds ?? [];
   const recalculated = calculateGeneratorLoadProfile(items, {
+    simultaneousRunning,
     simultaneousStarting,
     simultaneousStartingKinds,
     confidence: update.confidence ?? current?.confidence
@@ -388,6 +390,7 @@ function mergeLoadProfile(
     ...update,
     ...(recalculated ?? {}),
     items: recalculated?.items ?? items,
+    simultaneousRunning,
     simultaneousStarting,
     simultaneousStartingKinds,
     removedKinds: update.removedKinds

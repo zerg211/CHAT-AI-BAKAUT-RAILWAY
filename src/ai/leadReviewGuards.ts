@@ -216,7 +216,7 @@ export function leadCaptureRepairText(input: {
     : stripContactRequestSentence(input.answerText ?? '');
   const append = (suffix: string) => baseAnswer ? `${baseAnswer}\n\n${suffix}` : suffix;
   if (hasLeadContact(input.contact) && leadCaptureMissingName(input.toolResults)) {
-    return append('Телефон вижу. Напишите, пожалуйста, имя и как удобнее получить результат — сообщением или звонком. После этого смогу оформить запрос.');
+    return append('Контакт сохранён, но заявка ещё не оформлена.');
   }
-  return append('Оставьте, пожалуйста, имя и номер телефона и скажите, как удобнее получить результат — сообщением или звонком. После этого смогу оформить уточнение.');
+  return append('Оставьте, пожалуйста, номер телефона или email для связи. Если есть предпочтение, укажите: написать или позвонить.');
 }

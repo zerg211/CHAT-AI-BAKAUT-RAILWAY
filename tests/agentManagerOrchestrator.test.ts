@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { describe, expect, it, vi } from 'vitest';
+import * as comparisonResearch from '../src/ai/productComparisonResearch.js';
 import {
   AgentManagerOrchestrator,
   RECOVERY_LEASE_WAIT_LIMIT_MS,
@@ -3376,7 +3377,9 @@ describe('AgentManagerOrchestrator', () => {
   });
 
 
-  it('keeps web-only technical research products out of visible cards', async () => {
+  it('keeps web-only technical research products out of visible cards', async ({ onTestFinished }) => {
+    const researchFailure = vi.spyOn(comparisonResearch, 'researchProductComparisonFacts').mockRejectedValue(new Error('isolated research unavailable'));
+    onTestFinished(() => researchFailure.mockRestore());
     class ResearchProducts extends FakeProducts {
       async searchProducts() {
         return [product('bison-inverter', 'Generator BISON BS2500IS inverter THD 20%', 'Generators')];
@@ -5036,13 +5039,13 @@ describe('AgentManagerOrchestrator', () => {
         return {
           userMessageSummary: 'buyer supplied a phone and chose a message',
           dialogueUnderstanding: 'this continues the specialist verification handoff',
-          nextStepRationale: 'store the partial contact and ask only for the missing name',
+          nextStepRationale: 'capture the permitted phone without requiring a name',
           requiresTools: true,
           toolRequests: [{
             id: 'lead.capture:partial',
             tool: 'lead.capture',
             args: { contact: { preferredContact: 'message' } },
-            rationale: 'preserve the phone until the buyer supplies a name',
+            rationale: 'deliver the original question using the permitted contact',
             required: true
           }],
           grounding: {
@@ -5073,11 +5076,11 @@ describe('AgentManagerOrchestrator', () => {
       },
       async composeAnswer() {
         return {
-          answerText: 'I have the phone number. Please write your name; I will return the result by message.',
+          answerText: 'Your question has been submitted. The specialist will contact you by message.',
           factsUsed: [],
           questionsAsked: [],
           toolResultIds: ['lead.capture:partial'],
-          leadAction: 'offer_form',
+          leadAction: 'confirm_contact_received',
           riskFlags: []
         };
       }
@@ -5091,23 +5094,22 @@ describe('AgentManagerOrchestrator', () => {
 
     const payload = await orchestrator.generateAnswer({ sessionId, turnId, userMessage: phoneReply });
 
-    expect(payload.leadCreated).toBe(false);
-    expect(payload.leadRequested).toBe(true);
-    expect(leads.created).toHaveLength(0);
-    expect(leads.draftInputs).toHaveLength(1);
-    expect(leads.pendingDraft).toMatchObject({
-      buyerQuestion: originalQuestion,
-      purpose: 'verify generator start method',
+    expect(payload.leadCreated).toBe(true);
+    expect(payload.leadRequested).toBe(false);
+    expect(leads.created).toHaveLength(1);
+    expect(leads.draftInputs).toHaveLength(0);
+    expect(leads.created[0]).toMatchObject({
+      question: originalQuestion,
       phone: '+7 900 000-00-11',
-      preferredContact: 'message',
-      status: 'pending'
+      name: undefined
     });
     const toolPayload = (payload.metadata as {
       toolResults?: Array<{ payload?: Record<string, unknown> }>;
     }).toolResults?.[0]?.payload;
     expect(toolPayload).toMatchObject({
-      draftSaved: true,
-      contactStored: true,
+      status: 'queued',
+      outbox: true,
+      preferredContact: 'message',
       originalQuestionPreserved: true
     });
     expect(toolPayload).not.toHaveProperty('contact');
@@ -5316,15 +5318,16 @@ describe('AgentManagerOrchestrator', () => {
       unsafeNameModel
     );
 
-    await expect(orchestrator.generateAnswer({
+    const captured = await orchestrator.generateAnswer({
       sessionId,
       turnId,
       userMessage: preferenceOnlyReply
-    })).rejects.toThrow('lead_capture_missing_contact_offer_form');
+    });
 
-    expect(conversations.assistantSaves).toHaveLength(0);
-    expect(leads.completionInputs).toHaveLength(0);
-    expect(leads.pendingDraft).not.toBeNull();
+    expect(captured.leadCreated).toBe(true);
+    expect(leads.completionInputs).toHaveLength(1);
+    expect(leads.completionInputs[0]).toMatchObject({ name: undefined, preferredContact: 'message' });
+    expect(leads.pendingDraft).toBeNull();
   });
 
   it('captures a provided contact through lead outbox before confirming receipt', async () => {
@@ -7797,7 +7800,9 @@ describe('AgentManagerOrchestrator', () => {
     expect(payload.productCards.map((card) => card.id)).not.toContain('firman-diesel');
   });
 
-  it('rehydrates prior cards, repairs research-process wording, and fails closed when semantic review is unavailable', async () => {
+  it('rehydrates prior cards, repairs research-process wording, and fails closed when semantic review is unavailable', async ({ onTestFinished }) => {
+    const researchFailure = vi.spyOn(comparisonResearch, 'researchProductComparisonFacts').mockRejectedValue(new Error('isolated research unavailable'));
+    onTestFinished(() => researchFailure.mockRestore());
     const priorProducts: Product[] = [{
       ...generatorProductWithPower('prior-generator-a', 'A-iPower AP6000 5.5 kW generator', 5.5),
       brand: 'A-iPower',

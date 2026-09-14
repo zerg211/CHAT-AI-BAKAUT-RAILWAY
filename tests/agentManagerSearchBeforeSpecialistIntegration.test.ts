@@ -507,6 +507,30 @@ function exhaustedTechnicalOfferHistory(buyerQuestion: string) {
 }
 
 describe('search-before-specialist orchestration', () => {
+  it('honors a direct human request in the first message without requiring prior research', async () => {
+    researchProductComparisonFactsMock.mockReset();
+    const userMessage = 'Хочу обсудить подбор генератора с вашим специалистом, свяжите меня с человеком.';
+    const intent = prematureTechnicalSpecialistIntent();
+    intent.requiresTools = false;
+    intent.toolRequests = [];
+    intent.grounding = { ...intent.grounding!, taskType: 'lead_handoff', responseMode: 'handoff',
+      sourcePolicy: 'specialist_required', buyerRequestedWeb: false, webRequirement: 'none',
+      requiredToolKinds: [], buyerQuestion: userMessage };
+    intent.buyerRequestedTechnicalHandoff = { requestKind: 'explicit_human_request', evidence: 'свяжите меня с человеком',
+      buyerQuestion: userMessage, researchMessageId: null, researchRequestIds: [] };
+    expect(hasVerifiedBuyerRequestedTechnicalHandoff({ history: [], intent, userMessage })).toBe(true);
+    expect(hasVerifiedBuyerRequestedTechnicalHandoff({ history: [], intent, userMessage: 'Я хочу подобрать сам.' })).toBe(false);
+    const conversations = new HarnessConversations(userMessage);
+    const compose = vi.fn(async () => ({ answerText: 'Для связи со специалистом оставьте номер телефона. Вам удобнее сообщение или звонок?',
+      factsUsed: [], questionsAsked: [{ questionId: 'contact', text: 'Номер и способ связи?', reason: 'Explicit human request' }],
+      toolResultIds: [], selectedProductIds: [], leadAction: 'offer_form' as const, riskFlags: [] }));
+    const orchestrator = new AgentManagerOrchestrator(conversations as never, new HarnessProducts() as never,
+      new HarnessLeads() as never, harnessModel({ intent, compose }));
+    const answer = await orchestrator.generateAnswer({ sessionId, turnId, userMessage });
+    expect(answer.answer).toContain('номер телефона');
+    expect(researchProductComparisonFactsMock).not.toHaveBeenCalled();
+    expect(conversations.toolArtifacts).toEqual([]);
+  });
   const unresolvedQuestion = 'Нужно ли закручивать щуп при замере для артикула 060007?';
   const buyerHandoffMessage = 'Да, уточните у технического специалиста положение щупа для артикула 060007. Как получить ответ?';
   function requestedHandoffFixture() {

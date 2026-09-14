@@ -1,4 +1,4 @@
-import type { ProductElectricalLoadItem, ProductGeneratorLoadProfile, ProductGeneratorLoadScenario } from '../shared/types.js';
+import type { ProductApparentPower, ProductElectricalLoadItem, ProductGeneratorLoadProfile, ProductGeneratorLoadScenario } from '../shared/types.js';
 
 function roundKw(value: number, step = 0.1) {
   return Number((Math.round(value / step) * step).toFixed(6));
@@ -104,9 +104,25 @@ function positiveFinite(value: number | undefined) {
   return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : undefined;
 }
 
+export function resolveElectricalActivePower(kw: number | undefined, apparent?: ProductApparentPower) {
+  kw = positiveFinite(kw);
+  if (!apparent) return { kw };
+  const pf = positiveFinite(apparent.powerFactor);
+  if (!positiveFinite(apparent.kva) || pf === undefined || pf > 1) {
+    return { kw, ...(kw === undefined ? { issue: 'generator_load_power_factor_unconfirmed' } : {}) };
+  }
+  const converted = Number((apparent.kva * pf).toPrecision(12));
+  if (kw !== undefined && Math.abs(kw - converted) > Math.max(kw, converted) * 1e-9) {
+    return { kw: undefined, issue: 'generator_load_power_observation_conflict' };
+  }
+  return { kw: converted };
+}
+
 function normalizeLoadItem(item: ProductElectricalLoadItem): ProductElectricalLoadItem {
-  const runningKw = positiveFinite(item.runningKw);
-  const providedStartingKw = positiveFinite(item.startingKw);
+  const runningObservedKw = item.runningObservedKw ?? item.runningKw;
+  const startingObservedKw = item.startingObservedKw ?? item.startingKw;
+  const runningKw = resolveElectricalActivePower(runningObservedKw, item.runningApparentPower).kw;
+  const providedStartingKw = resolveElectricalActivePower(startingObservedKw, item.startingApparentPower).kw;
   const startingKw = providedStartingKw === undefined
     ? undefined
     : runningKw === undefined
@@ -114,6 +130,8 @@ function normalizeLoadItem(item: ProductElectricalLoadItem): ProductElectricalLo
       : Math.max(providedStartingKw, runningKw);
   return {
     ...item,
+    runningObservedKw,
+    startingObservedKw,
     count: Math.max(1, Math.min(12, Math.round(item.count || 1))),
     runningKw,
     startingKw
@@ -168,7 +186,12 @@ function calculateFlatScenario(
       : maxStartingExtra;
   const requiredStartingKw = running + startingExtra;
   const calculation = items
-    .map((item) => `${item.name ?? item.kind}: ${item.count} x ${item.runningKw ?? '?'} kW run / ${item.startingKw ?? '?'} kW start`)
+    .map((item) => {
+      const conversions = [item.runningApparentPower, item.startingApparentPower]
+        .filter(power => power?.powerFactor !== undefined)
+        .map(power => `${power!.kva} kVA × ${power!.powerFactor} = ${Number((power!.kva * power!.powerFactor!).toPrecision(12))} kW (${power!.evidence})`);
+      return `${item.name ?? item.kind}: ${item.count} x ${item.runningKw ?? '?'} kW run / ${item.startingKw ?? '?'} kW start${conversions.length ? '; ' + conversions.join('; ') : ''}`;
+    })
     .join('; ');
   return {
     id,
@@ -207,6 +230,16 @@ function strongestScenario(scenarios: ProductGeneratorLoadScenario[]) {
   }, scenarios[0]);
 }
 
+function finalizeApparentPowerProfile(profile: ProductGeneratorLoadProfile, items: ProductElectricalLoadItem[]) {
+  if (!items.some(item => item.runningApparentPower || item.startingApparentPower)) return profile;
+  const missingRunningLoads = items.filter(item => item.runningApparentPower && item.runningKw === undefined).map(itemScenarioKey);
+  if (!missingRunningLoads.length) return { ...profile, items };
+  return { ...profile, items, missingRunningLoads, requiredNominalKw: undefined, requiredStartingKw: undefined,
+    runningOnlyNominalFloorKw: undefined,
+    scenarios: profile.scenarios?.map(scenario => ({ ...scenario, requiredNominalKw: undefined, requiredStartingKw: undefined, runningOnlyNominalFloorKw: undefined, missingRunningLoads })),
+    calculation: `Known subset only; unresolved running power: ${missingRunningLoads.join(', ')}. ${profile.calculation ?? ''}` };
+}
+
 export function calculateGeneratorLoadProfile(
   items: ProductElectricalLoadItem[],
   options: {
@@ -216,8 +249,8 @@ export function calculateGeneratorLoadProfile(
     confidence?: number;
   } = {}
 ): ProductGeneratorLoadProfile | undefined {
-  const usable = items
-    .map(normalizeLoadItem)
+  const normalized = items.map(normalizeLoadItem);
+  const usable = normalized
     .filter((item) => item.count > 0 && (item.runningKw || item.startingKw));
   if (!usable.length) return undefined;
 
@@ -230,7 +263,7 @@ export function calculateGeneratorLoadProfile(
       simultaneousStarting: options.simultaneousStarting,
       simultaneousStartingKinds: [...simultaneousKinds]
     });
-    return {
+    return finalizeApparentPowerProfile({
       items: [aggregateLoad],
       totalRunningKw: aggregateScenario.totalRunningKw,
       requiredStartingKw: aggregateScenario.requiredStartingKw,
@@ -244,7 +277,7 @@ export function calculateGeneratorLoadProfile(
       primaryScenarioId: aggregateScenario.id,
       calculation: aggregateScenario.calculation,
       confidence: aggregateScenario.missingStartingLoads?.length ? undefined : options.confidence ?? (aggregateLoad.source === 'explicit_user' ? 0.9 : 0.62)
-    };
+    }, normalized);
   }
 
   const scenarioOnly = usable.filter((item) => isScenarioOnlyLoad(
@@ -297,7 +330,7 @@ export function calculateGeneratorLoadProfile(
       : `${scenario.id}=${scenario.requiredNominalKw} kW nominal/${scenario.requiredStartingKw} kW start`).join(', ')}`
     : primary.calculation;
 
-  return {
+  return finalizeApparentPowerProfile({
     items: usable,
     totalRunningKw,
     ...(missingStartingLoads.length ? { missingStartingLoads,
@@ -311,5 +344,5 @@ export function calculateGeneratorLoadProfile(
     primaryScenarioId: primary.id,
     calculation,
     confidence: missingStartingLoads.length ? undefined : options.confidence ?? (usable.some((item) => item.source === 'explicit_user') ? 0.82 : 0.58)
-  };
+  }, normalized);
 }

@@ -1,7 +1,8 @@
 export type LeadSubmitPayload = {
   sessionId: string;
   clientLeadId: string;
-  name: string;
+  name?: string;
+  preferredContact?: 'message' | 'call';
   phone?: string;
   email?: string;
   question?: string;

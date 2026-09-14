@@ -1050,6 +1050,33 @@ describe('product comparison research', () => {
     expect(actual.warnings).not.toContain('not_enough_products_for_comparison');
   });
 
+  it('discovers and reads public company information without a product identity, then preserves verified source evidence on replay', async () => {
+    const sourceUrl = 'https://public-company.example/contacts/service';
+    const quote = 'The service workshop accepts equipment on Saturday from 10 to 16.';
+    fetchMock.mockResolvedValue(sourceResponse('<html><body><h1>Workshop reception</h1><footer><p>' + quote + '</p></footer></body></html>'));
+    const claim = { productName: null, attribute: 'workshop reception hours', value: 'Saturday from 10 to 16',
+      evidence: quote, sourceUrl, sourceTitle: 'Public workshop information' };
+    const discovered = result({ usedWebSearch: true,
+      sourceAttempts: [{ tier: 'reliable_secondary', outcome: 'confirmed', query: 'company workshop reception hours', sources: [{ url: sourceUrl }] }],
+      facts: [{ ...claim, sourceType: 'web', confidence: 'medium' }],
+      answerGuidance: { directAnswer: quote, completeness: 'answered', coverage: [{ ...claim, status: 'confirmed' }] } });
+    const response = { output: [{ type: 'web_search_call', status: 'completed', action: {
+      query: 'company workshop reception hours', sources: [{ url: sourceUrl, title: 'Public workshop information' }] } }] };
+    queueResearchResponse({ parsed: discovered, response });
+    queueResearchResponse({ parsed: discovered, response });
+    const actual = await researchProductComparisonFacts({ userMessage: 'When does the company service workshop accept equipment?',
+      products: [], targetProductNames: [], comparisonAttributes: ['workshop reception hours'] });
+    expect(actual.usedWebSearch).toBe(true);
+    expect(researchCalls().length).toBeGreaterThan(0);
+    expect(fetchMock).toHaveBeenCalled();
+    expect(String(fetchMock.mock.calls[0]![0])).toBe(sourceUrl);
+    expect(actual.facts).toContainEqual(expect.objectContaining({ productName: null, sourceUrl, evidence: quote, evidenceVerifiedExact: true }));
+    const replay = JSON.parse(JSON.stringify(validateToolResultOutput({ requestId: 'public-discovery', tool: 'web.researchProductFacts',
+      status: 'ok', payload: { ...actual, researchScope: 'public_information' }, warnings: actual.warnings })));
+    const { compactToolResultsForModel } = await import('../src/ai/agentManagerModelContext.js');
+    expect(compactToolResultsForModel([replay], [])[0]!.payload.facts).toEqual(actual.facts);
+  });
+
   it('keeps source tiers untrusted when a completed search omits requested source provenance', async () => {
     queueResearchResponse({
       parsed: result({

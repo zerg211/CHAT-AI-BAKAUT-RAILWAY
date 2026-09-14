@@ -363,6 +363,37 @@ describe('AgentManager comparison research flow', () => {
     extractCatalogProductComparisonFacts.mockResolvedValue(null);
   });
 
+  it('researches public information without inheriting a prior product or searching the product catalog', async () => {
+    const products = new FakeProducts();
+    const search = vi.spyOn(products, 'searchProducts');
+    researchProductComparisonFacts.mockResolvedValue({ usedWebSearch: true, searchDisposition: 'completed',
+      sourcesExhausted: false, facts: [], conflicts: [], warnings: [], summaryForAnswer: '',
+      answerGuidance: { directAnswer: 'Public workshop rules', completeness: 'answered', coverage: [] } });
+    const intent = AgentIntentContractSchema.parse({
+      userMessageSummary: 'Check public workshop rules', dialogueUnderstanding: 'Public information question',
+      nextStepRationale: 'Read the public source', requiresTools: true,
+      toolRequests: [{ id: 'public-rules', tool: 'web.researchProductFacts', required: true,
+        args: { researchScope: 'public_information', query: 'BAKAUT public workshop rules', productNames: [],
+          comparisonAttributes: ['workshop rules'] }, rationale: 'Independent public information' }],
+      productMentions: [{ name: 'OLD GX5000', role: 'target_product', productClass: 'generator', evidence: 'OLD GX5000' }],
+      mustNotAskQuestionIds: [], riskFlags: []
+    });
+    const orchestrator = new AgentManagerOrchestrator(new FakeConversations() as never, products as never,
+      {} as never, withStrictToolFixtures(model()));
+    const executor = orchestrator as unknown as { executeTools(input: Record<string, unknown>): Promise<{ toolResults: ToolResult[] }> };
+    const result = await executor.executeTools({ session: session(), turnId, executionOwner: 'public-info',
+      userMessage: 'What about your workshop rules?', history: [], intent, toolRequests: intent.toolRequests,
+      needState: emptyNeedState(), pendingLeadCaptureDraft: null, persistedToolResults: new Map(),
+      priorProducts: [product('old', 'OLD GX5000', {})], budget: new AgentManagerTurnBudget() });
+    expect(search).not.toHaveBeenCalled();
+    expect(extractCatalogProductComparisonFacts).not.toHaveBeenCalled();
+    expect(researchProductComparisonFacts).toHaveBeenCalledWith(expect.objectContaining({
+      userMessage: 'BAKAUT public workshop rules', targetProductNames: [], products: []
+    }));
+    expect(result.toolResults.at(-1)?.payload).toMatchObject({ researchScope: 'public_information', targetProductNames: [], products: [] });
+    expect(validateToolResultOutput(result.toolResults.at(-1)!)).toMatchObject({ status: 'ok', payload: { researchScope: 'public_information' } });
+  });
+
   it.each(['editorial_only', 'mixed_factual'] as const)('retains a reviewed draft near deadline only for editorial issues: %s', async (kind) => {
     researchProductComparisonFacts.mockResolvedValue({ usedWebSearch: true, searchDisposition: 'completed',
       sourcesExhausted: false, facts: [], conflicts: [], warnings: [], summaryForAnswer: '',

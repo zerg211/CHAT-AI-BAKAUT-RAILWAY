@@ -24,7 +24,8 @@ const usageContext = new AsyncLocalStorage<OpenAIUsageContext>();
 const usageRecorded = new WeakSet<object>();
 const usageReservationByResponse = new WeakMap<object, string>();
 const reservationBucket = 'global_openai_tokens_24h';
-const reservationTtlMinutes = 15;
+// Unknown outcomes must not silently become free again within the daily window.
+const reservationTtlMinutes = 24 * 60;
 
 export class OpenAIUsageBudgetExceededError extends Error {
   constructor(message: string, readonly details: Record<string, unknown>) {
@@ -261,12 +262,12 @@ export async function recordOpenAIUsage(stage: string, model: string, response: 
         })
       ]
     );
-    if (reservationId) {
+    if (reservationId && usage.totalTokens !== null) {
       await client.query(
         `UPDATE openai_usage_reservations
          SET status = 'reconciled', actual_tokens = $2, updated_at = now()
          WHERE id = $1 AND status = 'reserved'`,
-        [reservationId, usage.totalTokens ?? 0]
+        [reservationId, usage.totalTokens]
       );
     }
     await client.query('COMMIT');
