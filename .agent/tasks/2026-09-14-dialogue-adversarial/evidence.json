@@ -1,0 +1,52 @@
+{
+  "taskId": "2026-09-14-dialogue-adversarial",
+  "baselineSha": "4a8edb186ad7086fb2a302782993ff3713141116",
+  "branch": "codex/dialogue-adversarial-correctness",
+  "verdict": "PRE_PUBLICATION_PASS",
+  "acceptance": {
+    "AC1": "PASS",
+    "AC2": "PASS",
+    "AC3": "PASS",
+    "AC4": "PASS",
+    "AC5": "PASS",
+    "AC6": "PASS",
+    "AC7": "PASS",
+    "AC8": "PASS",
+    "AC9": "PASS",
+    "AC10": "PENDING"
+  },
+  "checks": {
+    "typecheck": { "status": "PASS" },
+    "noNewRegex": { "status": "PASS", "legacyBaseline": 203 },
+    "fullSerialTests": {
+      "status": "PASS",
+      "filesPassed": 126,
+      "filesSkipped": 1,
+      "testsPassed": 1502,
+      "testsSkipped": 1
+    },
+    "build": { "status": "PASS" },
+    "releaseGate": {
+      "status": "PASS",
+      "offlineOracleTestsPassed": 213,
+      "realAgentAcceptance": "NOT_RUN_BEFORE_DEPLOYMENT"
+    },
+    "criticFocused": {
+      "status": "PASS",
+      "initialTestsPassed": 139,
+      "postDisputeTestsPassed": 76,
+      "finalTestsPassed": 26
+    }
+  },
+  "transientVerification": {
+    "parallelTimeouts": 3,
+    "failedAssertions": 0,
+    "sequentialRetry": { "status": "PASS", "testsPassed": 20 }
+  },
+  "production": {
+    "githubPr": null,
+    "mergedSha": null,
+    "railway": "PENDING",
+    "liveDialogue": "PENDING"
+  }
+}

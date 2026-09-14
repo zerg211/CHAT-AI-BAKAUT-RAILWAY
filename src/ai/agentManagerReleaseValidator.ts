@@ -11,6 +11,7 @@ import { AgentManagerTurnBudget, AgentManagerTurnBudgetExceededError } from './a
 import { guardCustomerOutput } from './agentManagerOutputGuard.js';
 import { compactModelText, modelIdentifierTokens, modelTextTokens, normalizeModelText, textMatchesTargetName, tokenHasLetter } from './modelTextMatching.js';
 import { firstPartyAnswerReviewIssues, stalledRepetitionReviewIssues } from './taskOutcome.js';
+import { resolveAnswerEvidenceBindings } from './answerEvidenceBindings.js';
 
 export interface AgentManagerReviewInput extends AgentManagerAnswerInput {
   answer: AnswerContract;
@@ -563,6 +564,18 @@ export async function validateAgentAnswer(model: AgentManagerModel,
         severity: 'high',
         message: 'A failed, denied, timed out, not-found, or explicitly non-fact-bearing tool result was used as evidence for a factual claim.',
         evidence: failedFactSourceIds.join(', ')
+      });
+    }
+    const evidenceBindingResolution = resolveAnswerEvidenceBindings({
+      answer: input.answer,
+      toolResults: input.toolResults
+    });
+    for (const issue of evidenceBindingResolution.issues) {
+      mechanicalIssues.push({
+        code: issue.code,
+        severity: 'high',
+        message: `Answer fact ${issue.factKey} is not bound to the concrete evidence item that proves its product, attribute and value.`,
+        evidence: issue.evidence
       });
     }
     const unknownToolResultIds = input.answer.toolResultIds.filter((toolResultId) => !knownToolResultIds.has(toolResultId));

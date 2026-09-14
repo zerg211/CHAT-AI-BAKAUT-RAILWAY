@@ -23,7 +23,8 @@ import {
   streamChatMessage
 } from './chatStream';
 import { submitLead } from './leadSubmit';
-import type { CardDisplayOptions, ChatResponsePayload, ConversationSession, ConversationSummary, Lead, Message, ProductCard } from '../shared/types';
+import { adminReadinessLabel, adminRuntimeFlags, metadataRecord, shouldShowLeadPanel } from './widgetDiagnostics';
+import type { CardDisplayOptions, ChatResponsePayload, ConversationSession, ConversationSummary, ConversationTurn, Lead, Message, ProductCard } from '../shared/types';
 import './styles.css';
 
 type ChatMessage = {
@@ -126,6 +127,7 @@ type LeadForm = {
 type AdminConversationDetail = {
   session: ConversationSession;
   messages: Message[];
+  turns?: ConversationTurn[];
   agentTraces?: AdminAgentTrace[];
 };
 
@@ -173,12 +175,6 @@ function productionAdminBaseUrl() {
     return configured.trim().replace(/\/+$/, '');
   }
   return window.location.origin;
-}
-
-function shortDiagnosticReason(reason: unknown) {
-  const value = String(reason ?? '').trim();
-  if (!value) return 'unknown';
-  return value.length > 140 ? `${value.slice(0, 137)}...` : value;
 }
 
 function jsonPreview(value: unknown, maxLength = 260) {
@@ -244,96 +240,39 @@ function AgentTracePanel({ traces }: { traces: AdminAgentTrace[] }) {
   );
 }
 
-type AdminDiagnosticFlag = {
-  label: string;
-  warn?: boolean;
-};
-
-function arrayLength(value: unknown) {
-  return Array.isArray(value) ? value.length : 0;
-}
-
-function adminRuntimeFlags(metadata?: ChatResponsePayload['metadata']): AdminDiagnosticFlag[] {
-  if (!metadata) return [];
-  const flags: AdminDiagnosticFlag[] = [];
-  const runtimeMode = metadata.runtimeMode ?? (metadata.agentManager ? 'agent_manager' : undefined);
-  if (runtimeMode === 'agent_manager') {
-    const runtimeReason = metadata.runtimeModeReason ?? metadata.agentManagerRuntime?.reason ?? 'unknown';
-    flags.push({
-      label: `mode: ${runtimeMode} (${shortDiagnosticReason(runtimeReason)})`
-    });
+function AdminTurnTimeline({ turns, messages }: { turns: ConversationTurn[]; messages: Message[] }) {
+  const assistantByTurn = new Map<string, Message>();
+  for (const message of messages) {
+    if (message.role !== 'assistant') continue;
+    const metadata = metadataRecord(message.metadata);
+    const turnId = typeof metadata?.turnId === 'string' ? metadata.turnId : '';
+    if (turnId) assistantByTurn.set(turnId, message);
   }
-  const execution = metadata.executionContract;
-  if (execution) {
-    flags.push({
-      label: `exec: cards ${execution.cardsPolicy}, fact ${execution.factPolicy}, lead ${execution.leadPolicy}`,
-      warn: execution.warnings.length > 0
-    });
-  }
-
-  const ledger = metadata.requirementLedger;
-  if (ledger) {
-    flags.push({
-      label: `req: ${ledger.items.length}, hard ${ledger.hardConstraintKeys.length}, alt ${ledger.alternativeMode}`,
-      warn: ledger.warnings.length > 0
-    });
-  }
-
-  const manifest = metadata.cardManifest;
-  if (manifest) {
-    const visibleViolations = manifest.items.filter(
-      (item) => item.visible && item.constraintStatus === 'violates_hard_constraints'
-    ).length;
-    flags.push({
-      label: `cards: ${manifest.visibleProductIds.length}/${manifest.items.length}, ${manifest.cardsPolicy}`,
-      warn: manifest.warnings.length > 0 || visibleViolations > 0
-    });
-  }
-
-  const factClaimAudit = metadata.factClaimAudit;
-  const factClaimPlanner = metadata.factClaimPlanner;
-  if (factClaimPlanner || factClaimAudit) {
-    flags.push({
-      label: `facts: ${factClaimPlanner?.risk ?? 'n/a'}, claims ${factClaimAudit?.claims.length ?? 0}`,
-      warn: Boolean(
-        factClaimPlanner?.risk === 'high' ||
-        factClaimPlanner?.warnings.length ||
-        factClaimAudit?.warnings.length
-      )
-    });
-  }
-
-  const leadState = metadata.leadStateMachine;
-  if (leadState) {
-    flags.push({
-      label: `lead: ${leadState.state}, ${leadState.nextAction}`,
-      warn: leadState.warnings.length > 0 || leadState.state === 'failed'
-    });
-  }
-
-  const verification = metadata.postAnswerVerification;
-  if (verification) {
-    const recovery = metadata.postAnswerVerificationRecovery;
-    const recoveryLabel = recovery?.attempted ? `, recovered ${recovery.recovered ? 'yes' : 'no'}` : '';
-    flags.push({
-      label: `verify: ${verification.status}, issues ${verification.issues.length}${recoveryLabel}`,
-      warn: verification.status !== 'pass' || Boolean(recovery?.attempted && !recovery.recovered)
-    });
-  }
-
-  const warningCount =
-    arrayLength(metadata.contractWarnings) +
-    arrayLength(metadata.validatorWarnings) +
-    (execution?.warnings.length ?? 0) +
-    (ledger?.warnings.length ?? 0) +
-    (manifest?.warnings.length ?? 0) +
-    (factClaimPlanner?.warnings.length ?? 0) +
-    (factClaimAudit?.warnings.length ?? 0) +
-    (leadState?.warnings.length ?? 0);
-  if (warningCount > 0) {
-    flags.push({ label: `warnings: ${warningCount}`, warn: true });
-  }
-  return flags;
+  return (
+    <section className="admin-turn-panel" aria-label="Состояния ходов">
+      <div className="admin-trace-head"><strong>Ходы</strong><span>{turns.length}</span></div>
+      <div className="admin-turn-list">
+        {turns.map((turn) => {
+          const assistant = assistantByTurn.get(turn.id);
+          const build = metadataRecord(metadataRecord(assistant?.metadata)?.build);
+          const commit = typeof build?.commitSha === 'string' ? build.commitSha.slice(0, 8) : '';
+          const failed = turn.status === 'failed';
+          return (
+            <div className={`admin-turn-row ${failed ? 'failed' : ''}`} key={turn.id}>
+              <strong>{shortText(turn.id, 8)}</strong>
+              <span>{turn.status}</span>
+              {turn.stage ? <span>{turn.stage}</span> : null}
+              {turn.errorCode ? <code>{turn.errorCode}</code> : null}
+              {typeof turn.recoveryAttempts === 'number' && turn.recoveryAttempts > 0
+                ? <span>recovery {turn.recoveryAttempts}</span> : null}
+              {commit ? <span>build {commit}</span> : null}
+              <time>{formatDateTime(turn.updatedAt)}</time>
+            </div>
+          );
+        })}
+      </div>
+    </section>
+  );
 }
 
 const ADMIN_SOURCES: Record<AdminSource, { label: string; baseUrl: string; storageKey: string; hint: string }> = {
@@ -1172,6 +1111,7 @@ function AdminApp() {
                 </div>
               </div>
 
+              {detail.turns?.length ? <AdminTurnTimeline turns={detail.turns} messages={detail.messages} /> : null}
               {detail.agentTraces?.length ? <AgentTracePanel traces={detail.agentTraces} /> : null}
 
               <div className="admin-messages">
@@ -1194,7 +1134,7 @@ function AdminApp() {
                       {message.role === 'assistant' ? (
                         <div className="admin-message-flags">
                           <span>web: {metadata.usedWebSearch ? 'да' : 'нет'}</span>
-                          <span>readiness: {metadata.cardSelection?.readinessBlocked ? 'blocked' : 'ready'}</span>
+                          <span className={adminReadinessLabel(metadata).startsWith('blocked') ? 'warn' : undefined}>readiness: {adminReadinessLabel(metadata)}</span>
                           {metadata.feedback?.rating ? <span>feedback: {metadata.feedback.rating}</span> : null}
                           {metadata.cardSelection?.readinessReason ? <span>{metadata.cardSelection.readinessReason}</span> : null}
                           {typeof metadata.cardSelection?.rankedCount === 'number' ? <span>ranked: {metadata.cardSelection.rankedCount}</span> : null}
@@ -1854,12 +1794,14 @@ function App() {
         </button>
       </form>
 
-      <LeadPanel
-        latestQuestion={latestQuestion}
-        autoOpenKey={leadAutoOpenKey}
-        disabled={chatInteractionDisabled}
-        onSessionUnavailable={showUnavailableSession}
-      />
+      {shouldShowLeadPanel(messages) ? (
+        <LeadPanel
+          latestQuestion={latestQuestion}
+          autoOpenKey={leadAutoOpenKey}
+          disabled={chatInteractionDisabled}
+          onSessionUnavailable={showUnavailableSession}
+        />
+      ) : null}
     </main>
   );
 }

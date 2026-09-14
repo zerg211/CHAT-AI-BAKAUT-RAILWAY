@@ -394,6 +394,36 @@ function generatorDecision(): AgentSemanticDecision {
 }
 
 describe('combined semantic decision validation', () => {
+  it('rejects a repeated historical calculator in an evidence-only technical answer', () => {
+    const original = generatorDecision();
+    const previousLedgerState = validateMemoryDecision(original).ledgerState;
+    const decision = generatorDecision();
+    decision.ledgerDelta.events = [];
+    decision.intent.toolRequests = decision.intent.toolRequests.filter((request) => request.tool === 'calculator.generatorLoad');
+    decision.intent.grounding.taskType = 'technical_answer';
+    decision.intent.grounding.responseMode = 'answer';
+    decision.intent.grounding.catalogRequirement = 'none';
+    decision.intent.grounding.sourcePolicy = 'conversation_only';
+    decision.intent.grounding.requiredToolKinds = ['calculator.generatorLoad'];
+    decision.intent.selectionPolicy!.needAction = 'continue';
+    decision.intent.selectionPolicy!.reusePreviousCards = true;
+    const result = validateMemoryDecision(decision, previousLedgerState);
+    expect(result.issues).toContain('unchanged_generator_load_calculator_not_needed_for_technical_answer');
+    expect(validateMemoryDecision(original).issues).not.toContain('unchanged_generator_load_calculator_not_needed_for_technical_answer');
+  });
+
+  it('allows the historical scenario calculator when the current answer also requests selection evidence', () => {
+    const original = generatorDecision();
+    const previousLedgerState = validateMemoryDecision(original).ledgerState;
+    const decision = generatorDecision();
+    decision.ledgerDelta.events = [];
+    decision.intent.grounding.taskType = 'technical_answer';
+    decision.intent.grounding.responseMode = 'answer';
+    decision.intent.grounding.catalogRequirement = 'required';
+    expect(validateMemoryDecision(decision, previousLedgerState).issues)
+      .not.toContain('unchanged_generator_load_calculator_not_needed_for_technical_answer');
+  });
+
   it('accepts evidenced kVA in the ledger and calculator without demanding fabricated kW', () => {
     const decision = generatorDecision();
     const request = decision.intent.toolRequests.find(item => item.tool === 'calculator.generatorLoad')!;

@@ -2670,6 +2670,18 @@ async executeTools(input: {
       if (budgetStopError) {
         toolResults.push(result);
         await persistBudgetStoppedRemainder(requestIndex + 1, budgetStopError);
+        const failSoftReadStop = definition.risk === 'external_read' &&
+          (budgetStopError.stopReason === 'web_call_budget_exceeded' ||
+            budgetStopError.stopReason === 'tool_call_budget_exceeded');
+        if (failSoftReadStop) {
+          await this.trace(input.session.id, input.turnId, 'tools', 'external_read_budget_degraded_to_partial', {
+            requestId: request.id,
+            tool: request.tool,
+            stopReason: budgetStopError.stopReason,
+            preservedResultCount: toolResults.length
+          });
+          break;
+        }
         throw budgetStopError;
       }
       try {

@@ -546,6 +546,10 @@ export const AnswerContractSchema = z.object({
   factsUsed: z.array(z.object({
     factKey: nonEmptyString,
     sourceEventIds: z.array(nonEmptyString).min(1),
+    evidenceItemIds: z.array(nonEmptyString).optional(),
+    productName: nonEmptyString.nullable().optional(),
+    attribute: nonEmptyString.optional(),
+    claimKind: z.enum(['confirmed_value', 'source_label', 'absence_or_unknown']).optional(),
     value: z.unknown()
   }).strict()).default([]),
   questionsAsked: z.array(z.object({

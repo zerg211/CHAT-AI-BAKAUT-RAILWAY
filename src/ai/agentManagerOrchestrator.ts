@@ -28,10 +28,11 @@ import { extractConfirmedGeneratorNominalPowerKw, extractWeightKg, fromEscaped, 
 import { emptyNeedState } from './needState.js';
 import { safeError } from './responseUtils.js';
 import { getAgentManagerRuntimeDecision } from './agentManagerRuntime.js';
+import { resolveAnswerEvidenceBindings } from './answerEvidenceBindings.js';
 import { ApparentPowerInputSchema } from './agentManagerContracts.js';
 import { extractContact, hasLeadContact } from './contactExtraction.js';
 import { leadCaptureMissingContact, leadCaptureMissingName, leadOfferWithoutReviewableResult } from './leadReviewGuards.js';
-import { deriveTaskOutcome } from './taskOutcome.js';
+import { deriveTaskOutcome, requiredToolResultSatisfied } from './taskOutcome.js';
 import { hasAdjudicationRisk, hasUnsupportedClaimRisk } from './riskReviewGuards.js';
 import { assessVisibleCardReadiness, budgetMaxFromNeedState, filterGeneratorProductsByLoadProfile, gateStrictSelectionRequirements, hasStructuredGeneratorRemoteStartPreference, productSelectionClasses, productCards, productMeetsSupportedStrictAutoStartRequirement, productMeetsSupportedStrictRemoteStartRequirement, productMeetsSupportedStrictFuelRequirement, productMeetsSupportedStrictPriceVisibilityRequirement, productMeetsSupportedStrictVoltageRequirement, qualifiedNominalActivePowerKw, rankCatalogProductsByStructuredPreferences, selectProductsForVisibleCards, strictSelectionRequirementShapeBlockers, structuredSelectionRankingObjectives, suppressVisibleCardsForReadiness, toolRequestProductIntent, toolRequestScopedQuery, uniqueStrings } from './agentManagerCardSelection.js';
 import { buildGeneratorLoadToolPayload, hasUnconfirmedGeneratorLoadBasisResult, isGeneratorProductClass } from './agentManagerGeneratorLoad.js';
@@ -889,6 +890,19 @@ export function validateAgentSemanticDecision(input: {
   const generatorScenarioFact = [...activeFacts]
     .reverse()
     .find((fact) => fact.role === 'hard_requirement' && fact.factKey === 'generator_load_scenario');
+  const currentSelectionEvidenceRequested = input.decision.intent.grounding?.catalogRequirement !== 'none' ||
+    input.decision.intent.toolRequests.some((request) =>
+      request.tool === 'catalog.search' || request.tool === 'catalog.getProductDetails');
+  if (
+    calculatorRequest &&
+    input.decision.intent.grounding?.taskType === 'technical_answer' &&
+    input.decision.intent.grounding?.responseMode === 'answer' &&
+    !currentSelectionEvidenceRequested &&
+    generatorScenarioFact &&
+    !turnFactEventIds.has(generatorScenarioFact.eventId)
+  ) {
+    issues.push('unchanged_generator_load_calculator_not_needed_for_technical_answer');
+  }
   if (calculatorRequest && !generatorScenarioFact) {
     issues.push('generator_load_scenario_fact_missing');
   }
@@ -3739,7 +3753,7 @@ private async persistVerifiedResearchFacts(input: {
       rationale: decisionArtifact.rationale
     });
     const failedRequiredTools = policyGate.requiredActions.filter((tool) =>
-      !selectionToolResults.some((result) => result.tool === tool && result.status === 'ok')
+      !selectionToolResults.some((result) => result.tool === tool && requiredToolResultSatisfied(result))
     );
     const repairedPolicyReasons = initialPolicyGate.blockedReasons.filter((reason) =>
       !policyGate.blockedReasons.includes(reason)
@@ -3757,6 +3771,10 @@ private async persistVerifiedResearchFacts(input: {
       warnings: policyGate.warnings
     };
     const runtimeDecision = getAgentManagerRuntimeDecision();
+    const answerEvidenceBindingResolution = resolveAnswerEvidenceBindings({
+      answer: finalAnswerContract,
+      toolResults: selectionToolResults
+    });
     const metadata = {
       agentManager: true,
       build: {commitSha:process.env.RAILWAY_GIT_COMMIT_SHA??process.env.GIT_COMMIT_SHA??null,version:AI_MANAGER_RUNTIME_VERSION},
@@ -3781,9 +3799,11 @@ private async persistVerifiedResearchFacts(input: {
         leadCaptured: selectionToolResults.some(isDurableLeadCaptureResult),
         contactOffered: finalAnswerContract.leadAction === 'offer_form',
         resolvedFacts: finalFactsUsed.map((fact) => fact.factKey),
-        unresolvedFacts: finalAnswerContract.selectionReadiness?.status === 'needs_more_info'
-          ? [...(finalAnswerContract.selectionReadiness.missingFacts ?? [])]
-          : []
+        toolFailures: failedRequiredTools.map((tool) => `required:${tool}`),
+        unresolvedFacts: uniqueStrings([
+          ...(finalAnswerContract.selectionReadiness?.missingFacts ?? []),
+          ...(continuation?.missingFacts ?? [])
+        ])
       }),
       policyGate,
       policyGateEnforcement,
@@ -3808,6 +3828,7 @@ private async persistVerifiedResearchFacts(input: {
       verifiedProductFacts,
       conflictingVerifiedProductFacts,
       answerContract: finalAnswerContract,
+      answerEvidenceBindings: answerEvidenceBindingResolution.bindings,
       preSendValidation: review,
       consultationQuality: {
         ownership: review.issues.some(issue => issue.code === 'manager_task_delegated_to_buyer') ? 'needs_improvement' : 'not_flagged'
