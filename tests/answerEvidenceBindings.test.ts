@@ -28,6 +28,23 @@ const generatorLoad: ToolResult = {
   }
 };
 
+const productionGeneratorLoad: ToolResult = {
+  requestId: 'calc_generator_workshop_1', tool: 'calculator.generatorLoad', status: 'ok', warnings: [],
+  payload: {
+    profile: {
+      items: [
+        { kind: 'refrigerator', name: 'холодильник', runningKw: 0.3 },
+        { kind: 'pump', name: 'циркуляционный насос', runningKw: 1.1, startingKw: 3.3,
+          startingSource: 'estimated_average' },
+        { kind: 'handheld_tool', name: 'инструмент', runningKw: 1.5 }
+      ],
+      totalRunningKw: 2.9,
+      missingStartingLoads: ['refrigerator:холодильник', 'handheld_tool:инструмент'],
+      runningOnlyNominalFloorKw: 3
+    }
+  }
+};
+
 const countedGeneratorLoad: ToolResult = {
   requestId: 'counted-load', tool: 'calculator.generatorLoad', status: 'ok', warnings: [],
   payload: {
@@ -120,6 +137,73 @@ describe('claim-level answer evidence bindings', () => {
     expect(result.bindings).toEqual([expect.objectContaining({
       evidenceItemId: 'counted-load:payload:profile:totalRunningKw'
     })]);
+  });
+
+  it('canonicalizes exact calculator profile paths copied with mixed display separators', () => {
+    const cases: Array<AnswerContract['factsUsed'][number]> = [
+      { factKey: 'total_running_load', sourceEventIds: ['calc_generator_workshop_1'],
+        evidenceItemIds: ['calc_generator_workshop_1:payload.profile:totalRunningKw'], productName: null,
+        attribute: 'totalRunningKw', claimKind: 'confirmed_value', value: 2.9 },
+      { factKey: 'running_only_nominal_floor', sourceEventIds: ['calc_generator_workshop_1'],
+        evidenceItemIds: ['calc_generator_workshop_1:payload.profile:runningOnlyNominalFloorKw'], productName: null,
+        attribute: 'runningOnlyNominalFloorKw', claimKind: 'confirmed_value', value: 3 },
+      { factKey: 'pump_start_estimate', sourceEventIds: ['calc_generator_workshop_1'],
+        evidenceItemIds: ['calc_generator_workshop_1:payload.profile.items:1:startingKw'], productName: null,
+        attribute: 'startingKw', claimKind: 'confirmed_value', value: 3.3 },
+      { factKey: 'unresolved_startup_refrigerator', sourceEventIds: ['calc_generator_workshop_1'],
+        evidenceItemIds: ['calc_generator_workshop_1:payload.profile:missingStartingLoads:0'], productName: null,
+        attribute: 'missingStartingLoads', claimKind: 'absence_or_unknown', value: 'refrigerator:холодильник' },
+      { factKey: 'unresolved_startup_tool', sourceEventIds: ['calc_generator_workshop_1'],
+        evidenceItemIds: ['calc_generator_workshop_1:payload.profile:missingStartingLoads:1'], productName: null,
+        attribute: 'missingStartingLoads', claimKind: 'absence_or_unknown', value: 'handheld_tool:инструмент' }
+    ];
+    const result = resolveAnswerEvidenceBindings({
+      answer: { answerText: 'x', factsUsed: cases, questionsAsked: [],
+        toolResultIds: ['calc_generator_workshop_1'], leadAction: 'none', riskFlags: [] },
+      toolResults: [productionGeneratorLoad]
+    });
+    expect(result.issues).toEqual([]);
+    expect(result.bindings.map((binding) => binding.evidenceItemId)).toEqual([
+      'calc_generator_workshop_1:payload:profile:totalRunningKw',
+      'calc_generator_workshop_1:payload:profile:runningOnlyNominalFloorKw',
+      'calc_generator_workshop_1:payload:profile:items:1:startingKw',
+      'calc_generator_workshop_1:payload:profile:missingStartingLoads:0',
+      'calc_generator_workshop_1:payload:profile:missingStartingLoads:1'
+    ]);
+  });
+
+  it('keeps calculator profile aliases fail-closed outside one exact matching item', () => {
+    const ambiguous = structuredClone(productionGeneratorLoad);
+    ambiguous.payload.profile = {
+      total: { RunningKw: 2.9 },
+      'total:RunningKw': 2.9
+    };
+    const cases = [
+      { answer: answer({ factKey: 'wrong_value', sourceEventIds: ['calc_generator_workshop_1'],
+        evidenceItemIds: ['calc_generator_workshop_1:payload.profile:totalRunningKw'], productName: null,
+        attribute: 'totalRunningKw', claimKind: 'confirmed_value', value: 3.1 }), toolResults: [productionGeneratorLoad] },
+      { answer: answer({ factKey: 'wrong_attribute', sourceEventIds: ['calc_generator_workshop_1'],
+        evidenceItemIds: ['calc_generator_workshop_1:payload.profile:totalRunningKw'], productName: null,
+        attribute: 'startingKw', claimKind: 'confirmed_value', value: 2.9 }), toolResults: [productionGeneratorLoad] },
+      { answer: answer({ factKey: 'starting_value_from_source_label', sourceEventIds: ['calc_generator_workshop_1'],
+        evidenceItemIds: ['calc_generator_workshop_1:payload.profile.items:1:startingSource'], productName: null,
+        attribute: 'startingKw', claimKind: 'confirmed_value', value: 3.3 }), toolResults: [productionGeneratorLoad] },
+      { answer: answer({ factKey: 'wrong_product', sourceEventIds: ['calc_generator_workshop_1'],
+        evidenceItemIds: ['calc_generator_workshop_1:payload.profile:totalRunningKw'], productName: 'насос',
+        attribute: 'totalRunningKw', claimKind: 'confirmed_value', value: 2.9 }), toolResults: [productionGeneratorLoad] },
+      { answer: answer({ factKey: 'outside_profile', sourceEventIds: ['calc_generator_workshop_1'],
+        evidenceItemIds: ['calc_generator_workshop_1:payload.loads:0:runningKw'], productName: null,
+        attribute: 'runningKw', claimKind: 'confirmed_value', value: 0.3 }), toolResults: [productionGeneratorLoad] },
+      { answer: answer({ factKey: 'wrong_source', sourceEventIds: ['calc_generator_workshop_1'],
+        evidenceItemIds: ['other:payload.profile:totalRunningKw'], productName: null,
+        attribute: 'totalRunningKw', claimKind: 'confirmed_value', value: 2.9 }), toolResults: [productionGeneratorLoad] },
+      { answer: answer({ factKey: 'ambiguous_address', sourceEventIds: ['calc_generator_workshop_1'],
+        evidenceItemIds: ['calc_generator_workshop_1:payload.profile:total:RunningKw'], productName: null,
+        attribute: 'RunningKw', claimKind: 'confirmed_value', value: 2.9 }), toolResults: [ambiguous] }
+    ];
+    for (const candidate of cases) {
+      expect(resolveAnswerEvidenceBindings(candidate).issues.length).toBeGreaterThan(0);
+    }
   });
 
   it('keeps malformed calculator aggregate claims fail-closed', () => {
