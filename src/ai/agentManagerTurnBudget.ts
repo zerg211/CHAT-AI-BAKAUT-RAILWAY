@@ -47,6 +47,13 @@ export const DEFAULT_AGENT_MANAGER_TURN_LIMITS: AgentManagerTurnLimits = {
   maxWallTimeMs: 150_000
 };
 
+// The final customer answer owns a 45-second writer stage followed by a
+// 15-second semantic review window. The extra five seconds cover checkpoints
+// and evidence preparation between the last read and composition. Read-only
+// work must degrade before it consumes this window; otherwise useful evidence
+// can be collected without an answer ever reaching the buyer.
+export const AGENT_MANAGER_FINALIZATION_RESERVE_MS = 65_000;
+
 export type AgentManagerBudgetProfile = 'FAST' | 'NORMAL' | 'RESEARCH' | 'ACTION' | 'RECOVERY' | 'CUSTOM';
 
 export const AGENT_MANAGER_TURN_BUDGET_PROFILES: Record<Exclude<AgentManagerBudgetProfile, 'CUSTOM'>, AgentManagerTurnLimits> = {

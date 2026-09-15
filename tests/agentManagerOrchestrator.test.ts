@@ -1427,12 +1427,14 @@ describe('observation-driven catalog continuation', () => {
       const products = new FakeProducts();
       const originalSearch = products.searchProducts.bind(products);
       vi.spyOn(products, 'searchProducts').mockImplementation(async (...args) => {
-        if (!delayed) { now += 111_000; delayed = true; }
+        if (!delayed) { now += 91_000; delayed = true; }
         return originalSearch(...args);
       });
       const assessObservations = vi.fn(async () => ready);
+      const intent = structuredGeneratorCatalogIntent();
+      intent.riskFlags = ['unconfirmed_starting_current'];
       const orchestrator = new AgentManagerOrchestrator(conversations as never, products as never, new FakeLeads() as never,
-        model({ planTurn: async () => structuredGeneratorCatalogIntent(), assessObservations }));
+        model({ planTurn: async () => intent, assessObservations }));
       const payload = await orchestrator.generateAnswer({ sessionId, turnId, userMessage: 'Покажите генераторы.' });
       expect(assessObservations).not.toHaveBeenCalled();
       expect(payload.metadata?.continuation).toMatchObject({ status: 'stopped', stopReason: 'answer_time_reserve' });

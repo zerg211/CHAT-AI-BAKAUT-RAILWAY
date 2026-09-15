@@ -70,3 +70,16 @@ Date: 2026-09-14. Branch: `codex/dialogue-adversarial-correctness`.
 - First-party raw page evidence is capped at 20 chunks (18,000 characters). Facts outside the read window require the existing continuation read flow.
 - Admin warning totals may count the same warning at multiple metadata levels. This is an observability count issue, not a correctness or authorization bypass.
 - AC6 depends on the planner setting `catalogRequirement` or issuing a catalog request for a new selection. If the planner semantically misclassifies a selection as a pure technical answer, repair can still remove the calculator. A future explicit structured `selectionDecisionRequested` field would remove that ambiguity.
+
+## Post-deployment dispute: final-answer reserve
+
+The first production dialogue after PR #26 failed because successful web research and an optional observation/read round consumed the writer deadline. Root initially proposed protecting 60 seconds before web and observation. The critic objected that continuation reads also needed the same execution-time reserve and that exactly 60 seconds covered only the nominal 45-second writer plus 15-second review, leaving no checkpoint/evidence overhead. Root accepted the execution-time requirement but challenged an early per-request millisecond allowance as meaningless.
+
+The critic's final position prevailed and was implemented:
+
+- one 65-second finalization reserve: 45 seconds writer, 15 seconds review, 5 seconds operational margin;
+- a continuation round is admitted only with a further fixed 10 seconds of useful execution time;
+- every continuation read recalculates its timeout against the 65-second downstream reserve;
+- initial FAST/NORMAL catalog work retains the old 8-second answer reserve until semantic research expands the turn profile.
+
+The critic re-read the final diff, repeated the focused tests, and returned PASS. The root focused run passed 205/205; typecheck also passed.

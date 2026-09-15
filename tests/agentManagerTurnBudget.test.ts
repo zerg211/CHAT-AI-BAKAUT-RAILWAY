@@ -170,8 +170,13 @@ describe('agent manager turn budget', () => {
     expect(effectiveAgentToolTimeoutMs({
       tool: 'web.researchProductFacts',
       configuredTimeoutMs: 60_000,
-      remainingWallTimeMs: 45_000
+      remainingWallTimeMs: 80_000
     })).toBe(15_000);
+    expect(effectiveAgentToolTimeoutMs({
+      tool: 'web.researchProductFacts',
+      configuredTimeoutMs: 60_000,
+      remainingWallTimeMs: 55_000
+    })).toBe(1);
   });
 
   it('caps catalog work before the answer reserve', () => {
@@ -180,6 +185,18 @@ describe('agent manager turn budget', () => {
       configuredTimeoutMs: 60_000,
       remainingWallTimeMs: 16_500
     })).toBe(8_500);
+    expect(effectiveAgentToolTimeoutMs({
+      tool: 'catalog.search',
+      configuredTimeoutMs: 60_000,
+      remainingWallTimeMs: 75_000,
+      downstreamReserveMs: 65_000
+    })).toBe(10_000);
+    expect(effectiveAgentToolTimeoutMs({
+      tool: 'catalog.search',
+      configuredTimeoutMs: 60_000,
+      remainingWallTimeMs: 55_000,
+      downstreamReserveMs: 65_000
+    })).toBe(1);
     expect(effectiveAgentToolTimeoutMs({
       tool: 'calculator.generatorLoad',
       configuredTimeoutMs: 5_000,

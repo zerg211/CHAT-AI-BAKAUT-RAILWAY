@@ -4,7 +4,7 @@ import type {AgentIntentContract,ToolRequest} from '../src/ai/agentManagerContra
 const request=(tool:string)=>({id:'next',tool}) as ToolRequest;
 const input=()=>({intent:{grounding:{taskType:'technical_answer'}} as AgentIntentContract,
   decision:{action:'continue' as const,rationale:'check missing detail',missingFacts:['exact accessory'],candidateProductIds:[],toolRequests:[request('catalog.getProductDetails')]},
-  results:[],round:1,completedToolCalls:1,completedWebCalls:0,maxToolCalls:5,maxWebCalls:2,remainingMs:60_000,allReadsAlreadyPersisted:false});
+  results:[],round:1,completedToolCalls:1,completedWebCalls:0,maxToolCalls:5,maxWebCalls:2,remainingMs:75_001,allReadsAlreadyPersisted:false});
 describe('executable read continuation admission',()=>{
   it('honors the model stop and never invents a next action',()=>{
     const test=input();const result=admitReadContinuation({...test,decision:{...test.decision,action:'answer',toolRequests:[]}});
@@ -13,9 +13,16 @@ describe('executable read continuation admission',()=>{
   it('stops before a side effect or a read that consumes the answer reserve',()=>{
     const test=input();
     expect(admitReadContinuation({...test,remainingMs:20_000}).action).toBe('stop');
+    expect(admitReadContinuation({...test,remainingMs:75_000}).action).toBe('stop');
     expect(admitReadContinuation({...test,decision:{...test.decision,toolRequests:[request('lead.capture')]}}).stopReason).toBe('continuation_requires_read_only');
     expect(admitReadContinuation({...test,completedToolCalls:5}).action).toBe('stop');
     expect(admitReadContinuation(test).action).toBe('execute');
+  });
+  it('uses a fixed execution floor for batched reads',()=>{
+    const test=input();
+    const toolRequests=[request('catalog.getProductDetails'),request('site.readFirstPartyPage')];
+    expect(admitReadContinuation({...test,remainingMs:75_000,decision:{...test.decision,toolRequests}}).action).toBe('stop');
+    expect(admitReadContinuation({...test,remainingMs:75_001,decision:{...test.decision,toolRequests}}).action).toBe('execute');
   });
   it('can replay saved observations without granting new network budget',()=>{
     const test=input();
