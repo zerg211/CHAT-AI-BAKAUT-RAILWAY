@@ -42,6 +42,11 @@ describe('observation-driven continuation boundary', () => {
   it('restricts writer selection to eligible product IDs, including an empty eligible set', () => {
     const schema = answerContractFormatForEvidenceSources(['source'], ['eligible']).format.schema.properties;
     expect(schema.selectedProductIds.items).toEqual({ type: 'string', enum: ['eligible'] });
+    expect(schema.factsUsed.items.properties.evidenceItemIds).toMatchObject({
+      type: 'array',
+      maxItems: 1,
+      items: { type: 'string' }
+    });
     expect(answerContractFormatForEvidenceSources([], []).format.schema.properties.selectedProductIds.maxItems).toBe(0);
   });
   it('allows a new read after an unhelpful initial catalog query', () => {

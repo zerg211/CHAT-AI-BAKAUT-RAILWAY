@@ -72,6 +72,14 @@ Raw logs are stored in `raw/`. The first parallel timeout run and its clean sequ
 - Root and critic agreed not to weaken review, lower the repair threshold or add phrase matching. The correction passes the complete `missingStartingLoads` list to the writer and tells both writer and reviewer that one focused question is only the next step while any other blocker remains.
 - Focused verification — PASS: 33/33 tests; broader orchestrator/evidence regression — PASS: 232/232; TypeScript, no-new-regex and build PASS. The critic independently inspected the final diff, repeated 33/33 tests and returned PASS. Publication and another clean-session production dialogue remain pending.
 
+## Fifth production checkpoint and atomic-fact correction
+
+- PR #30 merged as `b19b2dfa7055c05ae152b73324e38d02c6962565`; Railway deployment `b7d67533-23a7-4113-b4f7-c39e665c184e` reached SUCCESS at the exact SHA. Conversation #2190 proved the multi-gap wording correction but failed because repair mixed canonical calculator IDs with display-path separators.
+- PR #31 merged as `be7a6b43a900342802f3338312f61ad6c8034253`; required GitHub workflow run `34972603941` passed and Railway deployment `d4e1ff15-1b22-4cc9-9eb9-10e33b254028` reached SUCCESS at the exact SHA. Public health matched the merge.
+- Clean production conversation #2191, session `f02ea0e8-a2b8-482b-b66a-b8a5200a4fec`, turn `01feb77f-fc67-4c8f-88cc-509c2933226b`, used canonical evidence addresses. It still committed no assistant message because the writer grouped different values/attributes into three composite `factsUsed`; deterministic review correctly blocked eleven binding issues. Captures are `raw/production-dialogue-2026-09-15-failed6-admin.json` and `raw/production-dialogue-2026-09-15-failed6-turn-artifacts.json`.
+- The correction constrains writer output to one evidence item per atomic fact, teaches the same rule to initial and repair calls, keeps exact issue evidence in untrusted user JSON, and replaces internal `расчётный профиль` wording with customer-facing calculation language without banning useful source attribution.
+- Focused verification — PASS: 228/228 tests. The #2191 composites remain blocked; the seven atomic canonical facts pass with exact bindings. TypeScript and the no-new-regex guard pass. Publication, Railway readback and the final clean adaptive production dialogue remain pending.
+
 ## Known scoped limits
 
 - The deterministic validator proves structured `factsUsed` bindings. Exhaustive extraction of every factual statement from free-form answer text remains under the semantic factual reviewer.

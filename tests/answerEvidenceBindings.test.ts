@@ -45,6 +45,31 @@ const productionGeneratorLoad: ToolResult = {
   }
 };
 
+const production2191GeneratorLoad: ToolResult = {
+  requestId: 'calc_generator_load', tool: 'calculator.generatorLoad', status: 'ok', warnings: [],
+  payload: {
+    profile: {
+      items: [
+        { kind: 'refrigerator', name: 'холодильник', runningKw: 0.3, startingSource: 'not_provided' },
+        { kind: 'pump', name: 'циркуляционный насос', runningKw: 1.1, startingKw: 2.8,
+          startingSource: 'estimated_average' },
+        { kind: 'handheld_tool', name: 'инструмент', runningKw: 1.5, startingSource: 'not_provided' }
+      ],
+      totalRunningKw: 2.9,
+      missingStartingLoads: ['refrigerator:холодильник', 'handheld_tool:инструмент'],
+      runningOnlyNominalFloorKw: 3
+    }
+  }
+};
+
+const production2191Catalog: ToolResult = {
+  requestId: 'search_generators', tool: 'catalog.search', status: 'ok', warnings: [],
+  payload: { products: [{
+    id: 'a6500', name: 'Генератор бензиновый A-iPower A6500 (6,0 кВт) 20108',
+    specs: { 'число фаз': '1', 'напряжение, в': '230', 'вид топлива': 'Бензин' }
+  }] }
+};
+
 const countedGeneratorLoad: ToolResult = {
   requestId: 'counted-load', tool: 'calculator.generatorLoad', status: 'ok', warnings: [],
   payload: {
@@ -170,6 +195,84 @@ describe('claim-level answer evidence bindings', () => {
       'calc_generator_workshop_1:payload:profile:missingStartingLoads:0',
       'calc_generator_workshop_1:payload:profile:missingStartingLoads:1'
     ]);
+  });
+
+  it('keeps the composite evidence facts from production dialogue 2191 blocked', () => {
+    const facts: AnswerContract['factsUsed'] = [{
+      factKey: 'pump_start_estimate', sourceEventIds: ['calc_generator_load'],
+      evidenceItemIds: [
+        'calc_generator_load:payload:profile:items:1:startingKw',
+        'calc_generator_load:payload:profile:items:1:startingSource'
+      ], productName: null, attribute: 'startingKw', claimKind: 'confirmed_value',
+      value: '2.8 кВт, estimated_average'
+    }, {
+      factKey: 'unresolved_starting_loads', sourceEventIds: ['calc_generator_load'],
+      evidenceItemIds: [
+        'calc_generator_load:payload:profile:missingStartingLoads:0',
+        'calc_generator_load:payload:profile:missingStartingLoads:1'
+      ], productName: null, attribute: 'missingStartingLoads', claimKind: 'absence_or_unknown',
+      value: 'refrigerator:холодильник; handheld_tool:инструмент'
+    }, {
+      factKey: 'phase_voltage_fuel', sourceEventIds: ['search_generators'],
+      evidenceItemIds: [
+        'search_generators:product:a6500:spec:число фаз',
+        'search_generators:product:a6500:spec:напряжение, в',
+        'search_generators:product:a6500:spec:вид топлива'
+      ], productName: 'Генератор бензиновый A-iPower A6500 (6,0 кВт) 20108',
+      attribute: 'phase_voltage_fuel', claimKind: 'confirmed_value', value: 'однофазный, 230 В, бензин'
+    }];
+    const result = resolveAnswerEvidenceBindings({
+      answer: { answerText: 'x', factsUsed: facts, questionsAsked: [],
+        toolResultIds: ['calc_generator_load', 'search_generators'], leadAction: 'none', riskFlags: [] },
+      toolResults: [production2191GeneratorLoad, production2191Catalog]
+    });
+    expect(result.issues.map((issue) => issue.code)).toEqual(expect.arrayContaining([
+      'numeric_fact_value_not_in_bound_evidence',
+      'fact_value_not_in_bound_evidence',
+      'fact_evidence_attribute_mismatch'
+    ]));
+  });
+
+  it('accepts the atomic equivalent of production dialogue 2191 with canonical evidence ids', () => {
+    const productName = 'Генератор бензиновый A-iPower A6500 (6,0 кВт) 20108';
+    const facts: AnswerContract['factsUsed'] = [{
+      factKey: 'pump_start_kw', sourceEventIds: ['calc_generator_load'],
+      evidenceItemIds: ['calc_generator_load:payload:profile:items:1:startingKw'], productName: null,
+      attribute: 'startingKw', claimKind: 'confirmed_value', value: 2.8
+    }, {
+      factKey: 'pump_start_source', sourceEventIds: ['calc_generator_load'],
+      evidenceItemIds: ['calc_generator_load:payload:profile:items:1:startingSource'], productName: null,
+      attribute: 'startingSource', claimKind: 'confirmed_value', value: 'estimated_average'
+    }, {
+      factKey: 'missing_refrigerator_start', sourceEventIds: ['calc_generator_load'],
+      evidenceItemIds: ['calc_generator_load:payload:profile:missingStartingLoads:0'], productName: null,
+      attribute: 'missingStartingLoads', claimKind: 'absence_or_unknown', value: 'refrigerator:холодильник'
+    }, {
+      factKey: 'missing_tool_start', sourceEventIds: ['calc_generator_load'],
+      evidenceItemIds: ['calc_generator_load:payload:profile:missingStartingLoads:1'], productName: null,
+      attribute: 'missingStartingLoads', claimKind: 'absence_or_unknown', value: 'handheld_tool:инструмент'
+    }, {
+      factKey: 'phase', sourceEventIds: ['search_generators'],
+      evidenceItemIds: ['search_generators:product:a6500:spec:число фаз'], productName,
+      attribute: 'число фаз', claimKind: 'confirmed_value', value: '1'
+    }, {
+      factKey: 'voltage', sourceEventIds: ['search_generators'],
+      evidenceItemIds: ['search_generators:product:a6500:spec:напряжение, в'], productName,
+      attribute: 'напряжение, в', claimKind: 'confirmed_value', value: '230'
+    }, {
+      factKey: 'fuel', sourceEventIds: ['search_generators'],
+      evidenceItemIds: ['search_generators:product:a6500:spec:вид топлива'], productName,
+      attribute: 'вид топлива', claimKind: 'confirmed_value', value: 'Бензин'
+    }];
+    const result = resolveAnswerEvidenceBindings({
+      answer: { answerText: 'x', factsUsed: facts, questionsAsked: [],
+        toolResultIds: ['calc_generator_load', 'search_generators'], leadAction: 'none', riskFlags: [] },
+      toolResults: [production2191GeneratorLoad, production2191Catalog]
+    });
+    expect(result.issues).toEqual([]);
+    expect(result.bindings.map((binding) => binding.evidenceItemId)).toEqual(
+      facts.flatMap((fact) => fact.evidenceItemIds ?? [])
+    );
   });
 
   it('keeps calculator profile aliases fail-closed outside one exact matching item', () => {
