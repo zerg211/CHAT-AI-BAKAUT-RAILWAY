@@ -1187,7 +1187,17 @@ const SEMANTIC_DECISION_ATTEMPT_TIMEOUT_MS = 45_000;
 const SEMANTIC_DECISION_DOWNSTREAM_RESERVE_MS = 45_000;
 const OBSERVATION_MIN_EXECUTION_MS = 10_000;
 const OBSERVATION_DEFAULT_DOWNSTREAM_RESERVE_MS = 30_000;
-const ANSWER_REPAIR_MIN_REMAINING_MS = 30_000;
+const ANSWER_REPAIR_WRITER_MS = 30_000;
+const ANSWER_REPAIR_REVIEW_RESERVE_MS = 12_000;
+const ANSWER_REPAIR_OPERATION_MARGIN_MS = 5_000;
+const ANSWER_REPAIR_MIN_REMAINING_MS = ANSWER_REPAIR_WRITER_MS + ANSWER_REPAIR_REVIEW_RESERVE_MS +
+  ANSWER_REPAIR_OPERATION_MARGIN_MS;
+
+export function answerRepairStageBudget(remainingWallTimeMs: number) {
+  return remainingWallTimeMs > ANSWER_REPAIR_MIN_REMAINING_MS
+    ? { maxDurationMs: ANSWER_REPAIR_WRITER_MS, downstreamReserveMs: ANSWER_REPAIR_REVIEW_RESERVE_MS }
+    : null;
+}
 
 
 function parseSavedChatResponsePayload(value: unknown): ChatResponsePayload | null {
@@ -3343,8 +3353,8 @@ private async persistVerifiedResearchFacts(input: {
         const issueCodes = review.issues.map((issue) => issue.code);
         const repairable = review.issues.every((issue) => issue.code !== 'requires_adjudication');
         if (repairable) turnBudget.applySemanticProfile('RESEARCH','validated_review_requires_repair');
-        const canAffordRepair = turnBudget.remainingWallTimeMs() > ANSWER_REPAIR_MIN_REMAINING_MS;
-        if (repairable && canAffordRepair) {
+        const repairStageBudget = answerRepairStageBudget(turnBudget.remainingWallTimeMs());
+        if (repairable && repairStageBudget) {
           try {
           await this.trace(input.sessionId, input.turnId, 'recovery', 'answer_review_repair_started', {
             issueCodes,
@@ -3369,7 +3379,10 @@ private async persistVerifiedResearchFacts(input: {
               semanticDecisionValidated,
               reviewIssuesFeedback: review.issues.map((issue) => `${issue.code}: ${issue.message}`),
               continuation,
-              structuredDeadlineAtMs: turnBudget.deadlineForStage(30_000, 12_000),
+              structuredDeadlineAtMs: turnBudget.deadlineForStage(
+                repairStageBudget.maxDurationMs,
+                repairStageBudget.downstreamReserveMs
+              ),
               signal: input.signal
             }),
             ledgerState,

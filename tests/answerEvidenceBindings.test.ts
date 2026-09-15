@@ -12,6 +12,27 @@ const research: ToolResult = {
   }
 };
 
+const generatorLoad: ToolResult = {
+  requestId: 'load', tool: 'calculator.generatorLoad', status: 'ok', warnings: [],
+  payload: {
+    loads: [
+      { name: 'холодильник', runningKw: 0.3 },
+      { name: 'насос', runningKw: 1.1 },
+      { name: 'инструмент', runningKw: 1.5 }
+    ],
+    profile: { totalRunningKw: 2.9 }
+  }
+};
+
+const countedGeneratorLoad: ToolResult = {
+  requestId: 'counted-load', tool: 'calculator.generatorLoad', status: 'ok', warnings: [],
+  payload: {
+    loads: [{ name: 'насос', runningKw: 1, count: 2, simultaneousRunning: true, coRunningGroup: 'main' }],
+    scenarios: [{ id: 'main', totalRunningKw: 2 }],
+    profile: { totalRunningKw: 2, operationMode: 'strongest_scenario' }
+  }
+};
+
 function answer(fact: AnswerContract['factsUsed'][number]): AnswerContract {
   return { answerText: 'x', factsUsed: [fact], questionsAsked: [], toolResultIds: ['research'],
     leadAction: 'none', riskFlags: [] };
@@ -68,6 +89,70 @@ describe('claim-level answer evidence bindings', () => {
     });
     expect(resolution.issues).toEqual([]);
     expect(resolution.bindings[0]).toMatchObject({ evidenceItemId: 'research:fact:0', evidencePath: 'payload.facts[0]' });
+  });
+
+  it('remaps the production calculator aggregate to its single canonical total', () => {
+    const result = resolveAnswerEvidenceBindings({
+      answer: answer({ factKey: 'combined_running_load', sourceEventIds: ['load'],
+        evidenceItemIds: ['load:payload:loads:0:runningKw', 'load:payload:loads:1:runningKw', 'load:payload:loads:2:runningKw'],
+        productName: null, attribute: 'totalRunningKw', claimKind: 'confirmed_value', value: 2.9 }),
+      toolResults: [generatorLoad]
+    });
+    expect(result.issues).toEqual([]);
+    expect(result.bindings).toEqual([expect.objectContaining({
+      evidenceItemId: 'load:payload:profile:totalRunningKw',
+      evidencePath: 'payload.profile.totalRunningKw'
+    })]);
+  });
+
+  it('uses the calculator canonical total when counts and scenarios differ from a naive component sum', () => {
+    const result = resolveAnswerEvidenceBindings({
+      answer: answer({ factKey: 'combined_running_load', sourceEventIds: ['counted-load'],
+        evidenceItemIds: ['counted-load:payload:loads:0:runningKw'], productName: null,
+        attribute: 'totalRunningKw', claimKind: 'confirmed_value', value: 2 }),
+      toolResults: [countedGeneratorLoad]
+    });
+    expect(result.issues).toEqual([]);
+    expect(result.bindings).toEqual([expect.objectContaining({
+      evidenceItemId: 'counted-load:payload:profile:totalRunningKw'
+    })]);
+  });
+
+  it('keeps malformed calculator aggregate claims fail-closed', () => {
+    const base = { factKey: 'combined_running_load', sourceEventIds: ['load'], productName: null,
+      attribute: 'totalRunningKw', claimKind: 'confirmed_value' as const };
+    const componentIds = ['load:payload:loads:0:runningKw', 'load:payload:loads:1:runningKw',
+      'load:payload:loads:2:runningKw'];
+    const missingCanonical = structuredClone(generatorLoad);
+    delete (missingCanonical.payload as Record<string, unknown>).profile;
+    const otherRequest = structuredClone(generatorLoad);
+    otherRequest.requestId = 'other-load';
+    const cases = [{
+      answer: answer({ ...base, value: 3.1, evidenceItemIds: componentIds }),
+      toolResults: [generatorLoad]
+    }, {
+      answer: answer({ ...base, value: 2.9, evidenceItemIds: componentIds }),
+      toolResults: [missingCanonical]
+    }, {
+      answer: answer({ ...base, sourceEventIds: ['load', 'other-load'], value: 2.9,
+        evidenceItemIds: ['load:payload:loads:0:runningKw', 'other-load:payload:loads:1:runningKw'] }),
+      toolResults: [generatorLoad, otherRequest]
+    }, {
+      answer: answer({ ...base, value: 2.9, evidenceItemIds: ['load:payload:loads:0:name'] }),
+      toolResults: [generatorLoad]
+    }, {
+      answer: answer({ ...base, productName: 'TSS SGG5000EI', value: 2.9, evidenceItemIds: componentIds }),
+      toolResults: [generatorLoad]
+    }];
+    for (const input of cases) expect(resolveAnswerEvidenceBindings(input).issues.length).toBeGreaterThan(0);
+  });
+
+  it('keeps the canonical calculator total inside the per-tool evidence cap', () => {
+    const crowded: ToolResult = { requestId: 'crowded', tool: 'calculator.generatorLoad', status: 'ok', warnings: [],
+      payload: { loads: Array.from({ length: 100 }, (_, index) => ({ name: `load-${index}`, runningKw: index + 1 })),
+        profile: { totalRunningKw: 5_050 } } };
+    expect(answerEvidenceItemsForModel([crowded], 80).map((item) => item.id))
+      .toContain('crowded:payload:profile:totalRunningKw');
   });
 
   it('allows a source label but not a confirmed net value from not-confirmed coverage', () => {

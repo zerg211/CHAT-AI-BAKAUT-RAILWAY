@@ -2,7 +2,7 @@
   "taskId": "2026-09-14-dialogue-adversarial",
   "baselineSha": "4a8edb186ad7086fb2a302782993ff3713141116",
   "branch": "codex/dialogue-adversarial-correctness",
-  "verdict": "CORRECTIVE_PRE_PUBLICATION_IN_PROGRESS",
+  "verdict": "SECOND_CORRECTIVE_PRE_PUBLICATION_IN_PROGRESS",
   "acceptance": {
     "AC1": "PASS",
     "AC2": "PASS",
@@ -59,6 +59,13 @@
     "isolatedDialogueLedgerRetry": { "status": "PASS", "testsPassed": 24 },
     "releaseGate": { "status": "BLOCKED_FULL_SUITE", "otherPhases": "PASS" }
   },
+  "secondCorrectiveChecks": {
+    "focusedTests": { "status": "PASS", "testsPassed": 196 },
+    "typecheck": { "status": "PASS" },
+    "noNewRegex": { "status": "PASS", "legacyBaseline": 203 },
+    "build": { "status": "PASS" },
+    "criticReview": { "status": "PASS", "independentTestsPassed": 196 }
+  },
   "production": {
     "githubPr": 26,
     "mergedSha": "22d519e581e87e5a06f80d73b046138695600dc8",
@@ -74,6 +81,21 @@
       "errorCode": "agent_manager_generation_failed",
       "cause": "final answer structured deadline exhausted after research and optional continuation"
     },
-    "correctiveBranch": "codex/live-turn-finalization-reserve"
+    "correctiveBranch": "codex/live-turn-finalization-reserve",
+    "correctivePr": 27,
+    "correctiveMergedSha": "d5b1f5573318efa46f8167710b23dfc2707229c7",
+    "correctiveRailway": {
+      "status": "SUCCESS",
+      "deploymentId": "5c7ca768-944b-4580-b231-01fd5bca2c9a",
+      "codeSha": "d5b1f5573318efa46f8167710b23dfc2707229c7"
+    },
+    "secondLiveDialogue": {
+      "status": "FAIL",
+      "conversationId": 2187,
+      "sessionId": "96948942-ee02-400d-9ba7-65b0478aa6d0",
+      "errorCode": "agent_manager_generation_failed",
+      "cause": "aggregate calculator evidence attribute mismatch followed by repair admitted with only 31.359 seconds remaining"
+    },
+    "secondCorrectiveBranch": "codex/calculator-total-evidence-binding"
   }
 }

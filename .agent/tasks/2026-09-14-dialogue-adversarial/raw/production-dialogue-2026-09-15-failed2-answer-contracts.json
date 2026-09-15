@@ -1,0 +1,248 @@
+[
+  {
+    "answer_text": "Предварительно я бы смотрел в первую очередь на 5 кВт и выше: рабочая сумма ваших нагрузок — около 2,9 кВт, но это расчёт только работающих приборов. Пуск холодильника и насоса не подтверждён, поэтому окончательно считать генератор достаточным пока нельзя.\n\nВарианты из каталога:\n1. **Генератор бензиновый инверторный ТСС SGG 5000EI (5,0 кВт) 060040** — предварительный основной вариант: номинально 5 кВт, однофазный 230 В. Запас относительно рабочей нагрузки — около 2,1 кВт, но способность уверенно запускать именно ваш насос нужно подтвердить по его шильдику.\n2. **Генератор бензиновый A-iPower A6500 (6,0 кВт) 20108** — более мощный предварительный вариант: номинально 6 кВт, однофазный 230 В. Это уже заметно выше рабочей нагрузки, но модель крупнее и тяжелее; пуск насоса всё равно не подтверждён.\n3. **Генератор бензиновый инверторный ТСС SGG 4200Ei (3,8 кВт) 060036** — более компактный вариант: в каталоге указана номинальная мощность 3–3,8 кВт, 230 В, 1 фаза. По рабочей нагрузке проходит предварительно, но запас небольшой — поэтому ставлю его после моделей на 5 и 6 кВт.\n\nМодели на 2,8 кВт не включаю: их номинальная мощность ниже уже подтверждённой рабочей нагрузки 2,9 кВт. Для финального выбора нужен один факт от насоса: модель или данные шильдика с пусковым током/мощностью. Какой именно насос планируется — его марка и модель?",
+    "contract": {
+      "factsUsed": [
+        {
+          "value": "бензин",
+          "factKey": "fuel_type",
+          "attribute": "fuel_type",
+          "claimKind": "confirmed_value",
+          "productName": null,
+          "sourceEventIds": [
+            "fact.confirmed:fc7f98beca0fb50323e850f3968a4e63"
+          ],
+          "evidenceItemIds": []
+        },
+        {
+          "value": "single_phase",
+          "factKey": "phase",
+          "attribute": "phase",
+          "claimKind": "confirmed_value",
+          "productName": null,
+          "sourceEventIds": [
+            "fact.confirmed:e85ed96dfeeb9405507ce5b000be5b22"
+          ],
+          "evidenceItemIds": []
+        },
+        {
+          "value": 0.3,
+          "factKey": "refrigerator_running_power",
+          "attribute": "runningKw",
+          "claimKind": "confirmed_value",
+          "productName": null,
+          "sourceEventIds": [
+            "calc_generator_workshop_1"
+          ],
+          "evidenceItemIds": [
+            "calc_generator_workshop_1:payload:loads:0:runningKw"
+          ]
+        },
+        {
+          "value": 1.1,
+          "factKey": "pump_running_power",
+          "attribute": "runningKw",
+          "claimKind": "confirmed_value",
+          "productName": null,
+          "sourceEventIds": [
+            "calc_generator_workshop_1"
+          ],
+          "evidenceItemIds": [
+            "calc_generator_workshop_1:payload:loads:1:runningKw"
+          ]
+        },
+        {
+          "value": 1.5,
+          "factKey": "tool_running_power",
+          "attribute": "runningKw",
+          "claimKind": "confirmed_value",
+          "productName": null,
+          "sourceEventIds": [
+            "calc_generator_workshop_1"
+          ],
+          "evidenceItemIds": [
+            "calc_generator_workshop_1:payload:loads:2:runningKw"
+          ]
+        },
+        {
+          "value": 2.9,
+          "factKey": "combined_running_load",
+          "attribute": "totalRunningKw",
+          "claimKind": "confirmed_value",
+          "productName": null,
+          "sourceEventIds": [
+            "calc_generator_workshop_1"
+          ],
+          "evidenceItemIds": [
+            "calc_generator_workshop_1:payload:loads:0:runningKw",
+            "calc_generator_workshop_1:payload:loads:1:runningKw",
+            "calc_generator_workshop_1:payload:loads:2:runningKw"
+          ]
+        },
+        {
+          "value": "not_provided",
+          "factKey": "pump_starting_power_unknown",
+          "attribute": "startingSource",
+          "claimKind": "absence_or_unknown",
+          "productName": null,
+          "sourceEventIds": [
+            "calc_generator_workshop_1"
+          ],
+          "evidenceItemIds": [
+            "calc_generator_workshop_1:payload:loads:1:startingSource"
+          ]
+        },
+        {
+          "value": "not_provided",
+          "factKey": "refrigerator_starting_power_unknown",
+          "attribute": "startingSource",
+          "claimKind": "absence_or_unknown",
+          "productName": null,
+          "sourceEventIds": [
+            "calc_generator_workshop_1"
+          ],
+          "evidenceItemIds": [
+            "calc_generator_workshop_1:payload:loads:0:startingSource"
+          ]
+        },
+        {
+          "value": "not_provided",
+          "factKey": "tool_starting_power_unknown",
+          "attribute": "startingSource",
+          "claimKind": "absence_or_unknown",
+          "productName": null,
+          "sourceEventIds": [
+            "calc_generator_workshop_1"
+          ],
+          "evidenceItemIds": [
+            "calc_generator_workshop_1:payload:loads:2:startingSource"
+          ]
+        },
+        {
+          "value": "5 кВт",
+          "factKey": "tss_5000ei_rated_power",
+          "attribute": "ratedPower",
+          "claimKind": "confirmed_value",
+          "productName": "Генератор бензиновый инверторный ТСС SGG 5000EI (5,0 кВт) 060040",
+          "sourceEventIds": [
+            "verified_fact:8a3ea242-d990-4343-bf4b-f157f253a17d"
+          ],
+          "evidenceItemIds": []
+        },
+        {
+          "value": "230 В, 1 фаза",
+          "factKey": "tss_5000ei_phase_voltage",
+          "attribute": "voltage",
+          "claimKind": "confirmed_value",
+          "productName": "Генератор бензиновый инверторный ТСС SGG 5000EI (5,0 кВт) 060040",
+          "sourceEventIds": [
+            "verified_fact:a8a88578-e999-4a4d-ad0b-94be853f18a5"
+          ],
+          "evidenceItemIds": []
+        },
+        {
+          "value": "6000 Вт",
+          "factKey": "aipower_a6500_rated_power",
+          "attribute": "ratedPower",
+          "claimKind": "confirmed_value",
+          "productName": "Генератор бензиновый A-iPower A6500 (6,0 кВт) 20108",
+          "sourceEventIds": [
+            "verified_fact:87c0aedd-a1e4-4e21-ab0b-66615a2cfdaa"
+          ],
+          "evidenceItemIds": []
+        },
+        {
+          "value": "1, 230 В / 50 Гц, ток 26,1 А, cosφ 1",
+          "factKey": "aipower_a6500_phase",
+          "attribute": "phases",
+          "claimKind": "confirmed_value",
+          "productName": "Генератор бензиновый A-iPower A6500 (6,0 кВт) 20108",
+          "sourceEventIds": [
+            "verified_fact:3ebb41da-58fc-4039-8c86-c70d95ca84f4"
+          ],
+          "evidenceItemIds": []
+        },
+        {
+          "value": "3–3.8 кВт / 3.8 кВА",
+          "factKey": "tss_4200ei_rated_power",
+          "attribute": "ratedPower",
+          "claimKind": "confirmed_value",
+          "productName": "Генератор бензиновый инверторный ТСС SGG 4200Ei (3,8 кВт) 060036",
+          "sourceEventIds": [
+            "search_generator_workshop_1"
+          ],
+          "evidenceItemIds": [
+            "search_generator_workshop_1:product:6c3851c2-0067-4c34-8290-4f18a5181d00:spec:ratedPower"
+          ]
+        },
+        {
+          "value": "230 В, 1 фаза",
+          "factKey": "tss_4200ei_voltage",
+          "attribute": "voltage",
+          "claimKind": "confirmed_value",
+          "productName": "Генератор бензиновый инверторный ТСС SGG 4200Ei (3,8 кВт) 060036",
+          "sourceEventIds": [
+            "search_generator_workshop_1"
+          ],
+          "evidenceItemIds": [
+            "search_generator_workshop_1:product:6c3851c2-0067-4c34-8290-4f18a5181d00:spec:voltage"
+          ]
+        },
+        {
+          "value": "бензиновые",
+          "factKey": "tss_4200ei_fuel",
+          "attribute": "вид топлива",
+          "claimKind": "confirmed_value",
+          "productName": "Генератор бензиновый инверторный ТСС SGG 4200Ei (3,8 кВт) 060036",
+          "sourceEventIds": [
+            "search_generator_workshop_1"
+          ],
+          "evidenceItemIds": [
+            "search_generator_workshop_1:product:6c3851c2-0067-4c34-8290-4f18a5181d00:spec:вид топлива"
+          ]
+        }
+      ],
+      "riskFlags": [
+        "preliminary_fit_only",
+        "pump_starting_load_unknown",
+        "refrigerator_starting_load_unknown",
+        "tool_starting_load_unknown",
+        "running_load_is_not_sufficient_startup_capacity"
+      ],
+      "answerText": "Предварительно я бы смотрел в первую очередь на 5 кВт и выше: рабочая сумма ваших нагрузок — около 2,9 кВт, но это расчёт только работающих приборов. Пуск холодильника и насоса не подтверждён, поэтому окончательно считать генератор достаточным пока нельзя.\n\nВарианты из каталога:\n1. **Генератор бензиновый инверторный ТСС SGG 5000EI (5,0 кВт) 060040** — предварительный основной вариант: номинально 5 кВт, однофазный 230 В. Запас относительно рабочей нагрузки — около 2,1 кВт, но способность уверенно запускать именно ваш насос нужно подтвердить по его шильдику.\n2. **Генератор бензиновый A-iPower A6500 (6,0 кВт) 20108** — более мощный предварительный вариант: номинально 6 кВт, однофазный 230 В. Это уже заметно выше рабочей нагрузки, но модель крупнее и тяжелее; пуск насоса всё равно не подтверждён.\n3. **Генератор бензиновый инверторный ТСС SGG 4200Ei (3,8 кВт) 060036** — более компактный вариант: в каталоге указана номинальная мощность 3–3,8 кВт, 230 В, 1 фаза. По рабочей нагрузке проходит предварительно, но запас небольшой — поэтому ставлю его после моделей на 5 и 6 кВт.\n\nМодели на 2,8 кВт не включаю: их номинальная мощность ниже уже подтверждённой рабочей нагрузки 2,9 кВт. Для финального выбора нужен один факт от насоса: модель или данные шильдика с пусковым током/мощностью. Какой именно насос планируется — его марка и модель?",
+      "leadAction": "none",
+      "toolResultIds": [
+        "calc_generator_workshop_1",
+        "search_generator_workshop_1",
+        "research_pump_start_1"
+      ],
+      "questionsAsked": [
+        {
+          "text": "Какой именно насос планируется — его марка и модель?",
+          "reason": "Нужно определить пусковую нагрузку и перевести предварительный подбор в финальный.",
+          "questionId": "pump_model_or_nameplate"
+        }
+      ],
+      "selectedProductIds": [
+        "de89e8c4-3a4c-4eb2-9ed9-2dff32ca325d",
+        "7c9f5ad5-89f8-4d05-83b0-82db074033fd",
+        "6c3851c2-0067-4c34-8290-4f18a5181d00"
+      ],
+      "selectionRationale": "Показаны три предварительных кандидата с подтверждённым бензиновым однофазным исполнением и номинальной мощностью от 3,8 до 6 кВт; модели 5 и 6 кВт поставлены выше из-за большего численного запаса над рабочей нагрузкой 2,9 кВт. Пусковая способность для насоса пока не подтверждена.",
+      "selectionReadiness": {
+        "status": "ready_for_preliminary_cards",
+        "rationale": "Есть заявленные требования по бензиновому топливу, однофазному 230 В и рабочей нагрузке 2,9 кВт, а каталог содержит кандидатов с номиналом выше рабочей нагрузки. Точные пусковые нагрузки не установлены, поэтому карточки допустимы только как предварительные.",
+        "missingFacts": [
+          "Пусковой ток или пусковая мощность циркуляционного насоса 1,1 кВт",
+          "Пусковая нагрузка холодильника",
+          "Пусковая нагрузка инструмента"
+        ],
+        "productClass": "generator",
+        "canShowProductCards": true
+      }
+    },
+    "review": null,
+    "status": "draft",
+    "created_at": "2026-09-15T10:27:26.434Z"
+  }
+]

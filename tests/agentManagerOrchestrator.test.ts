@@ -4,6 +4,7 @@ import * as comparisonResearch from '../src/ai/productComparisonResearch.js';
 import {
   AgentManagerOrchestrator,
   RECOVERY_LEASE_WAIT_LIMIT_MS,
+  answerRepairStageBudget,
   orderToolRequestsForSelectionDependencies,
   pendingLeadCaptureDraftMatchesAuthorizationScope,
   productMatchesExactTargetIdentity,
@@ -34,6 +35,13 @@ const sessionId = '11111111-1111-4111-8111-111111111111';
 const turnId = '22222222-2222-4222-8222-222222222222';
 const userMessageId = '33333333-3333-4333-8333-333333333333';
 const exhaustedTechnicalHandoffOfferId = '55555555-5555-4555-8555-555555555555';
+
+describe('answer repair admission budget', () => {
+  it('requires the full writer, review, and operation reserve', () => {
+    expect(answerRepairStageBudget(47_000)).toBeNull();
+    expect(answerRepairStageBudget(47_001)).toEqual({ maxDurationMs: 30_000, downstreamReserveMs: 12_000 });
+  });
+});
 
 function technicalHandoffScopeHash(
   purpose: string,

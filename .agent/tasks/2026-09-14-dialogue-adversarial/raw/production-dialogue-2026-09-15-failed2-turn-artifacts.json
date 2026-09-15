@@ -1,0 +1,3156 @@
+{
+  "answers": [
+    {
+      "answer_text": "Предварительно я бы смотрел в первую очередь на 5 кВт и выше: рабочая сумма ваших нагрузок — около 2,9 кВт, но это расчёт только работающих приборов. Пуск холодильника и насоса не подтверждён, поэтому окончательно считать генератор достаточным пока нельзя.\n\nВарианты из каталога:\n1. **Генератор бензиновый инверторный ТСС SGG 5000EI (5,0 кВт) 060040** — предварительный основной вариант: номинально 5 кВт, однофазный 230 В. Запас относительно рабочей нагрузки — около 2,1 кВт, но способность уверенно запускать именно ваш насос нужно подтвердить по его шильдику.\n2. **Генератор бензиновый A-iPower A6500 (6,0 кВт) 20108** — более мощный предварительный вариант: номинально 6 кВт, однофазный 230 В. Это уже заметно выше рабочей нагрузки, но модель крупнее и тяжелее; пуск насоса всё равно не подтверждён.\n3. **Генератор бензиновый инверторный ТСС SGG 4200Ei (3,8 кВт) 060036** — более компактный вариант: в каталоге указана номинальная мощность 3–3,8 кВт, 230 В, 1 фаза. По рабочей нагрузке проходит предварительно, но запас небольшой — поэтому ставлю его после моделей на 5 и 6 кВт.\n\nМодели на 2,8 кВт не включаю: их номинальная мощность ниже уже подтверждённой рабочей нагрузки 2,9 кВт. Для финального выбора нужен один факт от насоса: модель или данные шильдика с пусковым током/мощностью. Какой именно насос планируется — его марка и модель?",
+      "contract": {
+        "factsUsed": [
+          {
+            "value": "бензин",
+            "factKey": "fuel_type",
+            "attribute": "fuel_type",
+            "claimKind": "confirmed_value",
+            "productName": null,
+            "sourceEventIds": [
+              "fact.confirmed:fc7f98beca0fb50323e850f3968a4e63"
+            ],
+            "evidenceItemIds": []
+          },
+          {
+            "value": "single_phase",
+            "factKey": "phase",
+            "attribute": "phase",
+            "claimKind": "confirmed_value",
+            "productName": null,
+            "sourceEventIds": [
+              "fact.confirmed:e85ed96dfeeb9405507ce5b000be5b22"
+            ],
+            "evidenceItemIds": []
+          },
+          {
+            "value": 0.3,
+            "factKey": "refrigerator_running_power",
+            "attribute": "runningKw",
+            "claimKind": "confirmed_value",
+            "productName": null,
+            "sourceEventIds": [
+              "calc_generator_workshop_1"
+            ],
+            "evidenceItemIds": [
+              "calc_generator_workshop_1:payload:loads:0:runningKw"
+            ]
+          },
+          {
+            "value": 1.1,
+            "factKey": "pump_running_power",
+            "attribute": "runningKw",
+            "claimKind": "confirmed_value",
+            "productName": null,
+            "sourceEventIds": [
+              "calc_generator_workshop_1"
+            ],
+            "evidenceItemIds": [
+              "calc_generator_workshop_1:payload:loads:1:runningKw"
+            ]
+          },
+          {
+            "value": 1.5,
+            "factKey": "tool_running_power",
+            "attribute": "runningKw",
+            "claimKind": "confirmed_value",
+            "productName": null,
+            "sourceEventIds": [
+              "calc_generator_workshop_1"
+            ],
+            "evidenceItemIds": [
+              "calc_generator_workshop_1:payload:loads:2:runningKw"
+            ]
+          },
+          {
+            "value": 2.9,
+            "factKey": "combined_running_load",
+            "attribute": "totalRunningKw",
+            "claimKind": "confirmed_value",
+            "productName": null,
+            "sourceEventIds": [
+              "calc_generator_workshop_1"
+            ],
+            "evidenceItemIds": [
+              "calc_generator_workshop_1:payload:loads:0:runningKw",
+              "calc_generator_workshop_1:payload:loads:1:runningKw",
+              "calc_generator_workshop_1:payload:loads:2:runningKw"
+            ]
+          },
+          {
+            "value": "not_provided",
+            "factKey": "pump_starting_power_unknown",
+            "attribute": "startingSource",
+            "claimKind": "absence_or_unknown",
+            "productName": null,
+            "sourceEventIds": [
+              "calc_generator_workshop_1"
+            ],
+            "evidenceItemIds": [
+              "calc_generator_workshop_1:payload:loads:1:startingSource"
+            ]
+          },
+          {
+            "value": "not_provided",
+            "factKey": "refrigerator_starting_power_unknown",
+            "attribute": "startingSource",
+            "claimKind": "absence_or_unknown",
+            "productName": null,
+            "sourceEventIds": [
+              "calc_generator_workshop_1"
+            ],
+            "evidenceItemIds": [
+              "calc_generator_workshop_1:payload:loads:0:startingSource"
+            ]
+          },
+          {
+            "value": "not_provided",
+            "factKey": "tool_starting_power_unknown",
+            "attribute": "startingSource",
+            "claimKind": "absence_or_unknown",
+            "productName": null,
+            "sourceEventIds": [
+              "calc_generator_workshop_1"
+            ],
+            "evidenceItemIds": [
+              "calc_generator_workshop_1:payload:loads:2:startingSource"
+            ]
+          },
+          {
+            "value": "5 кВт",
+            "factKey": "tss_5000ei_rated_power",
+            "attribute": "ratedPower",
+            "claimKind": "confirmed_value",
+            "productName": "Генератор бензиновый инверторный ТСС SGG 5000EI (5,0 кВт) 060040",
+            "sourceEventIds": [
+              "verified_fact:8a3ea242-d990-4343-bf4b-f157f253a17d"
+            ],
+            "evidenceItemIds": []
+          },
+          {
+            "value": "230 В, 1 фаза",
+            "factKey": "tss_5000ei_phase_voltage",
+            "attribute": "voltage",
+            "claimKind": "confirmed_value",
+            "productName": "Генератор бензиновый инверторный ТСС SGG 5000EI (5,0 кВт) 060040",
+            "sourceEventIds": [
+              "verified_fact:a8a88578-e999-4a4d-ad0b-94be853f18a5"
+            ],
+            "evidenceItemIds": []
+          },
+          {
+            "value": "6000 Вт",
+            "factKey": "aipower_a6500_rated_power",
+            "attribute": "ratedPower",
+            "claimKind": "confirmed_value",
+            "productName": "Генератор бензиновый A-iPower A6500 (6,0 кВт) 20108",
+            "sourceEventIds": [
+              "verified_fact:87c0aedd-a1e4-4e21-ab0b-66615a2cfdaa"
+            ],
+            "evidenceItemIds": []
+          },
+          {
+            "value": "1, 230 В / 50 Гц, ток 26,1 А, cosφ 1",
+            "factKey": "aipower_a6500_phase",
+            "attribute": "phases",
+            "claimKind": "confirmed_value",
+            "productName": "Генератор бензиновый A-iPower A6500 (6,0 кВт) 20108",
+            "sourceEventIds": [
+              "verified_fact:3ebb41da-58fc-4039-8c86-c70d95ca84f4"
+            ],
+            "evidenceItemIds": []
+          },
+          {
+            "value": "3–3.8 кВт / 3.8 кВА",
+            "factKey": "tss_4200ei_rated_power",
+            "attribute": "ratedPower",
+            "claimKind": "confirmed_value",
+            "productName": "Генератор бензиновый инверторный ТСС SGG 4200Ei (3,8 кВт) 060036",
+            "sourceEventIds": [
+              "search_generator_workshop_1"
+            ],
+            "evidenceItemIds": [
+              "search_generator_workshop_1:product:6c3851c2-0067-4c34-8290-4f18a5181d00:spec:ratedPower"
+            ]
+          },
+          {
+            "value": "230 В, 1 фаза",
+            "factKey": "tss_4200ei_voltage",
+            "attribute": "voltage",
+            "claimKind": "confirmed_value",
+            "productName": "Генератор бензиновый инверторный ТСС SGG 4200Ei (3,8 кВт) 060036",
+            "sourceEventIds": [
+              "search_generator_workshop_1"
+            ],
+            "evidenceItemIds": [
+              "search_generator_workshop_1:product:6c3851c2-0067-4c34-8290-4f18a5181d00:spec:voltage"
+            ]
+          },
+          {
+            "value": "бензиновые",
+            "factKey": "tss_4200ei_fuel",
+            "attribute": "вид топлива",
+            "claimKind": "confirmed_value",
+            "productName": "Генератор бензиновый инверторный ТСС SGG 4200Ei (3,8 кВт) 060036",
+            "sourceEventIds": [
+              "search_generator_workshop_1"
+            ],
+            "evidenceItemIds": [
+              "search_generator_workshop_1:product:6c3851c2-0067-4c34-8290-4f18a5181d00:spec:вид топлива"
+            ]
+          }
+        ],
+        "riskFlags": [
+          "preliminary_fit_only",
+          "pump_starting_load_unknown",
+          "refrigerator_starting_load_unknown",
+          "tool_starting_load_unknown",
+          "running_load_is_not_sufficient_startup_capacity"
+        ],
+        "answerText": "Предварительно я бы смотрел в первую очередь на 5 кВт и выше: рабочая сумма ваших нагрузок — около 2,9 кВт, но это расчёт только работающих приборов. Пуск холодильника и насоса не подтверждён, поэтому окончательно считать генератор достаточным пока нельзя.\n\nВарианты из каталога:\n1. **Генератор бензиновый инверторный ТСС SGG 5000EI (5,0 кВт) 060040** — предварительный основной вариант: номинально 5 кВт, однофазный 230 В. Запас относительно рабочей нагрузки — около 2,1 кВт, но способность уверенно запускать именно ваш насос нужно подтвердить по его шильдику.\n2. **Генератор бензиновый A-iPower A6500 (6,0 кВт) 20108** — более мощный предварительный вариант: номинально 6 кВт, однофазный 230 В. Это уже заметно выше рабочей нагрузки, но модель крупнее и тяжелее; пуск насоса всё равно не подтверждён.\n3. **Генератор бензиновый инверторный ТСС SGG 4200Ei (3,8 кВт) 060036** — более компактный вариант: в каталоге указана номинальная мощность 3–3,8 кВт, 230 В, 1 фаза. По рабочей нагрузке проходит предварительно, но запас небольшой — поэтому ставлю его после моделей на 5 и 6 кВт.\n\nМодели на 2,8 кВт не включаю: их номинальная мощность ниже уже подтверждённой рабочей нагрузки 2,9 кВт. Для финального выбора нужен один факт от насоса: модель или данные шильдика с пусковым током/мощностью. Какой именно насос планируется — его марка и модель?",
+        "leadAction": "none",
+        "toolResultIds": [
+          "calc_generator_workshop_1",
+          "search_generator_workshop_1",
+          "research_pump_start_1"
+        ],
+        "questionsAsked": [
+          {
+            "text": "Какой именно насос планируется — его марка и модель?",
+            "reason": "Нужно определить пусковую нагрузку и перевести предварительный подбор в финальный.",
+            "questionId": "pump_model_or_nameplate"
+          }
+        ],
+        "selectedProductIds": [
+          "de89e8c4-3a4c-4eb2-9ed9-2dff32ca325d",
+          "7c9f5ad5-89f8-4d05-83b0-82db074033fd",
+          "6c3851c2-0067-4c34-8290-4f18a5181d00"
+        ],
+        "selectionRationale": "Показаны три предварительных кандидата с подтверждённым бензиновым однофазным исполнением и номинальной мощностью от 3,8 до 6 кВт; модели 5 и 6 кВт поставлены выше из-за большего численного запаса над рабочей нагрузкой 2,9 кВт. Пусковая способность для насоса пока не подтверждена.",
+        "selectionReadiness": {
+          "status": "ready_for_preliminary_cards",
+          "rationale": "Есть заявленные требования по бензиновому топливу, однофазному 230 В и рабочей нагрузке 2,9 кВт, а каталог содержит кандидатов с номиналом выше рабочей нагрузки. Точные пусковые нагрузки не установлены, поэтому карточки допустимы только как предварительные.",
+          "missingFacts": [
+            "Пусковой ток или пусковая мощность циркуляционного насоса 1,1 кВт",
+            "Пусковая нагрузка холодильника",
+            "Пусковая нагрузка инструмента"
+          ],
+          "productClass": "generator",
+          "canShowProductCards": true
+        }
+      },
+      "review": null,
+      "status": "draft",
+      "created_at": "2026-09-15T10:27:26.434Z"
+    }
+  ],
+  "tools": [
+    {
+      "tool_name": "calculator.generatorLoad",
+      "tool_request_id": "calc_generator_workshop_1",
+      "status": "ok",
+      "payload": {
+        "loads": [
+          {
+            "kind": "refrigerator",
+            "name": "холодильник",
+            "count": 1,
+            "source": "explicit_user",
+            "evidence": "холодильник 300 Вт",
+            "basisKind": "exact_power",
+            "runningKw": 0.3,
+            "basisSignals": [
+              "consumer_type_known",
+              "explicit_power",
+              "simultaneous_operation_known"
+            ],
+            "operationMode": "continuous",
+            "runningSource": "explicit_user",
+            "coRunningGroup": "all",
+            "startingSource": "not_provided",
+            "runningObservedKw": 0.3
+          },
+          {
+            "kind": "pump",
+            "name": "циркуляционный насос",
+            "count": 1,
+            "source": "explicit_user",
+            "evidence": "циркуляционный насос 1,1 кВт",
+            "basisKind": "exact_power",
+            "runningKw": 1.1,
+            "basisSignals": [
+              "consumer_type_known",
+              "consumer_function_known",
+              "explicit_power",
+              "simultaneous_operation_known"
+            ],
+            "operationMode": "continuous",
+            "runningSource": "explicit_user",
+            "coRunningGroup": "all",
+            "startingSource": "not_provided",
+            "runningObservedKw": 1.1
+          },
+          {
+            "kind": "workshop_tool",
+            "name": "инструмент",
+            "count": 1,
+            "source": "explicit_user",
+            "evidence": "инструмент около 1,5 кВт",
+            "basisKind": "exact_power",
+            "runningKw": 1.5,
+            "basisSignals": [
+              "consumer_type_known",
+              "explicit_power",
+              "simultaneous_operation_known"
+            ],
+            "operationMode": "occasional",
+            "runningSource": "explicit_user",
+            "coRunningGroup": "after_pump",
+            "startingSource": "not_provided",
+            "runningObservedKw": 1.5
+          }
+        ],
+        "profile": {
+          "items": [
+            {
+              "kind": "refrigerator",
+              "name": "холодильник",
+              "count": 1,
+              "source": "explicit_user",
+              "evidence": "холодильник 300 Вт",
+              "basisKind": "exact_power",
+              "runningKw": 0.3,
+              "basisSignals": [
+                "consumer_type_known",
+                "explicit_power",
+                "simultaneous_operation_known"
+              ],
+              "operationMode": "continuous",
+              "runningSource": "explicit_user",
+              "coRunningGroup": "all",
+              "startingSource": "not_provided",
+              "runningObservedKw": 0.3
+            },
+            {
+              "kind": "pump",
+              "name": "циркуляционный насос",
+              "count": 1,
+              "source": "explicit_user",
+              "evidence": "циркуляционный насос 1,1 кВт",
+              "basisKind": "exact_power",
+              "runningKw": 1.1,
+              "basisSignals": [
+                "consumer_type_known",
+                "consumer_function_known",
+                "explicit_power",
+                "simultaneous_operation_known"
+              ],
+              "operationMode": "continuous",
+              "runningSource": "explicit_user",
+              "coRunningGroup": "all",
+              "startingSource": "not_provided",
+              "runningObservedKw": 1.1
+            },
+            {
+              "kind": "workshop_tool",
+              "name": "инструмент",
+              "count": 1,
+              "source": "explicit_user",
+              "evidence": "инструмент около 1,5 кВт",
+              "basisKind": "exact_power",
+              "runningKw": 1.5,
+              "basisSignals": [
+                "consumer_type_known",
+                "explicit_power",
+                "simultaneous_operation_known"
+              ],
+              "operationMode": "occasional",
+              "runningSource": "explicit_user",
+              "coRunningGroup": "after_pump",
+              "startingSource": "not_provided",
+              "runningObservedKw": 1.5
+            }
+          ],
+          "scenarios": [
+            {
+              "id": "base",
+              "label": "base continuous load",
+              "itemKinds": [
+                "refrigerator:холодильник",
+                "pump:циркуляционный_насос",
+                "workshop_tool:инструмент"
+              ],
+              "calculation": "холодильник: 1 x 0.3 kW run / ? kW start; циркуляционный насос: 1 x 1.1 kW run / ? kW start; инструмент: 1 x 1.5 kW run / ? kW start",
+              "totalRunningKw": 2.9,
+              "missingStartingLoads": [
+                "refrigerator:холодильник",
+                "pump:циркуляционный_насос",
+                "workshop_tool:инструмент"
+              ],
+              "runningOnlyNominalFloorKw": 3
+            }
+          ],
+          "calculation": "холодильник: 1 x 0.3 kW run / ? kW start; циркуляционный насос: 1 x 1.1 kW run / ? kW start; инструмент: 1 x 1.5 kW run / ? kW start",
+          "totalRunningKw": 2.9,
+          "primaryScenarioId": "base",
+          "simultaneousRunning": true,
+          "missingStartingLoads": [
+            "refrigerator:холодильник",
+            "pump:циркуляционный_насос",
+            "workshop_tool:инструмент"
+          ],
+          "simultaneousStarting": false,
+          "runningOnlyNominalFloorKw": 3,
+          "simultaneousStartingKinds": []
+        },
+        "estimateBasis": "bounded_assumption"
+      },
+      "warnings": [
+        "generator_load_startup_unconfirmed",
+        "attempts:1",
+        "duration_ms:8"
+      ],
+      "error_code": null,
+      "created_at": "2026-09-15T10:26:26.046Z"
+    },
+    {
+      "tool_name": "catalog.search",
+      "tool_request_id": "search_generator_workshop_1",
+      "status": "ok",
+      "payload": {
+        "query": "Бензиновые однофазные генераторы 220 В для нагрузки около 2,9 кВт",
+        "products": [
+          {
+            "id": "75f0c0be-c4b9-4704-a6a3-da0ddd2ac272",
+            "raw": {},
+            "name": "Генератор бензиновый инверторный ТСС SGG 3000SI (2,8 кВт) 060054",
+            "slug": "catalog/invertornye_generatory/generator_benzinovyy_invertornyy_tss_sgg_3000si_2_8_kvt",
+            "brand": "ТСС",
+            "price": 53360,
+            "specs": {
+              "tankL": "5.6–6 л (конфликт)",
+              "engine": "KM165F (149 см3)",
+              "ecoMode": "да",
+              "voltage": "230 В, 1 фаза",
+              "inverter": "да",
+              "weightKg": "21 (060054); 30 (060038 у части дилеров)",
+              "noiseDb7m": "58–60 дБ",
+              "ratedPower": "2.8 кВт (арт.060054); для 060038 часть дилеров указывает 3/3.5 кВт",
+              "бак, л": "5.6–6 л (конфликт)",
+              "autonomy75h": "3.45–4 ч",
+              "dimensionsMm": "480×300×460 (арт.060054)",
+              "вес, кг": "21 (060054); 30 (060038 у части дилеров)",
+              "артикул": "060054",
+              "дисплей": "Да",
+              "стартер": "с ручным стартером",
+              "protectionClass": "IP23",
+              "fuelConsumption75": "1.5–1.62 л/ч (конфликт по артикулам)",
+              "число фаз": "однофазные",
+              "двигатель": "LIFAN",
+              "тип кожуха": "Открытый",
+              "автозапуск": "без автозапуска",
+              "частота, гц": "50",
+              "вид топлива": "бензиновые",
+              "альтернатор": "Синхронный",
+              "габариты, мм": "480×300×460 (арт.060054)",
+              "датчик масла": "с датчиком масла",
+              "класс товара": "Стандарт",
+              "контейнерный": "Нет",
+              "напряжение, в": "230В",
+              "родина бренда": "РОССИЯ",
+              "тип двигателя": "четырехтактные",
+              "производитель": "ТСС",
+              "max. мощность, квт": "3",
+              "базовая единица": "шт",
+              "модель двигателя": "LIFAN",
+              "вес в упаковке, кг": "26,8",
+              "счетчик моточасов": "со счетчиком моточасов",
+              "расход топлива, л/ч": "1.5",
+              "страна производства": "Россия/Российские (отечественные)",
+              "высота в упаковке, мм": "530",
+              "ширина в упаковке, мм": "450",
+              "мощность номинальная": "2.8 кВт (арт.060054); для 060038 часть дилеров указывает 3/3.5 кВт",
+              "гарантия производителя": "12 месяцев",
+              "аккумулятор в комплекте": "без аккумулятора в комплекте",
+              "индикатор уровня топлива": "с индикатором уровня топлива",
+              "емкость топливного бака, л": "5.6",
+              "производитель оборудования": "ТСС",
+              "габариты без упаковки (д/ш/в), мм": "620х450х530",
+              "обмотка альтернатора двигателя": "Медь",
+              "расход топлива при 75% нагрузке, л": "1,5",
+              "мощность номинальная при 220 в, квт": "2.8"
+            },
+            "category": "Инверторные генераторы",
+            "currency": "RUB",
+            "imageUrl": "https://bakautprof.ru/upload/iblock/6b0/pd6973x5003v6j2ufxigwc5l0pb8irzb.jpeg",
+            "isActive": true,
+            "sourceUrl": "https://bakautprof.ru/catalog/invertornye_generatory/generator_benzinovyy_invertornyy_tss_sgg_3000si_2_8_kvt/",
+            "externalId": "bakaut:catalog/invertornye_generatory/generator_benzinovyy_invertornyy_tss_sgg_3000si_2_8_kvt",
+            "lastSeenAt": "2026-04-26T20:09:50.459Z",
+            "description": "Бензогенератор инверторный SGG 3000Si в шумопоглащающем кожухе предназначен для подключения к нему потребителей тока общей номинальной мощностью 2,8 кВт. Переносной компактный инверторный генератор предназначен для питания электроприборов, на загородном участке, в походе, на рыбалке. Благодаря использованию в этой модели инверторного преобразователя, на выходе получается стабильный ток, \\без каких-либо скачков, генератор способен регулировать работу двигателя в зависимости от нагрузки: к примеру, если нагрузка составляет половину от выходной мощности, то и мощность двигателя снижается вдвое; это дает значительную экономию топлива. Инверторные модели получаются более легкими и компактными, чем традиционные генераторы. Благодаря двигателю, специально разработанному под инверторный генератор и особенной конструкции корпуса, удалось значительно понизить уровень шума. Режим ECO обеспечивает экономичный расход топлива, синхронный альтернатор с медными обмотками ротора и статора увеличивает ресурс двигателя. Выход 12 вольт позволяет подзарядить автомобильный аккумулятор в экстренном случае. Инверторный генератор считается оптимальным выбором для нагрузки, чувствительной к качеству тока — такой, как аудиотехника или телевизор. Особенности конструкции: Система перевода двигателя в экономичный режим Индикаторы на панели показывают параметры напряжения, превышение мощности генератора, низкий уровень масла. Медная обмотка альтернатора Защита от короткого замыкания, перегрузки и низкого уровня масла Шумозащитный кожух Антивибрационные резиновые ножки Экономичный расход топлива Стабильный ток для точных приборов",
+            "lastSyncedAt": "2026-04-26T20:09:50.459Z",
+            "retrievalScore": 0,
+            "retrievalSource": "text",
+            "technicalVersion": "986245a60672a8435e8047243309be3b03e56968515de045beea090bfb3c17c9",
+            "sourceContentHash": "70afcef2c1fa7015286e2df13547535e569ed8fa291259b08c26c62212802508"
+          },
+          {
+            "id": "6c3851c2-0067-4c34-8290-4f18a5181d00",
+            "raw": {},
+            "name": "Генератор бензиновый инверторный ТСС SGG 4200Ei (3,8 кВт) 060036",
+            "slug": "catalog/invertornye_generatory/generator_benzinovyy_invertornyy_tss_sgg_4200ei_3_8_kvt_060036",
+            "brand": "ТСС",
+            "price": 67425,
+            "specs": {
+              "tankL": "15 л",
+              "engine": "SV230 / KM172F(KM172Fi) (223 см3, 7.5 л.с.)",
+              "voltage": "230 В, 1 фаза",
+              "avrReady": "разъём АВР (опция арт.190077)",
+              "inverter": "да",
+              "maxPower": "4.2–4.8 кВт (по артикулам)",
+              "weightKg": "38.1–42",
+              "noiseDb7m": "74 дБ",
+              "ratedPower": "3–3.8 кВт / 3.8 кВА",
+              "бак, л": "15 л",
+              "autonomy75h": "6 ч",
+              "вес, кг": "38.1–42",
+              "артикул": "060036",
+              "дисплей": "Да",
+              "стартер": "ручной стартер / электростартер",
+              "protectionClass": "IP23",
+              "fuelConsumption75": "2.5 л/ч",
+              "число фаз": "однофазные",
+              "двигатель": "ТСС",
+              "тип кожуха": "Открытый",
+              "автозапуск": "без автозапуска",
+              "частота, гц": "50",
+              "вид топлива": "бензиновые",
+              "альтернатор": "Синхронный",
+              "габариты, мм": "605x488x560",
+              "датчик масла": "с датчиком масла",
+              "класс товара": "Бытовой",
+              "контейнерный": "Нет",
+              "напряжение, в": "230В",
+              "родина бренда": "РОССИЯ",
+              "тип двигателя": "четырехтактные",
+              "max. мощность, квт": "4.2–4.8 кВт (по артикулам)",
+              "базовая единица": "шт",
+              "модель двигателя": "ТСС",
+              "вес в упаковке, кг": "42",
+              "номинальный ток, а": "16",
+              "счетчик моточасов": "со счетчиком моточасов",
+              "расход топлива, л/ч": "2.5",
+              "страна производства": "Китай/Китайские",
+              "высота в упаковке, мм": "580",
+              "ширина в упаковке, мм": "547",
+              "мощность номинальная": "3–3.8 кВт / 3.8 кВА",
+              "число оборотов, об/мин": "3600",
+              "гарантия производителя": "12 месяцев",
+              "мощность двигателя, л.с.": "7.5",
+              "аккумулятор в комплекте": "с аккумулятором в комплекте",
+              "индикатор уровня топлива": "с индикатором уровня топлива",
+              "единица товара в упаковке": "Штука",
+              "емкость топливного бака, л": "15",
+              "производитель оборудования": "ТСС",
+              "габариты без упаковки (д/ш/в), мм": "605x488x560",
+              "мощность номинальная при 220 в, квт": "3.8"
+            },
+            "category": "Инверторные генераторы",
+            "currency": "RUB",
+            "imageUrl": "https://bakautprof.ru/upload/iblock/8fc/020ynosfxrcqlm00ptt2apcianmx6np3.jpeg",
+            "isActive": true,
+            "sourceUrl": "https://bakautprof.ru/catalog/invertornye_generatory/generator_benzinovyy_invertornyy_tss_sgg_4200ei_3_8_kvt_060036/",
+            "externalId": "bakaut:catalog/invertornye_generatory/generator_benzinovyy_invertornyy_tss_sgg_4200ei_3_8_kvt_060036",
+            "lastSeenAt": "2026-04-26T20:09:35.607Z",
+            "description": "Бензогенератор инверторный SGG 4200Ei с электростартом и разъемом для подключения блока автоматики, вырабатывает электричество с высокой точностью частоты и напряжения. Предназначен для подключения к нему потребителей общей максимальной мощностью до 4,2 кВт. Позволяет подключать к генератору как обычных потребителей, так и точное электронное оборудование, например, ноутбуки, LCD-телевизоры или смартфон. Благодаря использованию В этой модели инверторного преобразователя, на выходе получается стабильный ток, без каких-либо скачков, генератор способен регулировать работу двигателя в зависимости от нагрузки: к примеру, если нагрузка составляет половину от выходной мощности, то и мощность двигателя снижается вдвое; это дает значительную экономию топлива, инверторные модели получаются более легкими и компактными, чем традиционные генераторы. Благодаря двигателю, специально разработанному под инверторный генератор и особенной конструкции корпуса, удалось значительно понизить уровень шума. Режим ECO экономит топливо и увеличивает ресурс двигателя. Выход 12 вольт позволяет подзарядить автомобильный аккумулятор в экстренном случае. Инверторный генератор считается оптимальным выбором для нагрузки, чувствительной к качеству тока — такой, как аудиотехника или телевизор.",
+            "lastSyncedAt": "2026-04-26T20:09:35.607Z",
+            "retrievalScore": 0,
+            "retrievalSource": "text",
+            "technicalVersion": "055e7048067124cdbacaaf2c68c1ed15076b1aeab8277e2f78f4c21ff6deb152",
+            "sourceContentHash": "abcc50627896167ed1f912d533257dd8a9f6d0ac01fc0015b112e109a7474abe"
+          },
+          {
+            "id": "101d1ea2-463e-4a69-8e4b-5d2881e7fce7",
+            "raw": {},
+            "name": "Генератор бензиновый инверторный SUNREKA G4000iS (3,5 кВт) 211015",
+            "slug": "catalog/invertornye_generatory/generator_benzinovyy_invertornyy_sunreka_g4000is_3_5_kvt",
+            "brand": "SUNREKA",
+            "price": 53591,
+            "specs": {
+              "артикул": "211015",
+              "дисплей": "Да",
+              "стартер": "ручной стартер",
+              "число фаз": "однофазные",
+              "двигатель": "SUNREKA",
+              "тип кожуха": "Закрытый",
+              "автозапуск": "без автозапуска",
+              "частота, гц": "50",
+              "вид топлива": "бензиновые",
+              "альтернатор": "Синхронный",
+              "датчик масла": "с датчиком масла",
+              "класс товара": "Стандарт",
+              "контейнерный": "Нет",
+              "напряжение, в": "220В",
+              "родина бренда": "КИТАЙ",
+              "тип двигателя": "четырехтактные",
+              "max. мощность, квт": "4",
+              "базовая единица": "шт",
+              "счетчик моточасов": "со счетчиком моточасов",
+              "расход топлива, л/ч": "2.32",
+              "страна производства": "Китай/Китайские",
+              "гарантия производителя": "12 месяцев",
+              "аккумулятор в комплекте": "без аккумулятора в комплекте",
+              "индикатор уровня топлива": "с индикатором уровня топлива",
+              "емкость топливного бака, л": "5.8",
+              "производитель оборудования": "SUNREKA",
+              "габариты без упаковки (д/ш/в), мм": "540×310×500",
+              "обмотка альтернатора двигателя": "Медь",
+              "мощность номинальная при 220 в, квт": "3.5"
+            },
+            "category": "Инверторные генераторы",
+            "currency": "RUB",
+            "imageUrl": "https://bakautprof.ru/upload/iblock/a39/nhxs7tcujfegj29hk544xfufwuc615yg.png",
+            "isActive": true,
+            "sourceUrl": "https://bakautprof.ru/catalog/invertornye_generatory/generator_benzinovyy_invertornyy_sunreka_g4000is_3_5_kvt/",
+            "externalId": "bakaut:catalog/invertornye_generatory/generator_benzinovyy_invertornyy_sunreka_g4000is_3_5_kvt",
+            "lastSeenAt": "2026-04-26T20:09:55.700Z",
+            "description": "Откройте новые горизонты комфорта и надёжности с инверторными генераторами SUNREKA – компактными, тихими и лёгкими электростанциями премиального уровня. Эти многофункциональные устройства созданы для питания самых требовательных к качеству тока электроприборов. Чистая синусоида для чувствительных устройствТехнология PURE SINE OUTPUT гарантирует подачу напряжения с минимальным коэффициентом нелинейных искажений (THD) – менее 3% во всех режимах нагрузки. Это делает генераторы SUNREKA идеальными для радиоаппаратуры, измерительных приборов, акустики и сложной электроники.",
+            "lastSyncedAt": "2026-04-26T20:09:55.700Z",
+            "retrievalScore": 0,
+            "retrievalSource": "text",
+            "technicalVersion": "460f9ee80fb13ccc185946aee3730bc9f34476ff06bfc1258fef5fe3f1dacd0e",
+            "sourceContentHash": "8fb9d4292b28ae385242ac5522d22364842fd82214d6a1dd72ca8d77a6abded1"
+          },
+          {
+            "id": "7c9f5ad5-89f8-4d05-83b0-82db074033fd",
+            "raw": {},
+            "name": "Генератор бензиновый A-iPower A6500 (6,0 кВт) 20108",
+            "slug": "catalog/benzinovye_generatory/generator_benzinovyy_a_ipower_a6500_6_0_kvt",
+            "brand": "A-iPower",
+            "price": 74990,
+            "specs": {
+              "usb": "true",
+              "tankL": "40",
+              "phases": "1, 230 В / 50 Гц, ток 26,1 А, cosφ 1",
+              "display": "цифровой",
+              "oilType": "SAE 10W-40",
+              "outlets": "2×230В/16А + 1 силовая 230В/32А + USB",
+              "starter": "ручной (A6500) / ручной+электро+АВР (A6500EA)",
+              "ipRating": "IP23",
+              "maxPower": "6500 Вт",
+              "weightKg": "82.7",
+              "engineRpm": "3600/3000",
+              "noiseDb7m": "82",
+              "engineType": "4-тактный OHV, 420 см3, 1 цилиндр, воздушное охлаждение",
+              "ratedPower": "6000 Вт",
+              "бак, л": "40",
+              "enginePower": "9,6 кВт / 13,0 л.с. при 3600 об/мин; 9,0 кВт / 12,3 л.с. при 3000 об/мин",
+              "runtime100h": "11.3",
+              "dimensionsMm": "710×534×605",
+              "wheelsHandle": "приобретается отдельно",
+              "вес, кг": "82.7",
+              "артикул": "20108",
+              "дисплей": "Да",
+              "стартер": "ручной (A6500) / ручной+электро+АВР (A6500EA)",
+              "packageWeightKg": "88.4",
+              "soundPressureDbA": "102",
+              "число фаз": "однофазные",
+              "двигатель": "A-iPower",
+              "тип кожуха": "Открытый",
+              "автозапуск": "без автозапуска",
+              "частота, гц": "50",
+              "вид топлива": "бензиновые",
+              "альтернатор": "Синхронный",
+              "габариты, мм": "710×534×605",
+              "датчик масла": "с датчиком масла",
+              "контейнерный": "Нет",
+              "напряжение, в": "230В",
+              "родина бренда": "СОЕДИНЕННЫЕ ШТАТЫ",
+              "тип двигателя": "4-тактный OHV, 420 см3, 1 цилиндр, воздушное охлаждение",
+              "fuelConsumption25_50_75_100": "2,0 / 2,4 / 3,0 / 3,6 л/ч",
+              "max. мощность, квт": "6500 Вт",
+              "базовая единица": "шт",
+              "модель двигателя": "A-iPower",
+              "вес в упаковке, кг": "85,2",
+              "счетчик моточасов": "без счетчика моточасов",
+              "расход топлива, л/ч": "2,0 / 2,4 / 3,0 / 3,6 л/ч",
+              "система охлаждения": "Воздушная",
+              "страна производства": "Китай/Китайские",
+              "высота в упаковке, мм": "650",
+              "ширина в упаковке, мм": "559",
+              "мощность номинальная": "6000 Вт",
+              "гарантия производителя": "4 года",
+              "мощность двигателя, л.с.": "14",
+              "аккумулятор в комплекте": "без аккумулятора в комплекте",
+              "индикатор уровня топлива": "с индикатором уровня топлива",
+              "емкость топливного бака, л": "40",
+              "производитель оборудования": "A-iPower",
+              "габариты без упаковки (д/ш/в), мм": "710x534x605",
+              "расход топлива при 75% нагрузке, л": "2,954",
+              "мощность номинальная при 220 в, квт": "6"
+            },
+            "category": "Бензиновые генераторы",
+            "currency": "RUB",
+            "imageUrl": "https://bakautprof.ru/upload/iblock/7e1/ld5zii41lhcleyxbhxhtkbf8ad90ugul.png",
+            "isActive": true,
+            "sourceUrl": "https://bakautprof.ru/catalog/benzinovye_generatory/generator_benzinovyy_a_ipower_a6500_6_0_kvt/",
+            "externalId": "bakaut:catalog/benzinovye_generatory/generator_benzinovyy_a_ipower_a6500_6_0_kvt",
+            "lastSeenAt": "2026-04-26T20:08:02.278Z",
+            "description": "Бензогенератор A-iPower A6500-резервный однофазный (230В) источник электропитания максимальной мощностью 6.5 кВт, номинальной мощностью 6.0 кВт. Электрогенератор A-iPower A6500 укомплектован четырехтактным гильзованым OHV-двигателем объемом 420 см3 с ручным запуском. Имеет три розетки, две на 230 Вольт /16 Ампер и одну силовую розетку 230 Вольт/32 Ампера, а также USB-выход. Генератор A-iPower A6500 может быть доукомплектован транспортировочным комплектом (колеса и ручки) Преимущества и особенности • Автомат защиты от перегрузки. Срабатывает при подключении избыточной нагрузки на электрогенератор. • Электронный регулятор оборотов (AVR) нового поколения. Генератор вырабатывает ток с максимально стабильным напряжением. • Цифровой дисплей в режиме реального времени показывает значения выдаваемой мощности, напряжение, количество моточасов. • Защита от низкого уровня масла. Генератор не заведется при недостаточном количестве масла в картере, информация о низком уровне масла отображается на дисплее. • Увеличенный бак 40 литров. Обеспечивает 11,5 часов бесперебойной работы без дозаправки при 100%-й нагрузки и 16.5 часов при 50%-й нагрузки. • Защита розеток от пыли и влаги. Позволяет хранить бензогенератор как в помещении, так и на улице и обеспечивает безопасную эксплуатацию генераторной установки. • USB-выход. Безопасная зарядка смартфонов, планшетов и других гаджетов. • Защита от сколов и царапин. Фирменное защитное покрытие на раме и баке A-iPower Heavy Duty Protection защищает от быстрого износа рабочих поверхностей бензинового электрогенератора. • Усиленная конструкция выдерживает вес человека (до 100кг). Увеличенный срок эксплуатации бензиновой электростанции. • Уникальный серийный номер. Каждый электрогенератор имеет собственный номер, что обеспечивает защиту от подделок и контроль качества генераторных установок. • 100%-я медная обмотка альтернатора. Гарантированная выдача заявленной мощности. • Полная комплектация. В комплекте с генератором прилагаются вилки на все розетки, предусмотренные в данной модели генератора, воронка для залива масла, свечной ключ. • Расширенная гарантия 4 года при оформлении.",
+            "lastSyncedAt": "2026-04-26T20:08:02.278Z",
+            "retrievalScore": 0,
+            "retrievalSource": "text",
+            "technicalVersion": "7d94add2d3417276d38e4bc0326ad64c36a8df69698464c71a30f36e3c64fb46",
+            "sourceContentHash": "929033fcc97ecd0cb597bd6d01ed5afb8c8132c743397637737421e46b0caa9e"
+          },
+          {
+            "id": "9a0a8257-d699-4366-981e-14e7a12a7b41",
+            "raw": {},
+            "name": "Генератор бензиновый инверторный ТСС SGG 3000ESI (2,8 кВт) 060058",
+            "slug": "catalog/invertornye_generatory/generator_benzinovyy_invertornyy_tss_sgg_3000esi_2_8_kvt",
+            "brand": "ТСС",
+            "price": 63840,
+            "specs": {
+              "start": "электростартер (кнопка)",
+              "tankL": "5.6 л",
+              "engine": "KM165FD (165 см3, 4.5 л.с.)",
+              "usbOut": "да",
+              "voltage": "230 В, 1 фаза",
+              "inverter": "да",
+              "maxPower": "3 кВт",
+              "noiseDb7m": "58–60 дБ",
+              "ratedPower": "2.8 кВт",
+              "бак, л": "5.6 л",
+              "вес, кг": null,
+              "артикул": "060058",
+              "дисплей": "Да",
+              "стартер": "ручной стартер / электростартер",
+              "protectionClass": "IP23",
+              "fuelConsumption75": "1.5 л/ч",
+              "число фаз": "однофазные",
+              "двигатель": "LIFAN",
+              "тип кожуха": "Закрытый",
+              "автозапуск": "без автозапуска",
+              "частота, гц": "50",
+              "вид топлива": "бензиновые",
+              "альтернатор": "Синхронный",
+              "габариты, мм": "490х300х460",
+              "датчик масла": "с датчиком масла",
+              "класс товара": "Бытовой",
+              "контейнерный": "Нет",
+              "напряжение, в": "230В",
+              "родина бренда": "РОССИЯ",
+              "тип двигателя": "четырехтактные",
+              "производитель": "ТСС",
+              "max. мощность, квт": "3 кВт",
+              "базовая единица": "шт",
+              "модель двигателя": "LIFAN",
+              "вес в упаковке, кг": "26,8",
+              "счетчик моточасов": "со счетчиком моточасов",
+              "расход топлива, л/ч": "1.5",
+              "страна производства": "Китай/Китайские",
+              "высота в упаковке, мм": "530",
+              "ширина в упаковке, мм": "450",
+              "мощность номинальная": "2.8 кВт",
+              "число оборотов, об/мин": "360",
+              "гарантия производителя": "12 месяцев",
+              "мощность двигателя, л.с.": "4.9",
+              "аккумулятор в комплекте": "без аккумулятора в комплекте",
+              "индикатор уровня топлива": "с индикатором уровня топлива",
+              "емкость топливного бака, л": "5.6",
+              "производитель оборудования": "ТСС",
+              "габариты без упаковки (д/ш/в), мм": "490х300х460",
+              "обмотка альтернатора двигателя": "Медь",
+              "мощность номинальная при 220 в, квт": "2.8"
+            },
+            "category": "Инверторные генераторы",
+            "currency": "RUB",
+            "imageUrl": "https://bakautprof.ru/upload/iblock/b9c/jylwbyx6nd9klo0mtpfwfh64do3kpibv.jpeg",
+            "isActive": true,
+            "sourceUrl": "https://bakautprof.ru/catalog/invertornye_generatory/generator_benzinovyy_invertornyy_tss_sgg_3000esi_2_8_kvt/",
+            "externalId": "bakaut:catalog/invertornye_generatory/generator_benzinovyy_invertornyy_tss_sgg_3000esi_2_8_kvt",
+            "lastSeenAt": "2026-04-26T20:09:50.574Z",
+            "description": "Бензогенератор инверторный SGG 3000ESi в шумопоглащающем кожухе, с электростартом, предназначен для подключения к нему потребителей тока общей номинальной мощностью 2,8 кВт.. Переносной компактный инверторный генератор предназначен для питания электроприборов, на загородном участке, в походе, на рыбалке. Благодаря использованию в этой модели инверторного преобразователя, на выходе получается стабильный ток, без каких-либо скачков, генератор способен регулировать работу двигателя в зависимости от нагрузки: к примеру, если нагрузка составляет половину от выходной мощности, то и мощность двигателя снижается вдвое; это дает значительную экономию топлива. Инверторные модели получаются более легкими и компактными, чем традиционные генераторы. Благодаря двигателю, специально разработанному под инверторный генератор и особенной конструкции корпуса, удалось значительно понизить уровень шума. Режим ECO обеспечивает экономичный расход топлива, синхронный альтернатор с медными обмотками ротора и статора увеличивает ресурс двигателя. Выход 12 вольт позволяет подзарядить автомобильный аккумулятор в экстренном случае. Инверторный генератор считается оптимальным выбором для нагрузки, чувствительной к качеству тока — такой, как аудиотехника или телевизор.",
+            "lastSyncedAt": "2026-04-26T20:09:50.574Z",
+            "retrievalScore": 0,
+            "retrievalSource": "text",
+            "technicalVersion": "944f54b8ca6c101eecac8d6347be108d618d3efe69a99b7fb66fbca00683c98c",
+            "sourceContentHash": "c5251f4c53c0173ae6c78b31d15e5ed0391ef718f2d2d6e678dc4c5af581bc0b"
+          },
+          {
+            "id": "265cfb92-6b4f-4a58-b177-afa40b847f4a",
+            "raw": {},
+            "name": "Генератор бензиновый инверторный SUNREKA G3500i (3,5 кВт) 211019",
+            "slug": "catalog/invertornye_generatory/generator_benzinovyy_invertornyy_sunreka_g3500i_3_5_kvt",
+            "brand": "SUNREKA",
+            "price": 40015.16,
+            "specs": {
+              "артикул": "211019",
+              "дисплей": "Нет",
+              "стартер": "ручной стартер",
+              "число фаз": "однофазные",
+              "двигатель": "SUNREKA",
+              "тип кожуха": "Открытый",
+              "автозапуск": "без автозапуска",
+              "частота, гц": "50",
+              "вид топлива": "бензиновые",
+              "альтернатор": "Синхронный",
+              "датчик масла": "с датчиком масла",
+              "класс товара": "Бытовой",
+              "контейнерный": "Нет",
+              "напряжение, в": "220В",
+              "родина бренда": "КИТАЙ",
+              "тип двигателя": "четырехтактные",
+              "max. мощность, квт": "3.5",
+              "базовая единица": "шт",
+              "счетчик моточасов": "со счетчиком моточасов",
+              "расход топлива, л/ч": "2.1",
+              "страна производства": "Китай/Китайские",
+              "гарантия производителя": "12 месяцев",
+              "аккумулятор в комплекте": "без аккумулятора в комплекте",
+              "индикатор уровня топлива": "с индикатором уровня топлива",
+              "емкость топливного бака, л": "8.5",
+              "производитель оборудования": "SUNREKA",
+              "габариты без упаковки (д/ш/в), мм": "480×345×450",
+              "обмотка альтернатора двигателя": "Медь",
+              "мощность номинальная при 220 в, квт": "3"
+            },
+            "category": "Инверторные генераторы",
+            "currency": "RUB",
+            "imageUrl": "https://bakautprof.ru/upload/iblock/8e5/lxfanwyrs2q8m0cgtg4q7v2aqhrntuk4.jpg",
+            "isActive": true,
+            "sourceUrl": "https://bakautprof.ru/catalog/invertornye_generatory/generator_benzinovyy_invertornyy_sunreka_g3500i_3_5_kvt/",
+            "externalId": "bakaut:catalog/invertornye_generatory/generator_benzinovyy_invertornyy_sunreka_g3500i_3_5_kvt",
+            "lastSeenAt": "2026-04-26T20:09:56.777Z",
+            "description": "Откройте новые горизонты комфорта и надёжности с инверторными генераторами SUNREKA – компактными, тихими и лёгкими электростанциями премиального уровня. Эти многофункциональные устройства созданы для питания самых требовательных к качеству тока электроприборов. Чистая синусоида для чувствительных устройствТехнология PURE SINE OUTPUT гарантирует подачу напряжения с минимальным коэффициентом нелинейных искажений (THD) – менее 3% во всех режимах нагрузки. Это делает генераторы SUNREKA идеальными для радиоаппаратуры, измерительных приборов, акустики и сложной электроники.",
+            "lastSyncedAt": "2026-04-26T20:09:56.777Z",
+            "retrievalScore": 0,
+            "retrievalSource": "text",
+            "technicalVersion": "1b4427a7335ae030c08488d886a6fd33e14d1fe2493528080b31b81a03f7b2b1",
+            "sourceContentHash": "e1f9f9c95585c4041ad6e4114be5341ba4070aef72c9e81dc1a511de723bb011"
+          },
+          {
+            "id": "ebd0acf8-34c4-4bb2-891a-9db84794266e",
+            "raw": {},
+            "name": "Генератор бензиновый инверторный ТСС SGG 7000Ei (7,0 кВт) 060027",
+            "slug": "catalog/invertornye_generatory/generator_benzinovyy_invertornyy_tss_sgg_7000ei_7_0_kvt",
+            "brand": "ТСС",
+            "price": 80913,
+            "specs": {
+              "tankL": "25 л",
+              "engine": "KM192F",
+              "usbOut": "да",
+              "voltage": "230 В, 1 фаза",
+              "inverter": "да",
+              "maxPower": "7.5 кВт",
+              "weightKg": "68.9",
+              "noiseDb7m": "78 дБ",
+              "ratedPower": "7 кВт",
+              "бак, л": "25 л",
+              "dimensionsMm": "700×560×585",
+              "вес, кг": "68.9",
+              "артикул": "060027",
+              "дисплей": "Да",
+              "стартер": "ручной стартер / электростартер",
+              "parallelSupport": "да",
+              "protectionClass": "IP23",
+              "fuelConsumption75": "3.39 л/ч",
+              "число фаз": "однофазные",
+              "двигатель": "ТСС",
+              "тип кожуха": "Открытый",
+              "автозапуск": "без автозапуска",
+              "частота, гц": "50",
+              "вид топлива": "бензиновые",
+              "альтернатор": "Синхронный",
+              "габариты, мм": "700×560×585",
+              "датчик масла": "с датчиком масла",
+              "класс товара": "Бытовой",
+              "контейнерный": "Нет",
+              "напряжение, в": "230В",
+              "родина бренда": "РОССИЯ",
+              "тип двигателя": "четырехтактные",
+              "max. мощность, квт": "7.5 кВт",
+              "базовая единица": "шт",
+              "модель двигателя": "ТСС",
+              "вес в упаковке, кг": "92",
+              "номинальный ток, а": "30,4",
+              "счетчик моточасов": "со счетчиком моточасов",
+              "расход топлива, л/ч": "3.8",
+              "страна производства": "Китай/Китайские",
+              "высота в упаковке, мм": "585",
+              "ширина в упаковке, мм": "560",
+              "мощность номинальная": "7 кВт",
+              "число оборотов, об/мин": "5200",
+              "гарантия производителя": "12 месяцев",
+              "мощность двигателя, л.с.": "17",
+              "аккумулятор в комплекте": "с аккумулятором в комплекте",
+              "индикатор уровня топлива": "с индикатором уровня топлива",
+              "единица товара в упаковке": "Штука",
+              "емкость топливного бака, л": "25",
+              "производитель оборудования": "ТСС",
+              "габариты без упаковки (д/ш/в), мм": "700x560x585",
+              "мощность номинальная при 220 в, квт": "7"
+            },
+            "category": "Инверторные генераторы",
+            "currency": "RUB",
+            "imageUrl": "https://bakautprof.ru/upload/iblock/79b/fkhn6ymzcxx9cwta4nfhd8jndmb7kfan.jpg",
+            "isActive": true,
+            "sourceUrl": "https://bakautprof.ru/catalog/invertornye_generatory/generator_benzinovyy_invertornyy_tss_sgg_7000ei_7_0_kvt/",
+            "externalId": "bakaut:catalog/invertornye_generatory/generator_benzinovyy_invertornyy_tss_sgg_7000ei_7_0_kvt",
+            "lastSeenAt": "2026-04-26T20:09:35.681Z",
+            "description": "Профессиональный инверторный бензиновый генератор SGG 7000Ei, с электростартом и разъемом для подключения блока автоматики. Мощный инверторный генератор обеспечивает идеальное качество тока, дает возможность подключения напрямую электронных устройств, без стабилизатора. Мощная инверторная электростанция подходит не только для частного дома. Номинальная мощность 7,0 кВт электростанции достаточно для работы большого количества высокочувствительных электроприборов, а также оборудования высокой мощности. Электрозапуск обеспечивает быстрый и легкий пуск инвертора. Топливный бак 25 литров, обеспечивает автономную работу агрегата в течение 6,6 часов Благодаря использованию в этой модели инверторного преобразователя, на выходе получается стабильный ток, без каких-либо скачков, генератор способен регулировать работу двигателя в зависимости от нагрузки: к примеру, если нагрузка составляет половину от выходной мощности, то и мощность двигателя снижается вдвое; это дает значительную экономию топлива, инверторные модели получаются более легкими и компактными, чем традиционные генераторы. Благодаря двигателю, специально разработанному под инверторный генератор и особенной конструкции корпуса, удалось значительно понизить уровень шума. Режим ECO экономит топливо и увеличивает ресурс двигателя. Выход 12 вольт позволяет подзарядить автомобильный аккумулятор в экстренном случае. Инверторный генератор считается оптимальным выбором для нагрузки, чувствительной к качеству тока — такой, как аудиотехника или телевизор.",
+            "lastSyncedAt": "2026-04-26T20:09:35.681Z",
+            "retrievalScore": 0,
+            "retrievalSource": "text",
+            "technicalVersion": "1d03cb0da8e16de0b7ea452675e9e1c9a676cee79aac8a58e8acf5447dccb8cf",
+            "sourceContentHash": "ff2adc3ba1de69c79a55d837f1c3e3f6442bfbe2a887c371535227a7427280f7"
+          },
+          {
+            "id": "de89e8c4-3a4c-4eb2-9ed9-2dff32ca325d",
+            "raw": {},
+            "name": "Генератор бензиновый инверторный ТСС SGG 5000EI (5,0 кВт) 060040",
+            "slug": "catalog/invertornye_generatory/generator_benzinovyy_invertornyy_tss_sgg_5000ei_5_0_kvt",
+            "brand": "ТСС",
+            "price": 64558,
+            "specs": {
+              "tankL": "15–25 л (конфликт)",
+              "engine": "KM172Fi",
+              "voltage": "230 В, 1 фаза",
+              "avrReady": "да",
+              "inverter": "да",
+              "maxPower": "5.5 кВт",
+              "weightKg": "42–72 (конфликт)",
+              "noiseDb7m": "74 дБ",
+              "ratedPower": "5 кВт",
+              "бак, л": "15–25 л (конфликт)",
+              "вес, кг": "42–72 (конфликт)",
+              "артикул": "060040",
+              "дисплей": "Да",
+              "стартер": "ручной стартер / электростартер",
+              "parallelSupport": "да",
+              "protectionClass": "IP23",
+              "fuelConsumption75": "1.94 л/ч",
+              "число фаз": "однофазные",
+              "двигатель": "LIFAN",
+              "тип кожуха": "Открытый",
+              "автозапуск": "без автозапуска",
+              "частота, гц": "50",
+              "вид топлива": "бензиновые",
+              "альтернатор": "Синхронный",
+              "габариты, мм": "500х422х515",
+              "датчик масла": "с датчиком масла",
+              "класс товара": "Стандарт",
+              "контейнерный": "Нет",
+              "напряжение, в": "230В",
+              "родина бренда": "РОССИЯ",
+              "тип двигателя": "четырехтактные",
+              "производитель": "ТСС",
+              "max. мощность, квт": "5.5 кВт",
+              "базовая единица": "шт",
+              "модель двигателя": "LIFAN",
+              "счетчик моточасов": "со счетчиком моточасов",
+              "расход топлива, л/ч": "2.8",
+              "страна производства": "Россия/Российские (отечественные)",
+              "мощность номинальная": "5 кВт",
+              "гарантия производителя": "12 месяцев",
+              "аккумулятор в комплекте": "с аккумулятором в комплекте",
+              "индикатор уровня топлива": "с индикатором уровня топлива",
+              "емкость топливного бака, л": "15",
+              "производитель оборудования": "ТСС",
+              "габариты без упаковки (д/ш/в), мм": "500х422х515",
+              "обмотка альтернатора двигателя": "Медь",
+              "расход топлива при 75% нагрузке, л": "2,4",
+              "мощность номинальная при 220 в, квт": "5"
+            },
+            "category": "Инверторные генераторы",
+            "currency": "RUB",
+            "imageUrl": "https://bakautprof.ru/upload/iblock/cca/8cizaqebo56hqwgqlubmcec72iq8njx3.jpeg",
+            "isActive": true,
+            "sourceUrl": "https://bakautprof.ru/catalog/invertornye_generatory/generator_benzinovyy_invertornyy_tss_sgg_5000ei_5_0_kvt/",
+            "externalId": "bakaut:catalog/invertornye_generatory/generator_benzinovyy_invertornyy_tss_sgg_5000ei_5_0_kvt",
+            "lastSeenAt": "2026-04-26T20:09:49.563Z",
+            "description": "Бензогенератор инверторный SGG 5000Ei с электростартом, коннектором для подключения АВР, укомплектован колесным комплектом для удобства перемещения. Благодаря использованию в этой модели инверторного преобразователя, на выходе получается стабильный ток, без каких-либо скачков, генератор способен регулировать работу двигателя в зависимости от нагрузки: к примеру, если нагрузка составляет половину от выходной мощности, то и мощность двигателя снижается вдвое; это дает значительную экономию топлива. Инверторные модели получаются более легкими и компактными, чем традиционные генераторы. Благодаря двигателю, специально разработанному под инверторный генератор и особенной конструкции корпуса, удалось значительно понизить уровень шума. Режим ECO обеспечивает экономичный расход топлива, синхронный альтернатор с медными обмотками ротора и статора увеличивает ресурс двигателя. Выход 12 вольт позволяет подзарядить автомобильный аккумулятор в экстренном случае. Инверторный генератор считается оптимальным выбором для нагрузки, чувствительной к качеству тока — такой, как аудиотехника или телевизор. Особенности конструкции: Система перевода двигателя в экономичный режим Индикаторы на панели показывают параметры напряжения, превышение мощности генератора, низкий уровень масла. Многофункциональный дисплей предлагает эффективный способ контроля параметров работы генератора (на дисплее отображаются часы работы, напряжение, частота тока) Медная обмотка альтернатора Защита от короткого замыкания, перегрузки и низкого уровня масла Шумозащитный кожух Антивибрационные резиновые ножки Экономичный расход топлива Стабильный ток для точных приборов Гарантийные обязательства и сервисное обслуживание: На бензогенераторы ТСС предоставляется гарантия 12 месяцев.",
+            "lastSyncedAt": "2026-04-26T20:09:49.563Z",
+            "retrievalScore": 0,
+            "retrievalSource": "text",
+            "technicalVersion": "2bc48d0f6b4644e8ffa5b75a687423cf848cf409ec28d3b03e2ed3129ff6b737",
+            "sourceContentHash": "543a69141ac2cb344af95b4d6ba68bf29558c87753faa6e551d1431620578253"
+          }
+        ],
+        "retrieval": {
+          "query": "Бензиновые однофазные генераторы 220 В для нагрузки около 2,9 кВт",
+          "intent": "generator",
+          "textCount": 200,
+          "vectorCount": 200,
+          "candidateTiers": [
+            {
+              "tier": "preliminary_match",
+              "productId": "75f0c0be-c4b9-4704-a6a3-da0ddd2ac272",
+              "tradeoffs": []
+            },
+            {
+              "tier": "preliminary_match",
+              "productId": "6c3851c2-0067-4c34-8290-4f18a5181d00",
+              "tradeoffs": []
+            },
+            {
+              "tier": "preliminary_match",
+              "productId": "101d1ea2-463e-4a69-8e4b-5d2881e7fce7",
+              "tradeoffs": []
+            },
+            {
+              "tier": "preliminary_match",
+              "productId": "7c9f5ad5-89f8-4d05-83b0-82db074033fd",
+              "tradeoffs": []
+            },
+            {
+              "tier": "preliminary_match",
+              "productId": "9a0a8257-d699-4366-981e-14e7a12a7b41",
+              "tradeoffs": []
+            },
+            {
+              "tier": "preliminary_match",
+              "productId": "265cfb92-6b4f-4a58-b177-afa40b847f4a",
+              "tradeoffs": []
+            },
+            {
+              "tier": "preliminary_match",
+              "productId": "ebd0acf8-34c4-4bb2-891a-9db84794266e",
+              "tradeoffs": []
+            },
+            {
+              "tier": "preliminary_match",
+              "productId": "de89e8c4-3a4c-4eb2-9ed9-2dff32ca325d",
+              "tradeoffs": []
+            },
+            {
+              "tier": "rejected",
+              "productId": "8a7351dd-b77f-4ed6-8cd6-a3e1405d1f7d",
+              "tradeoffs": []
+            },
+            {
+              "tier": "rejected",
+              "productId": "58ee6085-ecd6-4dc2-a7c0-09347c8a9dbf",
+              "tradeoffs": []
+            },
+            {
+              "tier": "rejected",
+              "productId": "c2ad06ea-99cc-4b78-8db6-1d0981c32851",
+              "tradeoffs": []
+            },
+            {
+              "tier": "rejected",
+              "productId": "6fc4a58e-d74d-4e69-b814-7f73b84e8491",
+              "tradeoffs": []
+            }
+          ],
+          "embeddingQuery": "бензиновый генератор для мастерской",
+          "usedEmbeddings": true,
+          "identityMatches": [],
+          "primaryExpansion": null
+        },
+        "productIds": [
+          "75f0c0be-c4b9-4704-a6a3-da0ddd2ac272",
+          "6c3851c2-0067-4c34-8290-4f18a5181d00",
+          "101d1ea2-463e-4a69-8e4b-5d2881e7fce7",
+          "7c9f5ad5-89f8-4d05-83b0-82db074033fd",
+          "9a0a8257-d699-4366-981e-14e7a12a7b41",
+          "265cfb92-6b4f-4a58-b177-afa40b847f4a",
+          "ebd0acf8-34c4-4bb2-891a-9db84794266e",
+          "de89e8c4-3a4c-4eb2-9ed9-2dff32ca325d"
+        ]
+      },
+      "warnings": [
+        "catalog_products_semantic_class_unconfirmed:generator:30",
+        "answer_products_filtered_by_structured_hard_constraints:100",
+        "attempts:1",
+        "duration_ms:5069"
+      ],
+      "error_code": null,
+      "created_at": "2026-09-15T10:26:31.129Z"
+    },
+    {
+      "tool_name": "web.researchProductFacts",
+      "tool_request_id": "research_pump_start_1",
+      "status": "ok",
+      "payload": {
+        "facts": [],
+        "products": [
+          {
+            "id": "75f0c0be-c4b9-4704-a6a3-da0ddd2ac272",
+            "raw": {},
+            "name": "Генератор бензиновый инверторный ТСС SGG 3000SI (2,8 кВт) 060054",
+            "slug": "catalog/invertornye_generatory/generator_benzinovyy_invertornyy_tss_sgg_3000si_2_8_kvt",
+            "brand": "ТСС",
+            "price": 53360,
+            "specs": {
+              "tankL": "5.6–6 л (конфликт)",
+              "engine": "KM165F (149 см3)",
+              "ecoMode": "да",
+              "voltage": "230 В, 1 фаза",
+              "inverter": "да",
+              "weightKg": "21 (060054); 30 (060038 у части дилеров)",
+              "noiseDb7m": "58–60 дБ",
+              "ratedPower": "2.8 кВт (арт.060054); для 060038 часть дилеров указывает 3/3.5 кВт",
+              "бак, л": "5.6–6 л (конфликт)",
+              "autonomy75h": "3.45–4 ч",
+              "dimensionsMm": "480×300×460 (арт.060054)",
+              "вес, кг": "21 (060054); 30 (060038 у части дилеров)",
+              "артикул": "060054",
+              "дисплей": "Да",
+              "стартер": "с ручным стартером",
+              "protectionClass": "IP23",
+              "fuelConsumption75": "1.5–1.62 л/ч (конфликт по артикулам)",
+              "число фаз": "однофазные",
+              "двигатель": "LIFAN",
+              "тип кожуха": "Открытый",
+              "автозапуск": "без автозапуска",
+              "частота, гц": "50",
+              "вид топлива": "бензиновые",
+              "альтернатор": "Синхронный",
+              "габариты, мм": "480×300×460 (арт.060054)",
+              "датчик масла": "с датчиком масла",
+              "класс товара": "Стандарт",
+              "контейнерный": "Нет",
+              "напряжение, в": "230В",
+              "родина бренда": "РОССИЯ",
+              "тип двигателя": "четырехтактные",
+              "производитель": "ТСС",
+              "max. мощность, квт": "3",
+              "базовая единица": "шт",
+              "модель двигателя": "LIFAN",
+              "вес в упаковке, кг": "26,8",
+              "счетчик моточасов": "со счетчиком моточасов",
+              "расход топлива, л/ч": "1.5",
+              "страна производства": "Россия/Российские (отечественные)",
+              "высота в упаковке, мм": "530",
+              "ширина в упаковке, мм": "450",
+              "мощность номинальная": "2.8 кВт (арт.060054); для 060038 часть дилеров указывает 3/3.5 кВт",
+              "гарантия производителя": "12 месяцев",
+              "аккумулятор в комплекте": "без аккумулятора в комплекте",
+              "индикатор уровня топлива": "с индикатором уровня топлива",
+              "емкость топливного бака, л": "5.6",
+              "производитель оборудования": "ТСС",
+              "габариты без упаковки (д/ш/в), мм": "620х450х530",
+              "обмотка альтернатора двигателя": "Медь",
+              "расход топлива при 75% нагрузке, л": "1,5",
+              "мощность номинальная при 220 в, квт": "2.8"
+            },
+            "category": "Инверторные генераторы",
+            "currency": "RUB",
+            "imageUrl": "https://bakautprof.ru/upload/iblock/6b0/pd6973x5003v6j2ufxigwc5l0pb8irzb.jpeg",
+            "isActive": true,
+            "sourceUrl": "https://bakautprof.ru/catalog/invertornye_generatory/generator_benzinovyy_invertornyy_tss_sgg_3000si_2_8_kvt/",
+            "externalId": "bakaut:catalog/invertornye_generatory/generator_benzinovyy_invertornyy_tss_sgg_3000si_2_8_kvt",
+            "lastSeenAt": "2026-04-26T20:09:50.459Z",
+            "description": "Бензогенератор инверторный SGG 3000Si в шумопоглащающем кожухе предназначен для подключения к нему потребителей тока общей номинальной мощностью 2,8 кВт. Переносной компактный инверторный генератор предназначен для питания электроприборов, на загородном участке, в походе, на рыбалке. Благодаря использованию в этой модели инверторного преобразователя, на выходе получается стабильный ток, \\без каких-либо скачков, генератор способен регулировать работу двигателя в зависимости от нагрузки: к примеру, если нагрузка составляет половину от выходной мощности, то и мощность двигателя снижается вдвое; это дает значительную экономию топлива. Инверторные модели получаются более легкими и компактными, чем традиционные генераторы. Благодаря двигателю, специально разработанному под инверторный генератор и особенной конструкции корпуса, удалось значительно понизить уровень шума. Режим ECO обеспечивает экономичный расход топлива, синхронный альтернатор с медными обмотками ротора и статора увеличивает ресурс двигателя. Выход 12 вольт позволяет подзарядить автомобильный аккумулятор в экстренном случае. Инверторный генератор считается оптимальным выбором для нагрузки, чувствительной к качеству тока — такой, как аудиотехника или телевизор. Особенности конструкции: Система перевода двигателя в экономичный режим Индикаторы на панели показывают параметры напряжения, превышение мощности генератора, низкий уровень масла. Медная обмотка альтернатора Защита от короткого замыкания, перегрузки и низкого уровня масла Шумозащитный кожух Антивибрационные резиновые ножки Экономичный расход топлива Стабильный ток для точных приборов",
+            "lastSyncedAt": "2026-04-26T20:09:50.459Z",
+            "retrievalScore": 1,
+            "retrievalSource": "exact",
+            "technicalVersion": "986245a60672a8435e8047243309be3b03e56968515de045beea090bfb3c17c9",
+            "sourceContentHash": "70afcef2c1fa7015286e2df13547535e569ed8fa291259b08c26c62212802508"
+          },
+          {
+            "id": "6c3851c2-0067-4c34-8290-4f18a5181d00",
+            "raw": {},
+            "name": "Генератор бензиновый инверторный ТСС SGG 4200Ei (3,8 кВт) 060036",
+            "slug": "catalog/invertornye_generatory/generator_benzinovyy_invertornyy_tss_sgg_4200ei_3_8_kvt_060036",
+            "brand": "ТСС",
+            "price": 67425,
+            "specs": {
+              "tankL": "15 л",
+              "engine": "SV230 / KM172F(KM172Fi) (223 см3, 7.5 л.с.)",
+              "voltage": "230 В, 1 фаза",
+              "avrReady": "разъём АВР (опция арт.190077)",
+              "inverter": "да",
+              "maxPower": "4.2–4.8 кВт (по артикулам)",
+              "weightKg": "38.1–42",
+              "noiseDb7m": "74 дБ",
+              "ratedPower": "3–3.8 кВт / 3.8 кВА",
+              "бак, л": "15 л",
+              "autonomy75h": "6 ч",
+              "вес, кг": "38.1–42",
+              "артикул": "060036",
+              "дисплей": "Да",
+              "стартер": "ручной стартер / электростартер",
+              "protectionClass": "IP23",
+              "fuelConsumption75": "2.5 л/ч",
+              "число фаз": "однофазные",
+              "двигатель": "ТСС",
+              "тип кожуха": "Открытый",
+              "автозапуск": "без автозапуска",
+              "частота, гц": "50",
+              "вид топлива": "бензиновые",
+              "альтернатор": "Синхронный",
+              "габариты, мм": "605x488x560",
+              "датчик масла": "с датчиком масла",
+              "класс товара": "Бытовой",
+              "контейнерный": "Нет",
+              "напряжение, в": "230В",
+              "родина бренда": "РОССИЯ",
+              "тип двигателя": "четырехтактные",
+              "max. мощность, квт": "4.2–4.8 кВт (по артикулам)",
+              "базовая единица": "шт",
+              "модель двигателя": "ТСС",
+              "вес в упаковке, кг": "42",
+              "номинальный ток, а": "16",
+              "счетчик моточасов": "со счетчиком моточасов",
+              "расход топлива, л/ч": "2.5",
+              "страна производства": "Китай/Китайские",
+              "высота в упаковке, мм": "580",
+              "ширина в упаковке, мм": "547",
+              "мощность номинальная": "3–3.8 кВт / 3.8 кВА",
+              "число оборотов, об/мин": "3600",
+              "гарантия производителя": "12 месяцев",
+              "мощность двигателя, л.с.": "7.5",
+              "аккумулятор в комплекте": "с аккумулятором в комплекте",
+              "индикатор уровня топлива": "с индикатором уровня топлива",
+              "единица товара в упаковке": "Штука",
+              "емкость топливного бака, л": "15",
+              "производитель оборудования": "ТСС",
+              "габариты без упаковки (д/ш/в), мм": "605x488x560",
+              "мощность номинальная при 220 в, квт": "3.8"
+            },
+            "category": "Инверторные генераторы",
+            "currency": "RUB",
+            "imageUrl": "https://bakautprof.ru/upload/iblock/8fc/020ynosfxrcqlm00ptt2apcianmx6np3.jpeg",
+            "isActive": true,
+            "sourceUrl": "https://bakautprof.ru/catalog/invertornye_generatory/generator_benzinovyy_invertornyy_tss_sgg_4200ei_3_8_kvt_060036/",
+            "externalId": "bakaut:catalog/invertornye_generatory/generator_benzinovyy_invertornyy_tss_sgg_4200ei_3_8_kvt_060036",
+            "lastSeenAt": "2026-04-26T20:09:35.607Z",
+            "description": "Бензогенератор инверторный SGG 4200Ei с электростартом и разъемом для подключения блока автоматики, вырабатывает электричество с высокой точностью частоты и напряжения. Предназначен для подключения к нему потребителей общей максимальной мощностью до 4,2 кВт. Позволяет подключать к генератору как обычных потребителей, так и точное электронное оборудование, например, ноутбуки, LCD-телевизоры или смартфон. Благодаря использованию В этой модели инверторного преобразователя, на выходе получается стабильный ток, без каких-либо скачков, генератор способен регулировать работу двигателя в зависимости от нагрузки: к примеру, если нагрузка составляет половину от выходной мощности, то и мощность двигателя снижается вдвое; это дает значительную экономию топлива, инверторные модели получаются более легкими и компактными, чем традиционные генераторы. Благодаря двигателю, специально разработанному под инверторный генератор и особенной конструкции корпуса, удалось значительно понизить уровень шума. Режим ECO экономит топливо и увеличивает ресурс двигателя. Выход 12 вольт позволяет подзарядить автомобильный аккумулятор в экстренном случае. Инверторный генератор считается оптимальным выбором для нагрузки, чувствительной к качеству тока — такой, как аудиотехника или телевизор.",
+            "lastSyncedAt": "2026-04-26T20:09:35.607Z",
+            "retrievalScore": 1,
+            "retrievalSource": "exact",
+            "technicalVersion": "055e7048067124cdbacaaf2c68c1ed15076b1aeab8277e2f78f4c21ff6deb152",
+            "sourceContentHash": "abcc50627896167ed1f912d533257dd8a9f6d0ac01fc0015b112e109a7474abe"
+          },
+          {
+            "id": "101d1ea2-463e-4a69-8e4b-5d2881e7fce7",
+            "raw": {},
+            "name": "Генератор бензиновый инверторный SUNREKA G4000iS (3,5 кВт) 211015",
+            "slug": "catalog/invertornye_generatory/generator_benzinovyy_invertornyy_sunreka_g4000is_3_5_kvt",
+            "brand": "SUNREKA",
+            "price": 53591,
+            "specs": {
+              "артикул": "211015",
+              "дисплей": "Да",
+              "стартер": "ручной стартер",
+              "число фаз": "однофазные",
+              "двигатель": "SUNREKA",
+              "тип кожуха": "Закрытый",
+              "автозапуск": "без автозапуска",
+              "частота, гц": "50",
+              "вид топлива": "бензиновые",
+              "альтернатор": "Синхронный",
+              "датчик масла": "с датчиком масла",
+              "класс товара": "Стандарт",
+              "контейнерный": "Нет",
+              "напряжение, в": "220В",
+              "родина бренда": "КИТАЙ",
+              "тип двигателя": "четырехтактные",
+              "max. мощность, квт": "4",
+              "базовая единица": "шт",
+              "счетчик моточасов": "со счетчиком моточасов",
+              "расход топлива, л/ч": "2.32",
+              "страна производства": "Китай/Китайские",
+              "гарантия производителя": "12 месяцев",
+              "аккумулятор в комплекте": "без аккумулятора в комплекте",
+              "индикатор уровня топлива": "с индикатором уровня топлива",
+              "емкость топливного бака, л": "5.8",
+              "производитель оборудования": "SUNREKA",
+              "габариты без упаковки (д/ш/в), мм": "540×310×500",
+              "обмотка альтернатора двигателя": "Медь",
+              "мощность номинальная при 220 в, квт": "3.5"
+            },
+            "category": "Инверторные генераторы",
+            "currency": "RUB",
+            "imageUrl": "https://bakautprof.ru/upload/iblock/a39/nhxs7tcujfegj29hk544xfufwuc615yg.png",
+            "isActive": true,
+            "sourceUrl": "https://bakautprof.ru/catalog/invertornye_generatory/generator_benzinovyy_invertornyy_sunreka_g4000is_3_5_kvt/",
+            "externalId": "bakaut:catalog/invertornye_generatory/generator_benzinovyy_invertornyy_sunreka_g4000is_3_5_kvt",
+            "lastSeenAt": "2026-04-26T20:09:55.700Z",
+            "description": "Откройте новые горизонты комфорта и надёжности с инверторными генераторами SUNREKA – компактными, тихими и лёгкими электростанциями премиального уровня. Эти многофункциональные устройства созданы для питания самых требовательных к качеству тока электроприборов. Чистая синусоида для чувствительных устройствТехнология PURE SINE OUTPUT гарантирует подачу напряжения с минимальным коэффициентом нелинейных искажений (THD) – менее 3% во всех режимах нагрузки. Это делает генераторы SUNREKA идеальными для радиоаппаратуры, измерительных приборов, акустики и сложной электроники.",
+            "lastSyncedAt": "2026-04-26T20:09:55.700Z",
+            "retrievalScore": 1,
+            "retrievalSource": "exact",
+            "technicalVersion": "460f9ee80fb13ccc185946aee3730bc9f34476ff06bfc1258fef5fe3f1dacd0e",
+            "sourceContentHash": "8fb9d4292b28ae385242ac5522d22364842fd82214d6a1dd72ca8d77a6abded1"
+          },
+          {
+            "id": "7c9f5ad5-89f8-4d05-83b0-82db074033fd",
+            "raw": {},
+            "name": "Генератор бензиновый A-iPower A6500 (6,0 кВт) 20108",
+            "slug": "catalog/benzinovye_generatory/generator_benzinovyy_a_ipower_a6500_6_0_kvt",
+            "brand": "A-iPower",
+            "price": 74990,
+            "specs": {
+              "usb": "true",
+              "tankL": "40",
+              "phases": "1, 230 В / 50 Гц, ток 26,1 А, cosφ 1",
+              "display": "цифровой",
+              "oilType": "SAE 10W-40",
+              "outlets": "2×230В/16А + 1 силовая 230В/32А + USB",
+              "starter": "ручной (A6500) / ручной+электро+АВР (A6500EA)",
+              "ipRating": "IP23",
+              "maxPower": "6500 Вт",
+              "weightKg": "82.7",
+              "engineRpm": "3600/3000",
+              "noiseDb7m": "82",
+              "engineType": "4-тактный OHV, 420 см3, 1 цилиндр, воздушное охлаждение",
+              "ratedPower": "6000 Вт",
+              "бак, л": "40",
+              "enginePower": "9,6 кВт / 13,0 л.с. при 3600 об/мин; 9,0 кВт / 12,3 л.с. при 3000 об/мин",
+              "runtime100h": "11.3",
+              "dimensionsMm": "710×534×605",
+              "wheelsHandle": "приобретается отдельно",
+              "вес, кг": "82.7",
+              "артикул": "20108",
+              "дисплей": "Да",
+              "стартер": "ручной (A6500) / ручной+электро+АВР (A6500EA)",
+              "packageWeightKg": "88.4",
+              "soundPressureDbA": "102",
+              "число фаз": "однофазные",
+              "двигатель": "A-iPower",
+              "тип кожуха": "Открытый",
+              "автозапуск": "без автозапуска",
+              "частота, гц": "50",
+              "вид топлива": "бензиновые",
+              "альтернатор": "Синхронный",
+              "габариты, мм": "710×534×605",
+              "датчик масла": "с датчиком масла",
+              "контейнерный": "Нет",
+              "напряжение, в": "230В",
+              "родина бренда": "СОЕДИНЕННЫЕ ШТАТЫ",
+              "тип двигателя": "4-тактный OHV, 420 см3, 1 цилиндр, воздушное охлаждение",
+              "fuelConsumption25_50_75_100": "2,0 / 2,4 / 3,0 / 3,6 л/ч",
+              "max. мощность, квт": "6500 Вт",
+              "базовая единица": "шт",
+              "модель двигателя": "A-iPower",
+              "вес в упаковке, кг": "85,2",
+              "счетчик моточасов": "без счетчика моточасов",
+              "расход топлива, л/ч": "2,0 / 2,4 / 3,0 / 3,6 л/ч",
+              "система охлаждения": "Воздушная",
+              "страна производства": "Китай/Китайские",
+              "высота в упаковке, мм": "650",
+              "ширина в упаковке, мм": "559",
+              "мощность номинальная": "6000 Вт",
+              "гарантия производителя": "4 года",
+              "мощность двигателя, л.с.": "14",
+              "аккумулятор в комплекте": "без аккумулятора в комплекте",
+              "индикатор уровня топлива": "с индикатором уровня топлива",
+              "емкость топливного бака, л": "40",
+              "производитель оборудования": "A-iPower",
+              "габариты без упаковки (д/ш/в), мм": "710x534x605",
+              "расход топлива при 75% нагрузке, л": "2,954",
+              "мощность номинальная при 220 в, квт": "6"
+            },
+            "category": "Бензиновые генераторы",
+            "currency": "RUB",
+            "imageUrl": "https://bakautprof.ru/upload/iblock/7e1/ld5zii41lhcleyxbhxhtkbf8ad90ugul.png",
+            "isActive": true,
+            "sourceUrl": "https://bakautprof.ru/catalog/benzinovye_generatory/generator_benzinovyy_a_ipower_a6500_6_0_kvt/",
+            "externalId": "bakaut:catalog/benzinovye_generatory/generator_benzinovyy_a_ipower_a6500_6_0_kvt",
+            "lastSeenAt": "2026-04-26T20:08:02.278Z",
+            "description": "Бензогенератор A-iPower A6500-резервный однофазный (230В) источник электропитания максимальной мощностью 6.5 кВт, номинальной мощностью 6.0 кВт. Электрогенератор A-iPower A6500 укомплектован четырехтактным гильзованым OHV-двигателем объемом 420 см3 с ручным запуском. Имеет три розетки, две на 230 Вольт /16 Ампер и одну силовую розетку 230 Вольт/32 Ампера, а также USB-выход. Генератор A-iPower A6500 может быть доукомплектован транспортировочным комплектом (колеса и ручки) Преимущества и особенности • Автомат защиты от перегрузки. Срабатывает при подключении избыточной нагрузки на электрогенератор. • Электронный регулятор оборотов (AVR) нового поколения. Генератор вырабатывает ток с максимально стабильным напряжением. • Цифровой дисплей в режиме реального времени показывает значения выдаваемой мощности, напряжение, количество моточасов. • Защита от низкого уровня масла. Генератор не заведется при недостаточном количестве масла в картере, информация о низком уровне масла отображается на дисплее. • Увеличенный бак 40 литров. Обеспечивает 11,5 часов бесперебойной работы без дозаправки при 100%-й нагрузки и 16.5 часов при 50%-й нагрузки. • Защита розеток от пыли и влаги. Позволяет хранить бензогенератор как в помещении, так и на улице и обеспечивает безопасную эксплуатацию генераторной установки. • USB-выход. Безопасная зарядка смартфонов, планшетов и других гаджетов. • Защита от сколов и царапин. Фирменное защитное покрытие на раме и баке A-iPower Heavy Duty Protection защищает от быстрого износа рабочих поверхностей бензинового электрогенератора. • Усиленная конструкция выдерживает вес человека (до 100кг). Увеличенный срок эксплуатации бензиновой электростанции. • Уникальный серийный номер. Каждый электрогенератор имеет собственный номер, что обеспечивает защиту от подделок и контроль качества генераторных установок. • 100%-я медная обмотка альтернатора. Гарантированная выдача заявленной мощности. • Полная комплектация. В комплекте с генератором прилагаются вилки на все розетки, предусмотренные в данной модели генератора, воронка для залива масла, свечной ключ. • Расширенная гарантия 4 года при оформлении.",
+            "lastSyncedAt": "2026-04-26T20:08:02.278Z",
+            "retrievalScore": 1,
+            "retrievalSource": "exact",
+            "technicalVersion": "7d94add2d3417276d38e4bc0326ad64c36a8df69698464c71a30f36e3c64fb46",
+            "sourceContentHash": "929033fcc97ecd0cb597bd6d01ed5afb8c8132c743397637737421e46b0caa9e"
+          }
+        ],
+        "warnings": [
+          "catalog_extraction_skipped_insufficient_budget",
+          "official_page_skipped_insufficient_budget",
+          "official_manual_skipped_insufficient_budget",
+          "reliable_secondary_skipped_insufficient_budget",
+          "verified_fact_memory_merged_with_gap_research"
+        ],
+        "conflicts": [],
+        "usedWebSearch": false,
+        "answerGuidance": {
+          "coverage": [],
+          "completeness": "not_answered",
+          "directAnswer": ""
+        },
+        "sourceAttempts": [
+          {
+            "tier": "catalog",
+            "outcome": "confirmed"
+          },
+          {
+            "tier": "official_page",
+            "outcome": "skipped_budget"
+          },
+          {
+            "tier": "official_manual",
+            "outcome": "skipped_budget"
+          },
+          {
+            "tier": "reliable_secondary",
+            "outcome": "skipped_budget"
+          }
+        ],
+        "catalogPresence": [
+          {
+            "status": "present",
+            "productName": "Генератор бензиновый инверторный ТСС SGG 3000SI (2,8 кВт) 060054",
+            "exactProductIds": [
+              "75f0c0be-c4b9-4704-a6a3-da0ddd2ac272"
+            ]
+          },
+          {
+            "status": "present",
+            "productName": "Генератор бензиновый инверторный ТСС SGG 4200Ei (3,8 кВт) 060036",
+            "exactProductIds": [
+              "6c3851c2-0067-4c34-8290-4f18a5181d00"
+            ]
+          },
+          {
+            "status": "present",
+            "productName": "Генератор бензиновый инверторный SUNREKA G4000iS (3,5 кВт) 211015",
+            "exactProductIds": [
+              "101d1ea2-463e-4a69-8e4b-5d2881e7fce7"
+            ]
+          },
+          {
+            "status": "present",
+            "productName": "Генератор бензиновый A-iPower A6500 (6,0 кВт) 20108",
+            "exactProductIds": [
+              "7c9f5ad5-89f8-4d05-83b0-82db074033fd"
+            ]
+          }
+        ],
+        "researchOutcome": "partial",
+        "sourceCandidates": [
+          {
+            "url": "https://a-ipower.shop/upload/iblock/897/hahbv6mnpmoe1pyw23uxjsxfc82r3abl.pdf",
+            "title": "https://a-ipower.shop/upload/iblock/897/hahbv6mnpmoe1pyw23uxjsxfc82r3abl.pdf"
+          }
+        ],
+        "sourcesExhausted": false,
+        "summaryForAnswer": "",
+        "unconfirmedFacts": [],
+        "usedDocumentRead": true,
+        "searchDisposition": "skipped_budget",
+        "targetProductNames": [
+          "Генератор бензиновый инверторный ТСС SGG 3000SI (2,8 кВт) 060054",
+          "Генератор бензиновый инверторный ТСС SGG 4200Ei (3,8 кВт) 060036",
+          "Генератор бензиновый инверторный SUNREKA G4000iS (3,5 кВт) 211015",
+          "Генератор бензиновый A-iPower A6500 (6,0 кВт) 20108"
+        ],
+        "comparisonAttributes": [
+          "pump_starting_power_kw",
+          "pump_starting_current"
+        ],
+        "nearbyCatalogProducts": [],
+        "suppressedTargetProductNames": []
+      },
+      "warnings": [
+        "catalog_extraction_skipped_insufficient_budget",
+        "official_page_skipped_insufficient_budget",
+        "official_manual_skipped_insufficient_budget",
+        "reliable_secondary_skipped_insufficient_budget",
+        "verified_fact_memory_merged_with_gap_research",
+        "attempts:1",
+        "duration_ms:13553"
+      ],
+      "error_code": null,
+      "created_at": "2026-09-15T10:26:44.702Z"
+    }
+  ],
+  "checkpoints": [
+    {
+      "checkpoint": "semantic_decision_proposed",
+      "status": "succeeded",
+      "payload": {
+        "intent": {
+          "grounding": {
+            "taskType": "product_selection",
+            "rationale": "Нужны расчёт, каталог и проверка решающего пускового параметра.",
+            "webPurpose": "technical_specs",
+            "responseMode": "recommend",
+            "sourcePolicy": "catalog_required",
+            "buyerQuestion": "Подберите 2–3 варианта из каталога, но пусковой ток насоса мне неизвестен.",
+            "webRequirement": "conditional_on_catalog_gap",
+            "buyerRequestedWeb": false,
+            "requiredToolKinds": [
+              "calculator.generatorLoad",
+              "catalog.search",
+              "web.researchProductFacts"
+            ],
+            "catalogRequirement": "required",
+            "technicalAttributes": [
+              "nominal_power_kw",
+              "max_power_kw",
+              "phase",
+              "fuel_type",
+              "pump_starting_power_kw"
+            ]
+          },
+          "riskFlags": [],
+          "toolRequests": [
+            {
+              "id": "calc_generator_workshop_1",
+              "args": {
+                "loads": [
+                  {
+                    "kind": "refrigerator",
+                    "name": "холодильник",
+                    "count": 1,
+                    "source": "explicit_user",
+                    "evidence": "холодильник 300 Вт",
+                    "basisKind": "exact_power",
+                    "runningKw": 0.3,
+                    "basisSignals": [
+                      "consumer_type_known",
+                      "explicit_power",
+                      "simultaneous_operation_known"
+                    ],
+                    "operationMode": "continuous",
+                    "runningSource": "explicit_user",
+                    "coRunningGroup": "all",
+                    "startingSource": "not_provided"
+                  },
+                  {
+                    "kind": "circulation_pump",
+                    "name": "циркуляционный насос",
+                    "count": 1,
+                    "source": "explicit_user",
+                    "evidence": "циркуляционный насос 1,1 кВт",
+                    "basisKind": "exact_power",
+                    "runningKw": 1.1,
+                    "basisSignals": [
+                      "consumer_type_known",
+                      "consumer_function_known",
+                      "explicit_power",
+                      "simultaneous_operation_known"
+                    ],
+                    "operationMode": "continuous",
+                    "runningSource": "explicit_user",
+                    "coRunningGroup": "all",
+                    "startingSource": "not_provided"
+                  },
+                  {
+                    "kind": "workshop_tool",
+                    "name": "инструмент",
+                    "count": 1,
+                    "source": "explicit_user",
+                    "evidence": "инструмент около 1,5 кВт",
+                    "basisKind": "exact_power",
+                    "runningKw": 1.5,
+                    "basisSignals": [
+                      "consumer_type_known",
+                      "explicit_power",
+                      "simultaneous_operation_known"
+                    ],
+                    "operationMode": "occasional",
+                    "runningSource": "explicit_user",
+                    "coRunningGroup": "after_pump",
+                    "startingSource": "not_provided"
+                  }
+                ],
+                "phase": "single_phase",
+                "query": "Расчёт нагрузки мастерской",
+                "powerSource": "fuel",
+                "estimateBasis": "bounded_assumption",
+                "productIntent": "подбор бензинового генератора для мастерской",
+                "semanticQuery": "холодильник 0,3 кВт, циркуляционный насос 1,1 кВт, инструмент 1,5 кВт",
+                "simultaneousRunning": true,
+                "simultaneousStarting": false,
+                "canonicalProductIntent": "generator",
+                "simultaneousStartingKinds": [
+                  "circulation_pump"
+                ]
+              },
+              "tool": "calculator.generatorLoad",
+              "required": true,
+              "rationale": "Рассчитать рабочую и предварительную пусковую нагрузку.",
+              "coversRequirementIds": [
+                "generator_load_scenario"
+              ]
+            },
+            {
+              "id": "search_generator_workshop_1",
+              "args": {
+                "limit": 8,
+                "phase": "single_phase",
+                "query": "Бензиновые однофазные генераторы 220 В для нагрузки около 2,9 кВт",
+                "identifiers": [],
+                "powerSource": "fuel",
+                "productIntent": "подбор бензинового генератора для мастерской",
+                "semanticQuery": "бензиновый генератор для мастерской",
+                "comparisonAttributes": [
+                  "nominal_power_kw",
+                  "max_power_kw",
+                  "price_rub",
+                  "weight_kg",
+                  "phase",
+                  "fuel_type"
+                ],
+                "canonicalProductIntent": "generator"
+              },
+              "tool": "catalog.search",
+              "required": true,
+              "rationale": "Найти 2–3 кандидата из каталога.",
+              "coversRequirementIds": [
+                "fuel_type",
+                "phase"
+              ]
+            },
+            {
+              "id": "research_pump_start_1",
+              "args": {
+                "limit": 5,
+                "phase": "single_phase",
+                "query": "типичный пусковой ток или пусковая мощность циркуляционных насосов мощностью 1,1 кВт",
+                "powerSource": "fuel",
+                "productNames": [],
+                "productIntent": "подбор бензинового генератора для мастерской",
+                "researchScope": "product",
+                "semanticQuery": "пуск циркуляционного насоса 1,1 кВт",
+                "comparisonAttributes": [
+                  "pump_starting_power_kw",
+                  "pump_starting_current"
+                ],
+                "canonicalProductIntent": "generator",
+                "comparisonAttributeBindings": []
+              },
+              "tool": "web.researchProductFacts",
+              "required": true,
+              "rationale": "Проверить неизвестный пусковой параметр насоса.",
+              "coversRequirementIds": []
+            }
+          ],
+          "policyRuleIds": [
+            "cheap.preliminary_not_final"
+          ],
+          "requiresTools": true,
+          "productMentions": [],
+          "selectionPolicy": {
+            "phase": "single_phase",
+            "maxCards": 3,
+            "rationale": "Предварительный подбор по типу топлива, фазе и рассчитанному профилю нагрузки; пуск насоса требует оговорки.",
+            "needAction": "open",
+            "powerSource": "fuel",
+            "requirements": [
+              {
+                "id": "fuel_type",
+                "kind": "fuel_type",
+                "role": "hard_constraint",
+                "unit": null,
+                "value": "бензин",
+                "evidence": "бензиновый генератор",
+                "relation": "must_have",
+                "strictness": "strict",
+                "verification": {
+                  "mode": "product_attribute"
+                }
+              },
+              {
+                "id": "phase",
+                "kind": "phase",
+                "role": "hard_constraint",
+                "unit": null,
+                "value": "single_phase",
+                "evidence": "Всё однофазное 220 В",
+                "relation": "must_have",
+                "strictness": "strict",
+                "verification": {
+                  "mode": "product_attribute"
+                }
+              },
+              {
+                "id": "generator_load_scenario",
+                "kind": "generator_load_scenario",
+                "role": "hard_constraint",
+                "unit": null,
+                "value": true,
+                "evidence": "Одновременно работают холодильник 300 Вт, циркуляционный насос 1,1 кВт и инструмент около 1,5 кВт.",
+                "relation": "must_have",
+                "strictness": "strict",
+                "verification": {
+                  "mode": "typed_tool",
+                  "tool": "calculator.generatorLoad",
+                  "bindAs": "nominal_power_min_kw",
+                  "verifier": "generator_load_profile",
+                  "toolRequestId": "calc_generator_workshop_1"
+                }
+              }
+            ],
+            "selectionGoal": "preliminary_fit",
+            "alternativePolicy": "same_class_only",
+            "rankingObjectives": [],
+            "reusePreviousCards": false,
+            "targetProductClass": "бензиновый генератор",
+            "canonicalProductClass": "generator"
+          },
+          "nextStepRationale": "Рассчитать нагрузку, найти каталоговые варианты и проверить решающий пусковой параметр по внешним источникам.",
+          "userMessageSummary": "Подобрать 2–3 бензиновых однофазных генератора для мастерской.",
+          "dialogueUnderstanding": "Рабочая нагрузка около 2,9 кВт; пуск насоса неизвестен, поэтому подбор предварительный.",
+          "mustNotAskQuestionIds": [],
+          "leadCaptureAuthorization": {
+            "purpose": null,
+            "evidence": null,
+            "authorized": false,
+            "handoffKind": "none",
+            "buyerQuestion": null,
+            "contactSource": "none",
+            "pendingDraftId": null,
+            "handoffOfferMessageId": null
+          },
+          "buyerRequestedTechnicalHandoff": null
+        },
+        "ledgerDelta": {
+          "events": [
+            {
+              "scope": "need",
+              "source": "llm_state_delta",
+              "status": "active",
+              "payload": {
+                "role": "unknown",
+                "text": null,
+                "unit": null,
+                "notes": null,
+                "value": null,
+                "answer": null,
+                "needId": "need_generator_workshop_1",
+                "status": "open",
+                "factKey": null,
+                "ranking": null,
+                "summary": "Бензиновый однофазный генератор для мастерской",
+                "activate": true,
+                "relation": null,
+                "productId": null,
+                "valueText": null,
+                "confidence": 1,
+                "productIds": [],
+                "questionId": null,
+                "answerKnown": null,
+                "constraints": [
+                  "fuel_type: бензин",
+                  "phase: single_phase",
+                  "generator_load_scenario: {\"loads\":[{\"kind\":\"refrigerator\",\"name\":\"холодильник\",\"count\":1,\"runningKw\":0.3,\"startingKw\":null,\"runningApparentPower\":null,\"startingApparentPower\":null,\"source\":\"explicit_user\",\"runningSource\":\"explicit_user\",\"startingSource\":\"not_provided\",\"operationMode\":\"continuous\",\"coRunningGroup\":\"all\",\"evidence\":\"холодильник 300 Вт\",\"basisKind\":\"exact_power\",\"basisSignals\":[\"consumer_type_known\",\"explicit_power\",\"simultaneous_operation_known\"]},{\"kind\":\"circulation_pump\",\"name\":\"циркуляционный насос\",\"count\":1,\"runningKw\":1.1,\"startingKw\":null,\"runningApparentPower\":null,\"startingApparentPower\":null,\"source\":\"explicit_user\",\"runningSource\":\"explicit_user\",\"startingSource\":\"not_provided\",\"operationMode\":\"continuous\",\"coRunningGroup\":\"all\",\"evidence\":\"циркуляционный насос 1,1 кВт\",\"basisKind\":\"exact_power\",\"basisSignals\":[\"consumer_type_known\",\"consumer_function_known\",\"explicit_power\",\"simultaneous_operation_known\"]},{\"kind\":\"workshop_tool\",\"name\":\"инструмент\",\"count\":1,\"runningKw\":1.5,\"startingKw\":null,\"runningApparentPower\":null,\"startingApparentPower\":null,\"source\":\"explicit_user\",\"runningSource\":\"explicit_user\",\"startingSource\":\"not_provided\",\"operationMode\":\"occasional\",\"coRunningGroup\":\"after_pump\",\"evidence\":\"инструмент около 1,5 кВт\",\"basisKind\":\"exact_power\",\"basisSignals\":[\"consumer_type_known\",\"explicit_power\",\"simultaneous_operation_known\"]}],\"simultaneousRunning\":true,\"simultaneousStarting\":false}"
+                ],
+                "productClass": "generator",
+                "openQuestions": [],
+                "toolRequestId": null,
+                "sourceResultId": null,
+                "targetEventIds": [],
+                "negatesEventIds": [],
+                "closesQuestionIds": [],
+                "targetQuestionIds": [],
+                "rejectedProductIds": [],
+                "selectedProductIds": [],
+                "supersedesEventIds": [],
+                "selectionUpdateMode": "clear",
+                "constraintsUpdateMode": "replace",
+                "invalidatedProductIds": [],
+                "constraintFactBindings": [
+                  {
+                    "factKey": "fuel_type",
+                    "constraint": "fuel_type: бензин"
+                  },
+                  {
+                    "factKey": "phase",
+                    "constraint": "phase: single_phase"
+                  },
+                  {
+                    "factKey": "generator_load_scenario",
+                    "constraint": "generator_load_scenario: {\"loads\":[{\"kind\":\"refrigerator\",\"name\":\"холодильник\",\"count\":1,\"runningKw\":0.3,\"startingKw\":null,\"runningApparentPower\":null,\"startingApparentPower\":null,\"source\":\"explicit_user\",\"runningSource\":\"explicit_user\",\"startingSource\":\"not_provided\",\"operationMode\":\"continuous\",\"coRunningGroup\":\"all\",\"evidence\":\"холодильник 300 Вт\",\"basisKind\":\"exact_power\",\"basisSignals\":[\"consumer_type_known\",\"explicit_power\",\"simultaneous_operation_known\"]},{\"kind\":\"circulation_pump\",\"name\":\"циркуляционный насос\",\"count\":1,\"runningKw\":1.1,\"startingKw\":null,\"runningApparentPower\":null,\"startingApparentPower\":null,\"source\":\"explicit_user\",\"runningSource\":\"explicit_user\",\"startingSource\":\"not_provided\",\"operationMode\":\"continuous\",\"coRunningGroup\":\"all\",\"evidence\":\"циркуляционный насос 1,1 кВт\",\"basisKind\":\"exact_power\",\"basisSignals\":[\"consumer_type_known\",\"consumer_function_known\",\"explicit_power\",\"simultaneous_operation_known\"]},{\"kind\":\"workshop_tool\",\"name\":\"инструмент\",\"count\":1,\"runningKw\":1.5,\"startingKw\":null,\"runningApparentPower\":null,\"startingApparentPower\":null,\"source\":\"explicit_user\",\"runningSource\":\"explicit_user\",\"startingSource\":\"not_provided\",\"operationMode\":\"occasional\",\"coRunningGroup\":\"after_pump\",\"evidence\":\"инструмент около 1,5 кВт\",\"basisKind\":\"exact_power\",\"basisSignals\":[\"consumer_type_known\",\"explicit_power\",\"simultaneous_operation_known\"]}],\"simultaneousRunning\":true,\"simultaneousStarting\":false}"
+                  }
+                ],
+                "openQuestionsUpdateMode": "replace",
+                "rejectedProductIdsUpdateMode": "replace"
+              },
+              "evidence": "Нужен бензиновый генератор для мастерской.",
+              "eventType": "need.opened"
+            },
+            {
+              "scope": "need",
+              "source": "llm_state_delta",
+              "status": "active",
+              "payload": {
+                "role": "hard_requirement",
+                "text": null,
+                "unit": null,
+                "notes": null,
+                "value": "бензин",
+                "answer": null,
+                "needId": "need_generator_workshop_1",
+                "status": null,
+                "factKey": "fuel_type",
+                "ranking": null,
+                "summary": null,
+                "activate": null,
+                "relation": "must_have",
+                "productId": null,
+                "valueText": "бензиновый",
+                "confidence": 1,
+                "productIds": [],
+                "questionId": null,
+                "answerKnown": null,
+                "constraints": [],
+                "productClass": "generator",
+                "openQuestions": [],
+                "toolRequestId": null,
+                "sourceResultId": null,
+                "targetEventIds": [],
+                "negatesEventIds": [],
+                "closesQuestionIds": [],
+                "targetQuestionIds": [],
+                "rejectedProductIds": [],
+                "selectedProductIds": [],
+                "supersedesEventIds": [],
+                "selectionUpdateMode": null,
+                "constraintsUpdateMode": null,
+                "invalidatedProductIds": [],
+                "openQuestionsUpdateMode": null,
+                "rejectedProductIdsUpdateMode": null
+              },
+              "evidence": "бензиновый генератор",
+              "eventType": "fact.confirmed"
+            },
+            {
+              "scope": "need",
+              "source": "llm_state_delta",
+              "status": "active",
+              "payload": {
+                "role": "hard_requirement",
+                "text": null,
+                "unit": null,
+                "notes": null,
+                "value": "single_phase",
+                "answer": null,
+                "needId": "need_generator_workshop_1",
+                "status": null,
+                "factKey": "phase",
+                "ranking": null,
+                "summary": null,
+                "activate": null,
+                "relation": "must_have",
+                "productId": null,
+                "valueText": "однофазное 220 В",
+                "confidence": 1,
+                "productIds": [],
+                "questionId": null,
+                "answerKnown": null,
+                "constraints": [],
+                "productClass": "generator",
+                "openQuestions": [],
+                "toolRequestId": null,
+                "sourceResultId": null,
+                "targetEventIds": [],
+                "negatesEventIds": [],
+                "closesQuestionIds": [],
+                "targetQuestionIds": [],
+                "rejectedProductIds": [],
+                "selectedProductIds": [],
+                "supersedesEventIds": [],
+                "selectionUpdateMode": null,
+                "constraintsUpdateMode": null,
+                "invalidatedProductIds": [],
+                "openQuestionsUpdateMode": null,
+                "rejectedProductIdsUpdateMode": null
+              },
+              "evidence": "Всё однофазное 220 В",
+              "eventType": "fact.confirmed"
+            },
+            {
+              "scope": "need",
+              "source": "llm_state_delta",
+              "status": "active",
+              "payload": {
+                "role": "hard_requirement",
+                "text": null,
+                "unit": null,
+                "notes": null,
+                "value": {
+                  "loads": [
+                    {
+                      "kind": "refrigerator",
+                      "name": "холодильник",
+                      "count": 1,
+                      "source": "explicit_user",
+                      "evidence": "холодильник 300 Вт",
+                      "basisKind": "exact_power",
+                      "runningKw": 0.3,
+                      "startingKw": null,
+                      "basisSignals": [
+                        "consumer_type_known",
+                        "explicit_power",
+                        "simultaneous_operation_known"
+                      ],
+                      "operationMode": "continuous",
+                      "runningSource": "explicit_user",
+                      "coRunningGroup": "all",
+                      "startingSource": "not_provided",
+                      "runningApparentPower": null,
+                      "startingApparentPower": null
+                    },
+                    {
+                      "kind": "circulation_pump",
+                      "name": "циркуляционный насос",
+                      "count": 1,
+                      "source": "explicit_user",
+                      "evidence": "циркуляционный насос 1,1 кВт",
+                      "basisKind": "exact_power",
+                      "runningKw": 1.1,
+                      "startingKw": null,
+                      "basisSignals": [
+                        "consumer_type_known",
+                        "consumer_function_known",
+                        "explicit_power",
+                        "simultaneous_operation_known"
+                      ],
+                      "operationMode": "continuous",
+                      "runningSource": "explicit_user",
+                      "coRunningGroup": "all",
+                      "startingSource": "not_provided",
+                      "runningApparentPower": null,
+                      "startingApparentPower": null
+                    },
+                    {
+                      "kind": "workshop_tool",
+                      "name": "инструмент",
+                      "count": 1,
+                      "source": "explicit_user",
+                      "evidence": "инструмент около 1,5 кВт",
+                      "basisKind": "exact_power",
+                      "runningKw": 1.5,
+                      "startingKw": null,
+                      "basisSignals": [
+                        "consumer_type_known",
+                        "explicit_power",
+                        "simultaneous_operation_known"
+                      ],
+                      "operationMode": "occasional",
+                      "runningSource": "explicit_user",
+                      "coRunningGroup": "after_pump",
+                      "startingSource": "not_provided",
+                      "runningApparentPower": null,
+                      "startingApparentPower": null
+                    }
+                  ],
+                  "simultaneousRunning": true,
+                  "simultaneousStarting": false
+                },
+                "answer": null,
+                "needId": "need_generator_workshop_1",
+                "status": null,
+                "factKey": "generator_load_scenario",
+                "ranking": null,
+                "summary": null,
+                "activate": null,
+                "relation": "must_have",
+                "productId": null,
+                "valueText": null,
+                "confidence": 1,
+                "productIds": [],
+                "questionId": null,
+                "answerKnown": null,
+                "constraints": [],
+                "productClass": "generator",
+                "openQuestions": [],
+                "toolRequestId": null,
+                "sourceResultId": null,
+                "targetEventIds": [],
+                "negatesEventIds": [],
+                "closesQuestionIds": [],
+                "targetQuestionIds": [],
+                "rejectedProductIds": [],
+                "selectedProductIds": [],
+                "supersedesEventIds": [],
+                "selectionUpdateMode": null,
+                "constraintsUpdateMode": null,
+                "invalidatedProductIds": [],
+                "openQuestionsUpdateMode": null,
+                "rejectedProductIdsUpdateMode": null
+              },
+              "evidence": "одновременно холодильник 300 Вт, циркуляционный насос 1,1 кВт и инструмент около 1,5 кВт",
+              "eventType": "fact.confirmed"
+            }
+          ],
+          "rationale": "Зафиксирован предварительный профиль нагрузки и ограничения генератора; пуск насоса требует внешней проверки."
+        }
+      },
+      "error_code": null,
+      "error_message": null,
+      "created_at": "2026-09-15T10:26:25.899Z",
+      "updated_at": "2026-09-15T10:26:25.899Z"
+    },
+    {
+      "checkpoint": "ledger_delta_proposed",
+      "status": "succeeded",
+      "payload": {
+        "events": [
+          {
+            "scope": "need",
+            "source": "llm_state_delta",
+            "status": "active",
+            "payload": {
+              "role": "unknown",
+              "text": null,
+              "unit": null,
+              "notes": null,
+              "value": null,
+              "answer": null,
+              "needId": "need_generator_workshop_1",
+              "status": "open",
+              "factKey": null,
+              "ranking": null,
+              "summary": "Бензиновый однофазный генератор для мастерской",
+              "activate": true,
+              "relation": null,
+              "productId": null,
+              "valueText": null,
+              "confidence": 1,
+              "productIds": [],
+              "questionId": null,
+              "answerKnown": null,
+              "constraints": [
+                "fuel_type: бензин",
+                "phase: single_phase",
+                "generator_load_scenario: {\"loads\":[{\"kind\":\"refrigerator\",\"name\":\"холодильник\",\"count\":1,\"runningKw\":0.3,\"startingKw\":null,\"runningApparentPower\":null,\"startingApparentPower\":null,\"source\":\"explicit_user\",\"runningSource\":\"explicit_user\",\"startingSource\":\"not_provided\",\"operationMode\":\"continuous\",\"coRunningGroup\":\"all\",\"evidence\":\"холодильник 300 Вт\",\"basisKind\":\"exact_power\",\"basisSignals\":[\"consumer_type_known\",\"explicit_power\",\"simultaneous_operation_known\"]},{\"kind\":\"circulation_pump\",\"name\":\"циркуляционный насос\",\"count\":1,\"runningKw\":1.1,\"startingKw\":null,\"runningApparentPower\":null,\"startingApparentPower\":null,\"source\":\"explicit_user\",\"runningSource\":\"explicit_user\",\"startingSource\":\"not_provided\",\"operationMode\":\"continuous\",\"coRunningGroup\":\"all\",\"evidence\":\"циркуляционный насос 1,1 кВт\",\"basisKind\":\"exact_power\",\"basisSignals\":[\"consumer_type_known\",\"consumer_function_known\",\"explicit_power\",\"simultaneous_operation_known\"]},{\"kind\":\"workshop_tool\",\"name\":\"инструмент\",\"count\":1,\"runningKw\":1.5,\"startingKw\":null,\"runningApparentPower\":null,\"startingApparentPower\":null,\"source\":\"explicit_user\",\"runningSource\":\"explicit_user\",\"startingSource\":\"not_provided\",\"operationMode\":\"occasional\",\"coRunningGroup\":\"after_pump\",\"evidence\":\"инструмент около 1,5 кВт\",\"basisKind\":\"exact_power\",\"basisSignals\":[\"consumer_type_known\",\"explicit_power\",\"simultaneous_operation_known\"]}],\"simultaneousRunning\":true,\"simultaneousStarting\":false}"
+              ],
+              "productClass": "generator",
+              "openQuestions": [],
+              "toolRequestId": null,
+              "sourceResultId": null,
+              "targetEventIds": [],
+              "negatesEventIds": [],
+              "closesQuestionIds": [],
+              "targetQuestionIds": [],
+              "rejectedProductIds": [],
+              "selectedProductIds": [],
+              "supersedesEventIds": [],
+              "selectionUpdateMode": "clear",
+              "constraintsUpdateMode": "replace",
+              "invalidatedProductIds": [],
+              "constraintFactBindings": [
+                {
+                  "factKey": "fuel_type",
+                  "constraint": "fuel_type: бензин"
+                },
+                {
+                  "factKey": "phase",
+                  "constraint": "phase: single_phase"
+                },
+                {
+                  "factKey": "generator_load_scenario",
+                  "constraint": "generator_load_scenario: {\"loads\":[{\"kind\":\"refrigerator\",\"name\":\"холодильник\",\"count\":1,\"runningKw\":0.3,\"startingKw\":null,\"runningApparentPower\":null,\"startingApparentPower\":null,\"source\":\"explicit_user\",\"runningSource\":\"explicit_user\",\"startingSource\":\"not_provided\",\"operationMode\":\"continuous\",\"coRunningGroup\":\"all\",\"evidence\":\"холодильник 300 Вт\",\"basisKind\":\"exact_power\",\"basisSignals\":[\"consumer_type_known\",\"explicit_power\",\"simultaneous_operation_known\"]},{\"kind\":\"circulation_pump\",\"name\":\"циркуляционный насос\",\"count\":1,\"runningKw\":1.1,\"startingKw\":null,\"runningApparentPower\":null,\"startingApparentPower\":null,\"source\":\"explicit_user\",\"runningSource\":\"explicit_user\",\"startingSource\":\"not_provided\",\"operationMode\":\"continuous\",\"coRunningGroup\":\"all\",\"evidence\":\"циркуляционный насос 1,1 кВт\",\"basisKind\":\"exact_power\",\"basisSignals\":[\"consumer_type_known\",\"consumer_function_known\",\"explicit_power\",\"simultaneous_operation_known\"]},{\"kind\":\"workshop_tool\",\"name\":\"инструмент\",\"count\":1,\"runningKw\":1.5,\"startingKw\":null,\"runningApparentPower\":null,\"startingApparentPower\":null,\"source\":\"explicit_user\",\"runningSource\":\"explicit_user\",\"startingSource\":\"not_provided\",\"operationMode\":\"occasional\",\"coRunningGroup\":\"after_pump\",\"evidence\":\"инструмент около 1,5 кВт\",\"basisKind\":\"exact_power\",\"basisSignals\":[\"consumer_type_known\",\"explicit_power\",\"simultaneous_operation_known\"]}],\"simultaneousRunning\":true,\"simultaneousStarting\":false}"
+                }
+              ],
+              "openQuestionsUpdateMode": "replace",
+              "rejectedProductIdsUpdateMode": "replace"
+            },
+            "evidence": "Нужен бензиновый генератор для мастерской.",
+            "eventType": "need.opened"
+          },
+          {
+            "scope": "need",
+            "source": "llm_state_delta",
+            "status": "active",
+            "payload": {
+              "role": "hard_requirement",
+              "text": null,
+              "unit": null,
+              "notes": null,
+              "value": "бензин",
+              "answer": null,
+              "needId": "need_generator_workshop_1",
+              "status": null,
+              "factKey": "fuel_type",
+              "ranking": null,
+              "summary": null,
+              "activate": null,
+              "relation": "must_have",
+              "productId": null,
+              "valueText": "бензиновый",
+              "confidence": 1,
+              "productIds": [],
+              "questionId": null,
+              "answerKnown": null,
+              "constraints": [],
+              "productClass": "generator",
+              "openQuestions": [],
+              "toolRequestId": null,
+              "sourceResultId": null,
+              "targetEventIds": [],
+              "negatesEventIds": [],
+              "closesQuestionIds": [],
+              "targetQuestionIds": [],
+              "rejectedProductIds": [],
+              "selectedProductIds": [],
+              "supersedesEventIds": [],
+              "selectionUpdateMode": null,
+              "constraintsUpdateMode": null,
+              "invalidatedProductIds": [],
+              "openQuestionsUpdateMode": null,
+              "rejectedProductIdsUpdateMode": null
+            },
+            "evidence": "бензиновый генератор",
+            "eventType": "fact.confirmed"
+          },
+          {
+            "scope": "need",
+            "source": "llm_state_delta",
+            "status": "active",
+            "payload": {
+              "role": "hard_requirement",
+              "text": null,
+              "unit": null,
+              "notes": null,
+              "value": "single_phase",
+              "answer": null,
+              "needId": "need_generator_workshop_1",
+              "status": null,
+              "factKey": "phase",
+              "ranking": null,
+              "summary": null,
+              "activate": null,
+              "relation": "must_have",
+              "productId": null,
+              "valueText": "однофазное 220 В",
+              "confidence": 1,
+              "productIds": [],
+              "questionId": null,
+              "answerKnown": null,
+              "constraints": [],
+              "productClass": "generator",
+              "openQuestions": [],
+              "toolRequestId": null,
+              "sourceResultId": null,
+              "targetEventIds": [],
+              "negatesEventIds": [],
+              "closesQuestionIds": [],
+              "targetQuestionIds": [],
+              "rejectedProductIds": [],
+              "selectedProductIds": [],
+              "supersedesEventIds": [],
+              "selectionUpdateMode": null,
+              "constraintsUpdateMode": null,
+              "invalidatedProductIds": [],
+              "openQuestionsUpdateMode": null,
+              "rejectedProductIdsUpdateMode": null
+            },
+            "evidence": "Всё однофазное 220 В",
+            "eventType": "fact.confirmed"
+          },
+          {
+            "scope": "need",
+            "source": "llm_state_delta",
+            "status": "active",
+            "payload": {
+              "role": "hard_requirement",
+              "text": null,
+              "unit": null,
+              "notes": null,
+              "value": {
+                "loads": [
+                  {
+                    "kind": "refrigerator",
+                    "name": "холодильник",
+                    "count": 1,
+                    "source": "explicit_user",
+                    "evidence": "холодильник 300 Вт",
+                    "basisKind": "exact_power",
+                    "runningKw": 0.3,
+                    "startingKw": null,
+                    "basisSignals": [
+                      "consumer_type_known",
+                      "explicit_power",
+                      "simultaneous_operation_known"
+                    ],
+                    "operationMode": "continuous",
+                    "runningSource": "explicit_user",
+                    "coRunningGroup": "all",
+                    "startingSource": "not_provided",
+                    "runningApparentPower": null,
+                    "startingApparentPower": null
+                  },
+                  {
+                    "kind": "circulation_pump",
+                    "name": "циркуляционный насос",
+                    "count": 1,
+                    "source": "explicit_user",
+                    "evidence": "циркуляционный насос 1,1 кВт",
+                    "basisKind": "exact_power",
+                    "runningKw": 1.1,
+                    "startingKw": null,
+                    "basisSignals": [
+                      "consumer_type_known",
+                      "consumer_function_known",
+                      "explicit_power",
+                      "simultaneous_operation_known"
+                    ],
+                    "operationMode": "continuous",
+                    "runningSource": "explicit_user",
+                    "coRunningGroup": "all",
+                    "startingSource": "not_provided",
+                    "runningApparentPower": null,
+                    "startingApparentPower": null
+                  },
+                  {
+                    "kind": "workshop_tool",
+                    "name": "инструмент",
+                    "count": 1,
+                    "source": "explicit_user",
+                    "evidence": "инструмент около 1,5 кВт",
+                    "basisKind": "exact_power",
+                    "runningKw": 1.5,
+                    "startingKw": null,
+                    "basisSignals": [
+                      "consumer_type_known",
+                      "explicit_power",
+                      "simultaneous_operation_known"
+                    ],
+                    "operationMode": "occasional",
+                    "runningSource": "explicit_user",
+                    "coRunningGroup": "after_pump",
+                    "startingSource": "not_provided",
+                    "runningApparentPower": null,
+                    "startingApparentPower": null
+                  }
+                ],
+                "simultaneousRunning": true,
+                "simultaneousStarting": false
+              },
+              "answer": null,
+              "needId": "need_generator_workshop_1",
+              "status": null,
+              "factKey": "generator_load_scenario",
+              "ranking": null,
+              "summary": null,
+              "activate": null,
+              "relation": "must_have",
+              "productId": null,
+              "valueText": null,
+              "confidence": 1,
+              "productIds": [],
+              "questionId": null,
+              "answerKnown": null,
+              "constraints": [],
+              "productClass": "generator",
+              "openQuestions": [],
+              "toolRequestId": null,
+              "sourceResultId": null,
+              "targetEventIds": [],
+              "negatesEventIds": [],
+              "closesQuestionIds": [],
+              "targetQuestionIds": [],
+              "rejectedProductIds": [],
+              "selectedProductIds": [],
+              "supersedesEventIds": [],
+              "selectionUpdateMode": null,
+              "constraintsUpdateMode": null,
+              "invalidatedProductIds": [],
+              "openQuestionsUpdateMode": null,
+              "rejectedProductIdsUpdateMode": null
+            },
+            "evidence": "одновременно холодильник 300 Вт, циркуляционный насос 1,1 кВт и инструмент около 1,5 кВт",
+            "eventType": "fact.confirmed"
+          }
+        ],
+        "rationale": "Зафиксирован предварительный профиль нагрузки и ограничения генератора; пуск насоса требует внешней проверки."
+      },
+      "error_code": null,
+      "error_message": null,
+      "created_at": "2026-09-15T10:26:25.911Z",
+      "updated_at": "2026-09-15T10:26:25.911Z"
+    },
+    {
+      "checkpoint": "intent_contract_proposed",
+      "status": "succeeded",
+      "payload": {
+        "grounding": {
+          "taskType": "product_selection",
+          "rationale": "Нужны расчёт, каталог и проверка решающего пускового параметра.",
+          "webPurpose": "technical_specs",
+          "responseMode": "recommend",
+          "sourcePolicy": "catalog_required",
+          "buyerQuestion": "Подберите 2–3 варианта из каталога, но пусковой ток насоса мне неизвестен.",
+          "webRequirement": "conditional_on_catalog_gap",
+          "buyerRequestedWeb": false,
+          "requiredToolKinds": [
+            "calculator.generatorLoad",
+            "catalog.search",
+            "web.researchProductFacts"
+          ],
+          "catalogRequirement": "required",
+          "technicalAttributes": [
+            "nominal_power_kw",
+            "max_power_kw",
+            "phase",
+            "fuel_type",
+            "pump_starting_power_kw"
+          ]
+        },
+        "riskFlags": [],
+        "toolRequests": [
+          {
+            "id": "calc_generator_workshop_1",
+            "args": {
+              "loads": [
+                {
+                  "kind": "refrigerator",
+                  "name": "холодильник",
+                  "count": 1,
+                  "source": "explicit_user",
+                  "evidence": "холодильник 300 Вт",
+                  "basisKind": "exact_power",
+                  "runningKw": 0.3,
+                  "basisSignals": [
+                    "consumer_type_known",
+                    "explicit_power",
+                    "simultaneous_operation_known"
+                  ],
+                  "operationMode": "continuous",
+                  "runningSource": "explicit_user",
+                  "coRunningGroup": "all",
+                  "startingSource": "not_provided"
+                },
+                {
+                  "kind": "circulation_pump",
+                  "name": "циркуляционный насос",
+                  "count": 1,
+                  "source": "explicit_user",
+                  "evidence": "циркуляционный насос 1,1 кВт",
+                  "basisKind": "exact_power",
+                  "runningKw": 1.1,
+                  "basisSignals": [
+                    "consumer_type_known",
+                    "consumer_function_known",
+                    "explicit_power",
+                    "simultaneous_operation_known"
+                  ],
+                  "operationMode": "continuous",
+                  "runningSource": "explicit_user",
+                  "coRunningGroup": "all",
+                  "startingSource": "not_provided"
+                },
+                {
+                  "kind": "workshop_tool",
+                  "name": "инструмент",
+                  "count": 1,
+                  "source": "explicit_user",
+                  "evidence": "инструмент около 1,5 кВт",
+                  "basisKind": "exact_power",
+                  "runningKw": 1.5,
+                  "basisSignals": [
+                    "consumer_type_known",
+                    "explicit_power",
+                    "simultaneous_operation_known"
+                  ],
+                  "operationMode": "occasional",
+                  "runningSource": "explicit_user",
+                  "coRunningGroup": "after_pump",
+                  "startingSource": "not_provided"
+                }
+              ],
+              "phase": "single_phase",
+              "query": "Расчёт нагрузки мастерской",
+              "powerSource": "fuel",
+              "estimateBasis": "bounded_assumption",
+              "productIntent": "подбор бензинового генератора для мастерской",
+              "semanticQuery": "холодильник 0,3 кВт, циркуляционный насос 1,1 кВт, инструмент 1,5 кВт",
+              "simultaneousRunning": true,
+              "simultaneousStarting": false,
+              "canonicalProductIntent": "generator",
+              "simultaneousStartingKinds": [
+                "circulation_pump"
+              ]
+            },
+            "tool": "calculator.generatorLoad",
+            "required": true,
+            "rationale": "Рассчитать рабочую и предварительную пусковую нагрузку.",
+            "coversRequirementIds": [
+              "generator_load_scenario"
+            ]
+          },
+          {
+            "id": "search_generator_workshop_1",
+            "args": {
+              "limit": 8,
+              "phase": "single_phase",
+              "query": "Бензиновые однофазные генераторы 220 В для нагрузки около 2,9 кВт",
+              "identifiers": [],
+              "powerSource": "fuel",
+              "productIntent": "подбор бензинового генератора для мастерской",
+              "semanticQuery": "бензиновый генератор для мастерской",
+              "comparisonAttributes": [
+                "nominal_power_kw",
+                "max_power_kw",
+                "price_rub",
+                "weight_kg",
+                "phase",
+                "fuel_type"
+              ],
+              "canonicalProductIntent": "generator"
+            },
+            "tool": "catalog.search",
+            "required": true,
+            "rationale": "Найти 2–3 кандидата из каталога.",
+            "coversRequirementIds": [
+              "fuel_type",
+              "phase"
+            ]
+          },
+          {
+            "id": "research_pump_start_1",
+            "args": {
+              "limit": 5,
+              "phase": "single_phase",
+              "query": "типичный пусковой ток или пусковая мощность циркуляционных насосов мощностью 1,1 кВт",
+              "powerSource": "fuel",
+              "productNames": [],
+              "productIntent": "подбор бензинового генератора для мастерской",
+              "researchScope": "product",
+              "semanticQuery": "пуск циркуляционного насоса 1,1 кВт",
+              "comparisonAttributes": [
+                "pump_starting_power_kw",
+                "pump_starting_current"
+              ],
+              "canonicalProductIntent": "generator",
+              "comparisonAttributeBindings": []
+            },
+            "tool": "web.researchProductFacts",
+            "required": true,
+            "rationale": "Проверить неизвестный пусковой параметр насоса.",
+            "coversRequirementIds": []
+          }
+        ],
+        "policyRuleIds": [
+          "cheap.preliminary_not_final"
+        ],
+        "requiresTools": true,
+        "productMentions": [],
+        "selectionPolicy": {
+          "phase": "single_phase",
+          "maxCards": 3,
+          "rationale": "Предварительный подбор по типу топлива, фазе и рассчитанному профилю нагрузки; пуск насоса требует оговорки.",
+          "needAction": "open",
+          "powerSource": "fuel",
+          "requirements": [
+            {
+              "id": "fuel_type",
+              "kind": "fuel_type",
+              "role": "hard_constraint",
+              "unit": null,
+              "value": "бензин",
+              "evidence": "бензиновый генератор",
+              "relation": "must_have",
+              "strictness": "strict",
+              "verification": {
+                "mode": "product_attribute"
+              }
+            },
+            {
+              "id": "phase",
+              "kind": "phase",
+              "role": "hard_constraint",
+              "unit": null,
+              "value": "single_phase",
+              "evidence": "Всё однофазное 220 В",
+              "relation": "must_have",
+              "strictness": "strict",
+              "verification": {
+                "mode": "product_attribute"
+              }
+            },
+            {
+              "id": "generator_load_scenario",
+              "kind": "generator_load_scenario",
+              "role": "hard_constraint",
+              "unit": null,
+              "value": true,
+              "evidence": "Одновременно работают холодильник 300 Вт, циркуляционный насос 1,1 кВт и инструмент около 1,5 кВт.",
+              "relation": "must_have",
+              "strictness": "strict",
+              "verification": {
+                "mode": "typed_tool",
+                "tool": "calculator.generatorLoad",
+                "bindAs": "nominal_power_min_kw",
+                "verifier": "generator_load_profile",
+                "toolRequestId": "calc_generator_workshop_1"
+              }
+            }
+          ],
+          "selectionGoal": "preliminary_fit",
+          "alternativePolicy": "same_class_only",
+          "rankingObjectives": [],
+          "reusePreviousCards": false,
+          "targetProductClass": "бензиновый генератор",
+          "canonicalProductClass": "generator"
+        },
+        "nextStepRationale": "Рассчитать нагрузку, найти каталоговые варианты и проверить решающий пусковой параметр по внешним источникам.",
+        "userMessageSummary": "Подобрать 2–3 бензиновых однофазных генератора для мастерской.",
+        "dialogueUnderstanding": "Рабочая нагрузка около 2,9 кВт; пуск насоса неизвестен, поэтому подбор предварительный.",
+        "mustNotAskQuestionIds": [],
+        "leadCaptureAuthorization": {
+          "purpose": null,
+          "evidence": null,
+          "authorized": false,
+          "handoffKind": "none",
+          "buyerQuestion": null,
+          "contactSource": "none",
+          "pendingDraftId": null,
+          "handoffOfferMessageId": null
+        },
+        "buyerRequestedTechnicalHandoff": null
+      },
+      "error_code": null,
+      "error_message": null,
+      "created_at": "2026-09-15T10:26:25.919Z",
+      "updated_at": "2026-09-15T10:26:25.919Z"
+    },
+    {
+      "checkpoint": "ledger_delta_applied",
+      "status": "succeeded",
+      "payload": {
+        "eventIds": [
+          "need.opened:98670cfab6fed5ba484b55e8a9cefee9",
+          "fact.confirmed:fc7f98beca0fb50323e850f3968a4e63",
+          "fact.confirmed:e85ed96dfeeb9405507ce5b000be5b22",
+          "fact.confirmed:49edfc552c8a2eff32610dfcc0468f32"
+        ]
+      },
+      "error_code": null,
+      "error_message": null,
+      "created_at": "2026-09-15T10:26:25.971Z",
+      "updated_at": "2026-09-15T10:26:25.971Z"
+    },
+    {
+      "checkpoint": "intent_contract_created",
+      "status": "succeeded",
+      "payload": {
+        "grounding": {
+          "taskType": "product_selection",
+          "rationale": "Нужны расчёт, каталог и проверка решающего пускового параметра.",
+          "webPurpose": "technical_specs",
+          "responseMode": "recommend",
+          "sourcePolicy": "catalog_required",
+          "buyerQuestion": "Подберите 2–3 варианта из каталога, но пусковой ток насоса мне неизвестен.",
+          "webRequirement": "conditional_on_catalog_gap",
+          "buyerRequestedWeb": false,
+          "requiredToolKinds": [
+            "calculator.generatorLoad",
+            "catalog.search",
+            "web.researchProductFacts"
+          ],
+          "catalogRequirement": "required",
+          "technicalAttributes": [
+            "nominal_power_kw",
+            "max_power_kw",
+            "phase",
+            "fuel_type",
+            "pump_starting_power_kw"
+          ]
+        },
+        "riskFlags": [],
+        "toolRequests": [
+          {
+            "id": "calc_generator_workshop_1",
+            "args": {
+              "loads": [
+                {
+                  "kind": "refrigerator",
+                  "name": "холодильник",
+                  "count": 1,
+                  "source": "explicit_user",
+                  "evidence": "холодильник 300 Вт",
+                  "basisKind": "exact_power",
+                  "runningKw": 0.3,
+                  "basisSignals": [
+                    "consumer_type_known",
+                    "explicit_power",
+                    "simultaneous_operation_known"
+                  ],
+                  "operationMode": "continuous",
+                  "runningSource": "explicit_user",
+                  "coRunningGroup": "all",
+                  "startingSource": "not_provided"
+                },
+                {
+                  "kind": "circulation_pump",
+                  "name": "циркуляционный насос",
+                  "count": 1,
+                  "source": "explicit_user",
+                  "evidence": "циркуляционный насос 1,1 кВт",
+                  "basisKind": "exact_power",
+                  "runningKw": 1.1,
+                  "basisSignals": [
+                    "consumer_type_known",
+                    "consumer_function_known",
+                    "explicit_power",
+                    "simultaneous_operation_known"
+                  ],
+                  "operationMode": "continuous",
+                  "runningSource": "explicit_user",
+                  "coRunningGroup": "all",
+                  "startingSource": "not_provided"
+                },
+                {
+                  "kind": "workshop_tool",
+                  "name": "инструмент",
+                  "count": 1,
+                  "source": "explicit_user",
+                  "evidence": "инструмент около 1,5 кВт",
+                  "basisKind": "exact_power",
+                  "runningKw": 1.5,
+                  "basisSignals": [
+                    "consumer_type_known",
+                    "explicit_power",
+                    "simultaneous_operation_known"
+                  ],
+                  "operationMode": "occasional",
+                  "runningSource": "explicit_user",
+                  "coRunningGroup": "after_pump",
+                  "startingSource": "not_provided"
+                }
+              ],
+              "phase": "single_phase",
+              "query": "Расчёт нагрузки мастерской",
+              "powerSource": "fuel",
+              "estimateBasis": "bounded_assumption",
+              "productIntent": "подбор бензинового генератора для мастерской",
+              "semanticQuery": "холодильник 0,3 кВт, циркуляционный насос 1,1 кВт, инструмент 1,5 кВт",
+              "simultaneousRunning": true,
+              "simultaneousStarting": false,
+              "canonicalProductIntent": "generator",
+              "simultaneousStartingKinds": [
+                "circulation_pump"
+              ]
+            },
+            "tool": "calculator.generatorLoad",
+            "required": true,
+            "rationale": "Рассчитать рабочую и предварительную пусковую нагрузку.",
+            "coversRequirementIds": [
+              "generator_load_scenario"
+            ]
+          },
+          {
+            "id": "search_generator_workshop_1",
+            "args": {
+              "limit": 8,
+              "phase": "single_phase",
+              "query": "Бензиновые однофазные генераторы 220 В для нагрузки около 2,9 кВт",
+              "identifiers": [],
+              "powerSource": "fuel",
+              "productIntent": "подбор бензинового генератора для мастерской",
+              "semanticQuery": "бензиновый генератор для мастерской",
+              "comparisonAttributes": [
+                "nominal_power_kw",
+                "max_power_kw",
+                "price_rub",
+                "weight_kg",
+                "phase",
+                "fuel_type"
+              ],
+              "canonicalProductIntent": "generator"
+            },
+            "tool": "catalog.search",
+            "required": true,
+            "rationale": "Найти 2–3 кандидата из каталога.",
+            "coversRequirementIds": [
+              "fuel_type",
+              "phase"
+            ]
+          },
+          {
+            "id": "research_pump_start_1",
+            "args": {
+              "limit": 5,
+              "phase": "single_phase",
+              "query": "типичный пусковой ток или пусковая мощность циркуляционных насосов мощностью 1,1 кВт",
+              "powerSource": "fuel",
+              "productNames": [],
+              "productIntent": "подбор бензинового генератора для мастерской",
+              "researchScope": "product",
+              "semanticQuery": "пуск циркуляционного насоса 1,1 кВт",
+              "comparisonAttributes": [
+                "pump_starting_power_kw",
+                "pump_starting_current"
+              ],
+              "canonicalProductIntent": "generator",
+              "comparisonAttributeBindings": []
+            },
+            "tool": "web.researchProductFacts",
+            "required": true,
+            "rationale": "Проверить неизвестный пусковой параметр насоса.",
+            "coversRequirementIds": []
+          }
+        ],
+        "policyRuleIds": [
+          "cheap.preliminary_not_final"
+        ],
+        "requiresTools": true,
+        "productMentions": [],
+        "selectionPolicy": {
+          "phase": "single_phase",
+          "maxCards": 3,
+          "rationale": "Предварительный подбор по типу топлива, фазе и рассчитанному профилю нагрузки; пуск насоса требует оговорки.",
+          "needAction": "open",
+          "powerSource": "fuel",
+          "requirements": [
+            {
+              "id": "fuel_type",
+              "kind": "fuel_type",
+              "role": "hard_constraint",
+              "unit": null,
+              "value": "бензин",
+              "evidence": "бензиновый генератор",
+              "relation": "must_have",
+              "strictness": "strict",
+              "verification": {
+                "mode": "product_attribute"
+              }
+            },
+            {
+              "id": "phase",
+              "kind": "phase",
+              "role": "hard_constraint",
+              "unit": null,
+              "value": "single_phase",
+              "evidence": "Всё однофазное 220 В",
+              "relation": "must_have",
+              "strictness": "strict",
+              "verification": {
+                "mode": "product_attribute"
+              }
+            },
+            {
+              "id": "generator_load_scenario",
+              "kind": "generator_load_scenario",
+              "role": "hard_constraint",
+              "unit": null,
+              "value": true,
+              "evidence": "Одновременно работают холодильник 300 Вт, циркуляционный насос 1,1 кВт и инструмент около 1,5 кВт.",
+              "relation": "must_have",
+              "strictness": "strict",
+              "verification": {
+                "mode": "typed_tool",
+                "tool": "calculator.generatorLoad",
+                "bindAs": "nominal_power_min_kw",
+                "verifier": "generator_load_profile",
+                "toolRequestId": "calc_generator_workshop_1"
+              }
+            }
+          ],
+          "selectionGoal": "preliminary_fit",
+          "alternativePolicy": "same_class_only",
+          "rankingObjectives": [],
+          "reusePreviousCards": false,
+          "targetProductClass": "бензиновый генератор",
+          "canonicalProductClass": "generator"
+        },
+        "nextStepRationale": "Рассчитать нагрузку, найти каталоговые варианты и проверить решающий пусковой параметр по внешним источникам.",
+        "userMessageSummary": "Подобрать 2–3 бензиновых однофазных генератора для мастерской.",
+        "dialogueUnderstanding": "Рабочая нагрузка около 2,9 кВт; пуск насоса неизвестен, поэтому подбор предварительный.",
+        "mustNotAskQuestionIds": [],
+        "leadCaptureAuthorization": {
+          "purpose": null,
+          "evidence": null,
+          "authorized": false,
+          "handoffKind": "none",
+          "buyerQuestion": null,
+          "contactSource": "none",
+          "pendingDraftId": null,
+          "handoffOfferMessageId": null
+        },
+        "buyerRequestedTechnicalHandoff": null
+      },
+      "error_code": null,
+      "error_message": null,
+      "created_at": "2026-09-15T10:26:26.026Z",
+      "updated_at": "2026-09-15T10:26:26.026Z"
+    },
+    {
+      "checkpoint": "observation_decision_1",
+      "status": "succeeded",
+      "payload": {
+        "action": "continue",
+        "rationale": "Рабочая нагрузка подтверждённо составляет 2,9 кВт, но пусковые нагрузки холодильника и особенно насоса не установлены. Кандидаты 3,5–3,8 кВт подходят только предварительно; для обоснованного выбора нужен более мощный запасной вариант и проверка типичной пусковой нагрузки насоса. Модель 2,8 кВт исключаю как недостаточную уже по рабочей нагрузке.",
+        "missingFacts": [
+          "Пусковая мощность/ток циркуляционного насоса 1,1 кВт",
+          "Точные номинальная и максимальная мощности ТСС SGG 5000EI 060040"
+        ],
+        "toolRequests": [
+          {
+            "id": "details_generator_5000ei_060040_round2",
+            "args": {
+              "limit": 1,
+              "notes": "Не переносить характеристики с других артикулов серии.",
+              "phase": "single_phase",
+              "query": "ТСС SGG 5000EI 5,0 кВт артикул 060040",
+              "reason": "Проверить более безопасный по запасу мощности вариант после неопределённости пускового тока насоса",
+              "productIds": [
+                "de89e8c4-3a4c-4eb2-9ed9-2dff32ca325d"
+              ],
+              "powerSource": "fuel",
+              "productNames": [
+                "Генератор бензиновый инверторный ТСС SGG 5000EI (5,0 кВт) 060040"
+              ],
+              "productIntent": "подбор бензинового генератора для мастерской",
+              "semanticQuery": "точные характеристики бензинового однофазного генератора для нагрузки 2,9 кВт",
+              "verifyCurrentPrice": false,
+              "comparisonAttributes": [
+                "nominal_power_kw",
+                "max_power_kw",
+                "phase",
+                "fuel_type",
+                "weight_kg",
+                "price_rub"
+              ],
+              "canonicalProductIntent": "generator"
+            },
+            "tool": "catalog.getProductDetails",
+            "required": true,
+            "rationale": "Получить полную карточку перспективного кандидата 5 кВт, которого каталог передал как detailRequired.",
+            "coversRequirementIds": [
+              "fuel_type",
+              "phase",
+              "generator_load_scenario"
+            ]
+          },
+          {
+            "id": "research_pump_start_round2",
+            "args": {
+              "limit": 5,
+              "notes": "Не считать отсутствие найденного диапазона доказательством отсутствия пусковой нагрузки; отделить общие ориентиры от данных конкретной модели насоса.",
+              "phase": "single_phase",
+              "query": "Какую пусковую мощность и кратность пускового тока может иметь однофазный циркуляционный насос с номинальной мощностью 1,1 кВт при запуске от бензинового генератора 220–230 В? Нужны диапазон, зависимость от типа двигателя и практический запас мощности генератора.",
+              "reason": "Уточнить решающий неизвестный параметр для запуска насоса и безопасно сопоставить кандидатов.",
+              "powerSource": "fuel",
+              "productNames": [],
+              "productIntent": "подбор бензинового генератора для мастерской",
+              "researchScope": "product",
+              "semanticQuery": "пусковая нагрузка однофазного циркуляционного насоса 1,1 кВт",
+              "comparisonAttributes": [
+                "pump_starting_power_kw",
+                "pump_starting_current",
+                "recommended_generator_margin"
+              ],
+              "canonicalProductIntent": "generator",
+              "comparisonAttributeBindings": [
+                {
+                  "attribute": "pump_starting_power_kw",
+                  "requirementId": "generator_load_scenario"
+                },
+                {
+                  "attribute": "pump_starting_current",
+                  "requirementId": "generator_load_scenario"
+                },
+                {
+                  "attribute": "recommended_generator_margin",
+                  "requirementId": "generator_load_scenario"
+                }
+              ]
+            },
+            "tool": "web.researchProductFacts",
+            "required": true,
+            "rationale": "Предыдущая проверка была прервана из-за бюджета и не дала фактов; нужна новая попытка с самостоятельным техническим вопросом.",
+            "coversRequirementIds": [
+              "generator_load_scenario"
+            ]
+          }
+        ],
+        "candidateProductIds": [
+          "6c3851c2-0067-4c34-8290-4f18a5181d00",
+          "101d1ea2-463e-4a69-8e4b-5d2881e7fce7",
+          "de89e8c4-3a4c-4eb2-9ed9-2dff32ca325d"
+        ]
+      },
+      "error_code": null,
+      "error_message": null,
+      "created_at": "2026-09-15T10:26:56.131Z",
+      "updated_at": "2026-09-15T10:26:56.131Z"
+    },
+    {
+      "checkpoint": "observation_stopped_1",
+      "status": "succeeded",
+      "payload": {
+        "rounds": 0,
+        "status": "stopped",
+        "rationale": "Рабочая нагрузка подтверждённо составляет 2,9 кВт, но пусковые нагрузки холодильника и особенно насоса не установлены. Кандидаты 3,5–3,8 кВт подходят только предварительно; для обоснованного выбора нужен более мощный запасной вариант и проверка типичной пусковой нагрузки насоса. Модель 2,8 кВт исключаю как недостаточную уже по рабочей нагрузке.",
+        "stopReason": "continuation_budget_reserve",
+        "missingFacts": [
+          "Пусковая мощность/ток циркуляционного насоса 1,1 кВт",
+          "Точные номинальная и максимальная мощности ТСС SGG 5000EI 060040"
+        ],
+        "candidateProductIds": [
+          "6c3851c2-0067-4c34-8290-4f18a5181d00",
+          "101d1ea2-463e-4a69-8e4b-5d2881e7fce7",
+          "de89e8c4-3a4c-4eb2-9ed9-2dff32ca325d"
+        ]
+      },
+      "error_code": null,
+      "error_message": null,
+      "created_at": "2026-09-15T10:26:56.149Z",
+      "updated_at": "2026-09-15T10:26:56.149Z"
+    },
+    {
+      "checkpoint": "tool_artifacts_saved",
+      "status": "succeeded",
+      "payload": {
+        "resultCount": 3
+      },
+      "error_code": null,
+      "error_message": null,
+      "created_at": "2026-09-15T10:26:56.161Z",
+      "updated_at": "2026-09-15T10:26:56.161Z"
+    },
+    {
+      "checkpoint": "answer_contract_created",
+      "status": "succeeded",
+      "payload": {
+        "factsUsed": [
+          {
+            "value": "бензин",
+            "factKey": "fuel_type",
+            "attribute": "fuel_type",
+            "claimKind": "confirmed_value",
+            "productName": null,
+            "sourceEventIds": [
+              "fact.confirmed:fc7f98beca0fb50323e850f3968a4e63"
+            ],
+            "evidenceItemIds": []
+          },
+          {
+            "value": "single_phase",
+            "factKey": "phase",
+            "attribute": "phase",
+            "claimKind": "confirmed_value",
+            "productName": null,
+            "sourceEventIds": [
+              "fact.confirmed:e85ed96dfeeb9405507ce5b000be5b22"
+            ],
+            "evidenceItemIds": []
+          },
+          {
+            "value": 0.3,
+            "factKey": "refrigerator_running_power",
+            "attribute": "runningKw",
+            "claimKind": "confirmed_value",
+            "productName": null,
+            "sourceEventIds": [
+              "calc_generator_workshop_1"
+            ],
+            "evidenceItemIds": [
+              "calc_generator_workshop_1:payload:loads:0:runningKw"
+            ]
+          },
+          {
+            "value": 1.1,
+            "factKey": "pump_running_power",
+            "attribute": "runningKw",
+            "claimKind": "confirmed_value",
+            "productName": null,
+            "sourceEventIds": [
+              "calc_generator_workshop_1"
+            ],
+            "evidenceItemIds": [
+              "calc_generator_workshop_1:payload:loads:1:runningKw"
+            ]
+          },
+          {
+            "value": 1.5,
+            "factKey": "tool_running_power",
+            "attribute": "runningKw",
+            "claimKind": "confirmed_value",
+            "productName": null,
+            "sourceEventIds": [
+              "calc_generator_workshop_1"
+            ],
+            "evidenceItemIds": [
+              "calc_generator_workshop_1:payload:loads:2:runningKw"
+            ]
+          },
+          {
+            "value": 2.9,
+            "factKey": "combined_running_load",
+            "attribute": "totalRunningKw",
+            "claimKind": "confirmed_value",
+            "productName": null,
+            "sourceEventIds": [
+              "calc_generator_workshop_1"
+            ],
+            "evidenceItemIds": [
+              "calc_generator_workshop_1:payload:loads:0:runningKw",
+              "calc_generator_workshop_1:payload:loads:1:runningKw",
+              "calc_generator_workshop_1:payload:loads:2:runningKw"
+            ]
+          },
+          {
+            "value": "not_provided",
+            "factKey": "pump_starting_power_unknown",
+            "attribute": "startingSource",
+            "claimKind": "absence_or_unknown",
+            "productName": null,
+            "sourceEventIds": [
+              "calc_generator_workshop_1"
+            ],
+            "evidenceItemIds": [
+              "calc_generator_workshop_1:payload:loads:1:startingSource"
+            ]
+          },
+          {
+            "value": "not_provided",
+            "factKey": "refrigerator_starting_power_unknown",
+            "attribute": "startingSource",
+            "claimKind": "absence_or_unknown",
+            "productName": null,
+            "sourceEventIds": [
+              "calc_generator_workshop_1"
+            ],
+            "evidenceItemIds": [
+              "calc_generator_workshop_1:payload:loads:0:startingSource"
+            ]
+          },
+          {
+            "value": "not_provided",
+            "factKey": "tool_starting_power_unknown",
+            "attribute": "startingSource",
+            "claimKind": "absence_or_unknown",
+            "productName": null,
+            "sourceEventIds": [
+              "calc_generator_workshop_1"
+            ],
+            "evidenceItemIds": [
+              "calc_generator_workshop_1:payload:loads:2:startingSource"
+            ]
+          },
+          {
+            "value": "5 кВт",
+            "factKey": "tss_5000ei_rated_power",
+            "attribute": "ratedPower",
+            "claimKind": "confirmed_value",
+            "productName": "Генератор бензиновый инверторный ТСС SGG 5000EI (5,0 кВт) 060040",
+            "sourceEventIds": [
+              "verified_fact:8a3ea242-d990-4343-bf4b-f157f253a17d"
+            ],
+            "evidenceItemIds": []
+          },
+          {
+            "value": "230 В, 1 фаза",
+            "factKey": "tss_5000ei_phase_voltage",
+            "attribute": "voltage",
+            "claimKind": "confirmed_value",
+            "productName": "Генератор бензиновый инверторный ТСС SGG 5000EI (5,0 кВт) 060040",
+            "sourceEventIds": [
+              "verified_fact:a8a88578-e999-4a4d-ad0b-94be853f18a5"
+            ],
+            "evidenceItemIds": []
+          },
+          {
+            "value": "6000 Вт",
+            "factKey": "aipower_a6500_rated_power",
+            "attribute": "ratedPower",
+            "claimKind": "confirmed_value",
+            "productName": "Генератор бензиновый A-iPower A6500 (6,0 кВт) 20108",
+            "sourceEventIds": [
+              "verified_fact:87c0aedd-a1e4-4e21-ab0b-66615a2cfdaa"
+            ],
+            "evidenceItemIds": []
+          },
+          {
+            "value": "1, 230 В / 50 Гц, ток 26,1 А, cosφ 1",
+            "factKey": "aipower_a6500_phase",
+            "attribute": "phases",
+            "claimKind": "confirmed_value",
+            "productName": "Генератор бензиновый A-iPower A6500 (6,0 кВт) 20108",
+            "sourceEventIds": [
+              "verified_fact:3ebb41da-58fc-4039-8c86-c70d95ca84f4"
+            ],
+            "evidenceItemIds": []
+          },
+          {
+            "value": "3–3.8 кВт / 3.8 кВА",
+            "factKey": "tss_4200ei_rated_power",
+            "attribute": "ratedPower",
+            "claimKind": "confirmed_value",
+            "productName": "Генератор бензиновый инверторный ТСС SGG 4200Ei (3,8 кВт) 060036",
+            "sourceEventIds": [
+              "search_generator_workshop_1"
+            ],
+            "evidenceItemIds": [
+              "search_generator_workshop_1:product:6c3851c2-0067-4c34-8290-4f18a5181d00:spec:ratedPower"
+            ]
+          },
+          {
+            "value": "230 В, 1 фаза",
+            "factKey": "tss_4200ei_voltage",
+            "attribute": "voltage",
+            "claimKind": "confirmed_value",
+            "productName": "Генератор бензиновый инверторный ТСС SGG 4200Ei (3,8 кВт) 060036",
+            "sourceEventIds": [
+              "search_generator_workshop_1"
+            ],
+            "evidenceItemIds": [
+              "search_generator_workshop_1:product:6c3851c2-0067-4c34-8290-4f18a5181d00:spec:voltage"
+            ]
+          },
+          {
+            "value": "бензиновые",
+            "factKey": "tss_4200ei_fuel",
+            "attribute": "вид топлива",
+            "claimKind": "confirmed_value",
+            "productName": "Генератор бензиновый инверторный ТСС SGG 4200Ei (3,8 кВт) 060036",
+            "sourceEventIds": [
+              "search_generator_workshop_1"
+            ],
+            "evidenceItemIds": [
+              "search_generator_workshop_1:product:6c3851c2-0067-4c34-8290-4f18a5181d00:spec:вид топлива"
+            ]
+          }
+        ],
+        "riskFlags": [
+          "preliminary_fit_only",
+          "pump_starting_load_unknown",
+          "refrigerator_starting_load_unknown",
+          "tool_starting_load_unknown",
+          "running_load_is_not_sufficient_startup_capacity"
+        ],
+        "answerText": "Предварительно я бы смотрел в первую очередь на 5 кВт и выше: рабочая сумма ваших нагрузок — около 2,9 кВт, но это расчёт только работающих приборов. Пуск холодильника и насоса не подтверждён, поэтому окончательно считать генератор достаточным пока нельзя.\n\nВарианты из каталога:\n1. **Генератор бензиновый инверторный ТСС SGG 5000EI (5,0 кВт) 060040** — предварительный основной вариант: номинально 5 кВт, однофазный 230 В. Запас относительно рабочей нагрузки — около 2,1 кВт, но способность уверенно запускать именно ваш насос нужно подтвердить по его шильдику.\n2. **Генератор бензиновый A-iPower A6500 (6,0 кВт) 20108** — более мощный предварительный вариант: номинально 6 кВт, однофазный 230 В. Это уже заметно выше рабочей нагрузки, но модель крупнее и тяжелее; пуск насоса всё равно не подтверждён.\n3. **Генератор бензиновый инверторный ТСС SGG 4200Ei (3,8 кВт) 060036** — более компактный вариант: в каталоге указана номинальная мощность 3–3,8 кВт, 230 В, 1 фаза. По рабочей нагрузке проходит предварительно, но запас небольшой — поэтому ставлю его после моделей на 5 и 6 кВт.\n\nМодели на 2,8 кВт не включаю: их номинальная мощность ниже уже подтверждённой рабочей нагрузки 2,9 кВт. Для финального выбора нужен один факт от насоса: модель или данные шильдика с пусковым током/мощностью. Какой именно насос планируется — его марка и модель?",
+        "leadAction": "none",
+        "toolResultIds": [
+          "calc_generator_workshop_1",
+          "search_generator_workshop_1",
+          "research_pump_start_1"
+        ],
+        "questionsAsked": [
+          {
+            "text": "Какой именно насос планируется — его марка и модель?",
+            "reason": "Нужно определить пусковую нагрузку и перевести предварительный подбор в финальный.",
+            "questionId": "pump_model_or_nameplate"
+          }
+        ],
+        "selectedProductIds": [
+          "de89e8c4-3a4c-4eb2-9ed9-2dff32ca325d",
+          "7c9f5ad5-89f8-4d05-83b0-82db074033fd",
+          "6c3851c2-0067-4c34-8290-4f18a5181d00"
+        ],
+        "selectionRationale": "Показаны три предварительных кандидата с подтверждённым бензиновым однофазным исполнением и номинальной мощностью от 3,8 до 6 кВт; модели 5 и 6 кВт поставлены выше из-за большего численного запаса над рабочей нагрузкой 2,9 кВт. Пусковая способность для насоса пока не подтверждена.",
+        "selectionReadiness": {
+          "status": "ready_for_preliminary_cards",
+          "rationale": "Есть заявленные требования по бензиновому топливу, однофазному 230 В и рабочей нагрузке 2,9 кВт, а каталог содержит кандидатов с номиналом выше рабочей нагрузки. Точные пусковые нагрузки не установлены, поэтому карточки допустимы только как предварительные.",
+          "missingFacts": [
+            "Пусковой ток или пусковая мощность циркуляционного насоса 1,1 кВт",
+            "Пусковая нагрузка холодильника",
+            "Пусковая нагрузка инструмента"
+          ],
+          "productClass": "generator",
+          "canShowProductCards": true
+        }
+      },
+      "error_code": null,
+      "error_message": null,
+      "created_at": "2026-09-15T10:27:26.450Z",
+      "updated_at": "2026-09-15T10:27:26.450Z"
+    }
+  ]
+}

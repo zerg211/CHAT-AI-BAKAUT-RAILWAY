@@ -31,3 +31,11 @@ Smallest fix applied after root/critic review: one `AGENT_MANAGER_FINALIZATION_R
 ## P5 — one long generated sequence exceeded the fixed test timeout under the release gate
 
 The release-gate serial suite timed out on seed 22 of `dialogueLedgerGeneratedSequences.test.ts`. An immediate isolated rerun of the complete file passed 24/24 in 48.94 seconds. No product-code change was made because the assertion and all generated sequences passed when isolated; the gate failure is preserved alongside the retry result.
+
+## P6 — aggregate calculator evidence triggered an unaffordable repair
+
+The second post-deploy widget dialogue (`#2187`, session `96948942-ee02-400d-9ba7-65b0478aa6d0`) again ended before an assistant message was committed. The first corrective reserve behaved correctly: after calculator, catalog, web research and observation, another continuation was refused with 68.15 seconds left, and the writer completed a useful draft. The semantic review then returned three `fact_evidence_attribute_mismatch` issues and repair started with only 31.359 seconds remaining; its 30-second writer deadline expired before the reserved second review.
+
+The draft declared `combined_running_load=2.9` with attribute `totalRunningKw`, but bound it to three component evidence items whose attributes are `runningKw`. The calculator had already persisted the authoritative aggregate at `payload.profile.totalRunningKw=2.9`. Recomputing this value inside the validator would be unsafe because calculator semantics include counts, operation modes, simultaneous groups, scenarios and rounding.
+
+Smallest fix after root/critic dispute: for this narrowly defined calculator aggregate only, component IDs from one successful calculator request are remapped to the exact canonical `payload.profile.totalRunningKw` item when the fact value matches it exactly. Any wrong value, missing canonical item, mixed request, non-running component or product-scoped claim remains fail-closed. Calculator profile evidence is enumerated before loads so the canonical total survives the 80-item cap. Repair admission now requires more than 47 seconds: 30 seconds for the writer, 12 seconds for the second review and 5 seconds for persistence and other operations.
