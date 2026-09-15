@@ -3,6 +3,7 @@ import type { AgentIntentContract, AnswerContract, AnswerSelectionReadiness, Too
 import {
   hasUnconfirmedGeneratorLoadBasisResult,
   hasGeneratorLoadBasisThatBlocksPreliminaryFit,
+  generatorLoadRunningFloorKw,
   isGeneratorProductClass
 } from './agentManagerGeneratorLoad.js';
 import {
@@ -1694,13 +1695,15 @@ export function selectProductsForVisibleCards(input: {
   let generatorPowerFilteredCount = 0;
   let generatorPowerNoFit = false;
   const structuredGeneratorRequirement = structuredGeneratorPowerRequirement(input.intent);
+  const runningFloorKw = generatorLoadRunningFloorKw(input.toolResults);
   const generatorPowerRequirement = isGeneratorProductClass(cardIntent)
-    ? strictRequirementAssessment.generatorNominalPowerMinKw === undefined
+    ? strictRequirementAssessment.generatorNominalPowerMinKw === undefined && runningFloorKw === undefined
         ? structuredGeneratorRequirement
         : {
             minKw: Math.max(
               structuredGeneratorRequirement?.minKw ?? 0,
-              strictRequirementAssessment.generatorNominalPowerMinKw
+              strictRequirementAssessment.generatorNominalPowerMinKw ?? 0,
+              runningFloorKw ?? 0
             ),
             maxKw: structuredGeneratorRequirement?.maxKw,
             requireNominal: true

@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { continuationValidationIssues, parseContinuationDecision } from '../src/ai/agentManagerContinuation.js';
 import { AgentIntentContractSchema, type ToolRequest } from '../src/ai/agentManagerContracts.js';
 import { observationDecisionFormatForRequirements, answerContractFormatForEvidenceSources } from '../src/ai/agentManagerOrchestrator.js';
+import { answerEvidenceSourceHints } from '../src/ai/agentManagerModelAdapter.js';
+import { reduceDialogueLedger } from '../src/ai/dialogueLedgerReducer.js';
 
 const search = (id: string, query: string): ToolRequest => ({
   id, tool: 'catalog.search', args: { query }, rationale: 'Find a suitable catalog candidate', required: true, coversRequirementIds: []
@@ -40,14 +42,32 @@ describe('observation-driven continuation boundary', () => {
     expect(observationDecisionFormatForRequirements([], []).format.schema.properties.candidateProductIds).toMatchObject({ maxItems: 0 });
   });
   it('restricts writer selection to eligible product IDs, including an empty eligible set', () => {
-    const schema = answerContractFormatForEvidenceSources(['source'], ['eligible']).format.schema.properties;
+    const schema = answerContractFormatForEvidenceSources(
+      ['source'], ['eligible'], ['missingStartingLoads', 'missingStartingLoads', 'totalRunningKw']
+    ).format.schema.properties;
     expect(schema.selectedProductIds.items).toEqual({ type: 'string', enum: ['eligible'] });
     expect(schema.factsUsed.items.properties.evidenceItemIds).toMatchObject({
       type: 'array',
       maxItems: 1,
       items: { type: 'string' }
     });
+    expect(schema.factsUsed.items.properties.attribute).toEqual({
+      type: 'string', enum: ['missingStartingLoads', 'totalRunningKw']
+    });
     expect(answerContractFormatForEvidenceSources([], []).format.schema.properties.selectedProductIds.maxItems).toBe(0);
+    expect(answerContractFormatForEvidenceSources([], []).format.schema.properties.factsUsed.items.properties.attribute)
+      .toEqual({ type: 'string' });
+  });
+  it('derives writer attributes from concrete calculator evidence', () => {
+    const hints = answerEvidenceSourceHints({
+      ledgerState: reduceDialogueLedger([]),
+      toolResults: [{
+        requestId: 'load', tool: 'calculator.generatorLoad', status: 'ok', warnings: [],
+        payload: { profile: { totalRunningKw: 2.9, missingStartingLoads: ['pump:насос'] } }
+      }]
+    });
+    expect(hints.allowedAttributes).toEqual(expect.arrayContaining(['totalRunningKw', 'missingStartingLoads']));
+    expect(hints.allowedAttributes).not.toContain('starting_power_kw');
   });
   it('allows a new read after an unhelpful initial catalog query', () => {
     expect(continuationValidationIssues({ decision: decision([search('next', 'refined query')]), intent, products: [] })).toEqual([]);

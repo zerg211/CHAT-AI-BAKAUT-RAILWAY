@@ -129,6 +129,7 @@ export type EmbeddingCoverageTarget = 'products' | 'catalog_pages' | 'troublesho
 
 export interface ProductQueryOptions {
   signal?: AbortSignal;
+  compact?: boolean;
 }
 
 export interface EmbeddingCoverage {
@@ -362,7 +363,7 @@ function mapProduct(row: QueryResultRow): Product {
   };
 }
 
-const PRODUCT_RESPONSE_COLUMNS = [
+const PRODUCT_RESPONSE_COLUMN_NAMES = [
   'id',
   'external_id',
   'slug',
@@ -380,7 +381,13 @@ const PRODUCT_RESPONSE_COLUMNS = [
   'is_active',
   'source_content_hash',
   'technical_version'
-].join(', ');
+];
+const PRODUCT_RESPONSE_COLUMNS = PRODUCT_RESPONSE_COLUMN_NAMES.join(', ');
+const PRODUCT_CANDIDATE_RESPONSE_COLUMNS = PRODUCT_RESPONSE_COLUMN_NAMES
+  // Keep enough leading copy for description-based class/feature signals while
+  // avoiding transfer of 1,000 complete descriptions before ranking.
+  .map((column) => column === 'description' ? 'left(description, 1200) AS description' : column)
+  .join(', ');
 
 const PRODUCT_FILTER = `is_active IS NOT FALSE AND (raw->>'pageType' = 'product' OR raw->>'sourceType' = 'csv')`;
 
@@ -3939,10 +3946,11 @@ export class ProductRepository {
   async searchProducts(query: string, limit = 8, options: ProductQueryOptions = {}) {
     const normalized = query.trim();
     const tokens = searchTokens(normalized);
+    const responseColumns = options.compact ? PRODUCT_CANDIDATE_RESPONSE_COLUMNS : PRODUCT_RESPONSE_COLUMNS;
     const result = await queryWithAbort(
       this.db,
       `WITH ranked AS (
-         SELECT ${PRODUCT_RESPONSE_COLUMNS},
+         SELECT ${responseColumns},
            updated_at,
            ts_rank_cd(search_tsv, websearch_to_tsquery('russian', $1)) AS retrieval_score,
            (
@@ -3980,16 +3988,18 @@ export class ProductRepository {
     return result.rows.map(mapProduct);
   }
 
-  async getProductsByIds(productIds: string[]) {
+  async getProductsByIds(productIds: string[], options: ProductQueryOptions = {}) {
     const ids = [...new Set(productIds.map((id) => id.trim()).filter(Boolean))].slice(0, 24);
     if (!ids.length) return [];
-    const result = await this.db.query(
+    const result = await queryWithAbort(
+      this.db,
       `SELECT ${PRODUCT_RESPONSE_COLUMNS}, 1::numeric AS retrieval_score, 'exact'::text AS retrieval_source
        FROM products
        WHERE ${PRODUCT_FILTER}
          AND id::text = ANY($1::text[])
        ORDER BY array_position($1::text[], id::text)`,
-      [ids]
+      [ids],
+      options.signal
     );
     return result.rows.map(mapProduct);
   }

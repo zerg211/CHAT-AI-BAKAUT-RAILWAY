@@ -518,6 +518,34 @@ describe('conditional catalog-evidence web short-circuit', () => {
     expect(filtered.droppedProductIds).toEqual([underpowered.id]);
   });
 
+  it('rejects candidates below the proven running-load floor while startup remains unknown', () => {
+    const underpowered = generator('under-running-floor');
+    underpowered.specs = { 'Nominal power': '1.6 kW' };
+    const preliminary = generator('above-running-floor');
+    preliminary.specs = { 'Nominal power': '3.5 kW' };
+    const intent = conditionalWebIntent({ selectionGoal: 'preliminary_fit' });
+    intent.selectionPolicy!.requirements = [];
+    const loadResult: ToolResult = {
+      requestId: 'load', tool: 'calculator.generatorLoad', status: 'ok', warnings: ['generator_load_startup_unconfirmed'],
+      payload: {
+        profile: {
+          totalRunningKw: 2.9,
+          runningOnlyNominalFloorKw: 3,
+          missingStartingLoads: ['pump:насос']
+        }
+      }
+    };
+
+    const filtered = filterProductsByStructuredSelectionPolicy({
+      products: [underpowered, preliminary],
+      intent,
+      toolResults: [loadResult, catalogResult([underpowered, preliminary])]
+    });
+
+    expect(filtered.products.map((product) => product.id)).toEqual([preliminary.id]);
+    expect(filtered.droppedProductIds).toContain(underpowered.id);
+  });
+
   it('uses qualified native facts to resolve unknown final-fit eligibility', () => {
     const qualified = generator('qualified-native');
     qualified.specs = {

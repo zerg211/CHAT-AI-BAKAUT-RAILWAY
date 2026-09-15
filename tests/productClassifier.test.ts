@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  classifyProduct,
   extractWeightKg,
   generatorAutoStartProfile,
   generatorRemoteStartProfile,
@@ -178,5 +179,16 @@ describe('productClassifier explicit generator remote-start facts', () => {
     expect(generatorRemoteStartProfile(product('Conflicting remote start', {
       specs: { 'remote start': false, запуск: 'дистанционный с брелока' }
     }))).toBe('conflict');
+  });
+});
+
+describe('compact catalog description signals', () => {
+  it('preserves the classifier enclosure signal inside the 1200-character candidate prefix', () => {
+    const description = `Генератор в закрытом шумозащитном кожухе. ${'подробное описание '.repeat(100)}`;
+    const compactCandidate = product('Генератор TEST 6000', {
+      category: 'Генераторы',
+      description: description.slice(0, 1200)
+    });
+    expect(classifyProduct(compactCandidate).generatorEnclosureConfidence).toBeGreaterThan(0);
   });
 });

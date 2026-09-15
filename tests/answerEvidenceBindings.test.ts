@@ -233,6 +233,24 @@ describe('claim-level answer evidence bindings', () => {
     ]));
   });
 
+  it('keeps production dialogue 2192 unknown-start attributes exact', () => {
+    const wrong = resolveAnswerEvidenceBindings({
+      answer: answer({ factKey: 'pump_start_unknown', sourceEventIds: ['calc_generator_workshop_1'],
+        evidenceItemIds: ['calc_generator_workshop_1:payload:profile:missingStartingLoads:0'], productName: null,
+        attribute: 'starting_power_kw', claimKind: 'absence_or_unknown', value: 'refrigerator:холодильник' }),
+      toolResults: [productionGeneratorLoad]
+    });
+    expect(wrong.issues.map((issue) => issue.code)).toContain('fact_evidence_attribute_mismatch');
+
+    const exact = resolveAnswerEvidenceBindings({
+      answer: answer({ factKey: 'pump_start_unknown', sourceEventIds: ['calc_generator_workshop_1'],
+        evidenceItemIds: ['calc_generator_workshop_1:payload:profile:missingStartingLoads:0'], productName: null,
+        attribute: 'missingStartingLoads', claimKind: 'absence_or_unknown', value: 'refrigerator:холодильник' }),
+      toolResults: [productionGeneratorLoad]
+    });
+    expect(exact.issues).toEqual([]);
+  });
+
   it('accepts the atomic equivalent of production dialogue 2191 with canonical evidence ids', () => {
     const productName = 'Генератор бензиновый A-iPower A6500 (6,0 кВт) 20108';
     const facts: AnswerContract['factsUsed'] = [{

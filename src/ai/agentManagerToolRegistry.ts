@@ -73,7 +73,10 @@ const catalogSearchResult = z.object({
   productIds: z.array(nonEmpty).optional(),
   products: z.array(productResult).optional(),
   generatorLoadFit: z.object({
-    requiredNominalKw: z.number().nonnegative(),
+    requiredNominalKw: z.number().nonnegative().optional(),
+    runningOnlyNominalFloorKw: z.number().nonnegative().optional(),
+    filterMinimumKw: z.number().nonnegative().optional(),
+    basis: z.enum(['required_nominal', 'running_only_floor']).optional(),
     droppedProductIds: z.array(nonEmpty),
     loadAwareRetry: z.boolean().optional()
   }).strict().optional(),

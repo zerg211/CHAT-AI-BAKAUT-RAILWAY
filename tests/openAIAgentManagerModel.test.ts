@@ -252,12 +252,18 @@ describe('OpenAIAgentManagerModel semantic inputs', () => {
       .toEqual(kind === 'verified' ? ['verified_fact:saved-force'] : undefined);
     if (kind === 'conflicting') {
       expect(writer.text.format.schema.properties.factsUsed.items.properties.sourceEventIds.maxItems).toBe(0);
+      expect(writer.text.format.schema.properties.factsUsed.items.properties.attribute).toEqual({ type: 'string' });
+    } else {
+      expect(writer.text.format.schema.properties.factsUsed.items.properties.attribute)
+        .toEqual({ type: 'string', enum: ['centrifugal_force_kn'] });
     }
     const reviewer = createStructuredJsonResponse.mock.calls[2]![0].request;
     const writerSystemPrompt = writer.input.find((item: { role: string }) => item.role === 'system').content;
     const reviewerSystemPrompt = reviewer.input.find((item: { role: string }) => item.role === 'system').content;
     expect(writerSystemPrompt).toContain('подтверждённые отдельные числа не означают подтверждённую сопоставимость');
+    expect(writerSystemPrompt).toContain('наибольшая найденная номинальная мощность');
     expect(reviewerSystemPrompt).toContain('отдельное подтверждение каждого числа не доказывает сопоставимость');
+    expect(reviewerSystemPrompt).toContain('наибольшая найденная номинальная мощность');
     expect(reviewer.text.format.schema.properties.factualIssues.maxItems).toBe(5);
     expect(reviewer.text.format.schema.properties.factualIssues.items.properties.sourceResultId.enum)
       .toEqual(kind === 'verified' ? ['verified_fact:saved-force'] : ['verified_fact:saved-force', 'verified_fact:conflicting-force']);
