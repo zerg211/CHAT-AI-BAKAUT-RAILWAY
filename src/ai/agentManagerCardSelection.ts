@@ -1414,6 +1414,24 @@ export function filterGeneratorProductsByLoadProfile(products: Product[], requir
   };
 }
 
+export function rankGeneratorProductsByLoadMinimum(products: Product[], referenceKw?: number) {
+  if (referenceKw === undefined || !Number.isFinite(referenceKw) || referenceKw <= 0 || products.length <= 1) {
+    return products;
+  }
+  return products
+    .map((product, index) => ({ product, index, nominalKw: qualifiedNominalActivePowerKw(product) }))
+    .sort((left, right) => {
+      const leftKnown = left.nominalKw !== undefined && Number.isFinite(left.nominalKw);
+      const rightKnown = right.nominalKw !== undefined && Number.isFinite(right.nominalKw);
+      if (leftKnown !== rightKnown) return leftKnown ? -1 : 1;
+      if (leftKnown && rightKnown && left.nominalKw !== right.nominalKw) {
+        return left.nominalKw! - right.nominalKw!;
+      }
+      return left.index - right.index;
+    })
+    .map(({ product }) => product);
+}
+
 function productsWithinPlateWeightRange(products: Product[], range: { min: number; max: number }) {
   return products.filter((product) => {
     const weight = extractWeightKg(product);

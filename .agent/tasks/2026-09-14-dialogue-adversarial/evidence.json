@@ -1,8 +1,8 @@
 {
   "taskId": "2026-09-14-dialogue-adversarial",
   "baselineSha": "4a8edb186ad7086fb2a302782993ff3713141116",
-  "branch": "codex/evidence-attribute-enum",
-  "verdict": "SEVENTH_CORRECTIVE_PRE_PUBLICATION_IN_PROGRESS",
+  "branch": "codex/generator-ranking-review",
+  "verdict": "EIGHTH_CORRECTIVE_PRE_PUBLICATION_PASS",
   "acceptance": {
     "AC1": "PASS",
     "AC2": "PASS",
@@ -282,7 +282,23 @@
       "errorCode": "agent_manager_generation_failed",
       "cause": "writer invented starting_power_kw for missingStartingLoads; trace also exposed underpowered pre-ranking pool and 34.128s catalog timeout overrun"
     },
-    "seventhCorrectiveBranch": "codex/evidence-attribute-enum"
+    "seventhCorrectiveBranch": "codex/evidence-attribute-enum",
+    "seventhCorrectivePr": 33,
+    "seventhCorrectiveMergedSha": "c785cb5fb6910d5c34813c7cc97284aa11cb1deb",
+    "seventhCorrectiveRailway": {
+      "status": "SUCCESS",
+      "deploymentId": "d7a30d48-87c6-4ab9-be27-c574745f7923",
+      "codeSha": "c785cb5fb6910d5c34813c7cc97284aa11cb1deb"
+    },
+    "eighthLiveDialogue": {
+      "status": "FAIL",
+      "conversationId": 2193,
+      "sessionId": "f663e763-6ace-4358-8944-e00d1866b138",
+      "turnId": "76ab31ce-1ecc-43ab-873e-eb4017f05211",
+      "errorCode": "agent_manager_generation_failed",
+      "cause": "reviewer inferred an unsupported query reference and made a false nominal-power distance comparison; catalog web targets followed non-load-ranked insertion order"
+    },
+    "eighthCorrectiveBranch": "codex/generator-ranking-review"
   },
   "fifthCorrectiveChecks": {
     "focusedTests": {
@@ -347,6 +363,56 @@
     "noNewRegex": {
       "status": "PASS",
       "legacyBaseline": 203
+    }
+  },
+  "eighthCorrectiveChecks": {
+    "focusedTests": {
+      "status": "PASS",
+      "testsPassed": 226
+    },
+    "typecheck": {
+      "status": "PASS"
+    },
+    "noNewRegex": {
+      "status": "PASS",
+      "legacyBaseline": 203
+    },
+    "build": {
+      "status": "PASS"
+    },
+    "diffCheck": {
+      "status": "PASS"
+    },
+    "criticReview": {
+      "status": "PASS",
+      "independentTestsPassed": 226,
+      "initialBlockedRevisions": 2
+    },
+    "ranking": {
+      "status": "PASS",
+      "productionOrderKw": [
+        3.4,
+        4,
+        6.6,
+        7
+      ],
+      "unknownLast": true,
+      "evidenceTierPreserved": true,
+      "explicitPreferencesPreserved": true
+    },
+    "automaticWebTargets": {
+      "status": "PASS",
+      "stalePriorOrderRegression": true
+    },
+    "parallelFullSuite": {
+      "status": "FAIL_RESOURCE_TIMEOUTS",
+      "testsPassed": 1518,
+      "testsFailed": 15,
+      "workerStartErrors": 1
+    },
+    "isolatedFailedFilesRetry": {
+      "status": "PASS",
+      "testsPassed": 118
     }
   }
 }

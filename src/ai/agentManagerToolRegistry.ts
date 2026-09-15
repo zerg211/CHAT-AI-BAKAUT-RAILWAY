@@ -78,7 +78,19 @@ const catalogSearchResult = z.object({
     filterMinimumKw: z.number().nonnegative().optional(),
     basis: z.enum(['required_nominal', 'running_only_floor']).optional(),
     droppedProductIds: z.array(nonEmpty),
-    loadAwareRetry: z.boolean().optional()
+    loadAwareRetry: z.boolean().optional(),
+    ranking: z.object({
+      scope: z.literal('returned_eligible_candidates'),
+      metric: z.literal('nominal_power_kw'),
+      referenceKw: z.number().nonnegative(),
+      basis: z.enum(['required_nominal', 'running_only_floor']),
+      orderedProductIds: z.array(nonEmpty).max(12),
+      candidates: z.array(z.object({
+        productId: nonEmpty,
+        nominalKw: z.number().nonnegative().optional(),
+        deltaAboveMinimumKw: z.number().nonnegative().optional()
+      }).strict()).max(12)
+    }).strict().optional()
   }).strict().optional(),
   retrieval: retrievalResult.optional(),
   replacementFor: z.string().optional(),
