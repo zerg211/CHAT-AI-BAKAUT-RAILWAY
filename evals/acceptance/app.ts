@@ -45,9 +45,9 @@ async function resetWorld(seedMemory=false,equivalentMemory=false) {
  await pool.query("DELETE FROM product_facts WHERE product_id=ANY($1::uuid[]) AND source_type='web'",[ids]);
  if(seedMemory)for(const [key,attribute,value] of [['G5','Масса','70 кг'],['G5','Автоматический запуск АВР','Нет'],['P85','Совместимый коврик','Коврик для виброплиты BAKAUT-TEST MAT85']]){
   const p=world.products.find((p:any)=>p.key===key),source=world.sources.find((s:any)=>s.id===`manual:${key}`);
-  await repo.upsertVerifiedProductFact({productId:p.id,productName:p.name,attribute,value,sourceType:'manual',sourceUrl:source.url,sourceTitle:source.title,evidence:source.text,sourceTier:'official_manual',sourceAuthority:'manufacturer',confidence:'high',observedAt:new Date().toISOString()});
+  await repo.upsertVerifiedProductFact({productId:p.id,productName:p.name,attribute,value,sourceType:'manual',sourceUrl:source.url,sourceTitle:source.title,evidence:source.text,evidenceVerifiedExact:true,sourceTier:'official_manual',sourceAuthority:'manufacturer',confidence:'high',observedAt:new Date().toISOString()});
  }
- if(equivalentMemory){const p=world.products.find((p:any)=>p.key==='G5');await repo.upsertVerifiedProductFact({productId:p.id,productName:p.name,attribute:'Масса',value:'70000 г',sourceType:'manual',sourceUrl:'https://fixtures.bakaut.invalid/manual/G5-alt',sourceTitle:'BAKAUT-TEST G5 alternate test manual',evidence:'Тестовый BAKAUT-TEST G5: масса 70000 г.',sourceTier:'official_manual',sourceAuthority:'manufacturer',confidence:'high',observedAt:new Date().toISOString()});}
+ if(equivalentMemory){const p=world.products.find((p:any)=>p.key==='G5');await repo.upsertVerifiedProductFact({productId:p.id,productName:p.name,attribute:'Масса',value:'70000 г',sourceType:'manual',sourceUrl:'https://fixtures.bakaut.invalid/manual/G5-alt',sourceTitle:'BAKAUT-TEST G5 alternate test manual',evidence:'Тестовый BAKAUT-TEST G5: масса 70000 г.',evidenceVerifiedExact:true,sourceTier:'official_manual',sourceAuthority:'manufacturer',confidence:'high',observedAt:new Date().toISOString()});}
  return world;
 }
 let world=await resetWorld();
