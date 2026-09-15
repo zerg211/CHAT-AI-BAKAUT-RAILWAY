@@ -181,6 +181,8 @@ describe('initial semantic producer memory references', () => {
       const context = JSON.parse(call.request.input.find((item: any) => item.role === 'user').content);
       expect(system).not.toContain('sourcesExhausted≠true или guidance partial/not_confirmed');
       expect(system).toContain('Не перекладывай поиск характеристик товара на покупателя');
+      expect(system).toContain('один самый ценный следующий вопрос');
+      expect(system).toContain('Не обещай точный или финальный вывод после одного ответа');
       expect(context.technicalResearchStatus).toEqual({ sourcesExhausted: exhausted, exhaustedResultIds: exhausted ? ['research'] : [], incompleteResultIds: exhausted ? [] : ['research'] });
     }
   });

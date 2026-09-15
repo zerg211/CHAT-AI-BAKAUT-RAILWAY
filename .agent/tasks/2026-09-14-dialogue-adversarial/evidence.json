@@ -2,7 +2,7 @@
   "taskId": "2026-09-14-dialogue-adversarial",
   "baselineSha": "4a8edb186ad7086fb2a302782993ff3713141116",
   "branch": "codex/dialogue-adversarial-correctness",
-  "verdict": "THIRD_CORRECTIVE_PRE_PUBLICATION_IN_PROGRESS",
+  "verdict": "FOURTH_CORRECTIVE_PRE_PUBLICATION_IN_PROGRESS",
   "acceptance": {
     "AC1": "PASS",
     "AC2": "PASS",
@@ -76,6 +76,15 @@
     "isolatedDialogueLedgerRetry": { "status": "PASS", "testsPassed": 24 },
     "realPostgresIntegration": { "status": "NOT_RUN", "reason": "no isolated DATABASE_URL configured" }
   },
+  "fourthCorrectiveChecks": {
+    "focusedTests": { "status": "PASS", "testsPassed": 33 },
+    "broaderRelevantTests": { "status": "PASS", "testsPassed": 232 },
+    "typecheck": { "status": "PASS" },
+    "noNewRegex": { "status": "PASS", "legacyBaseline": 203 },
+    "build": { "status": "PASS" },
+    "criticReview": { "status": "PASS", "independentTestsPassed": 33 },
+    "repairBoundaryUnchanged": { "status": "PASS", "boundaryMs": 47000 }
+  },
   "production": {
     "githubPr": 26,
     "mergedSha": "22d519e581e87e5a06f80d73b046138695600dc8",
@@ -122,6 +131,24 @@
       "errorCode": "agent_manager_recovery_failed",
       "cause": "verified memory projection lost durable exact-evidence provenance and nonnumeric tool facts did not require item binding"
     },
-    "thirdCorrectiveBranch": "codex/verified-memory-evidence-source"
+    "thirdCorrectiveBranch": "codex/verified-memory-evidence-source",
+    "thirdCorrectivePr": 29,
+    "thirdCorrectiveMergedSha": "f841e15bebb01718ac0cf1a5b0819e6158edd7dd",
+    "thirdCorrectiveRailway": {
+      "status": "SUCCESS",
+      "deploymentId": "971c29e1-cc57-45a2-a78a-aded93a90218",
+      "codeSha": "f841e15bebb01718ac0cf1a5b0819e6158edd7dd",
+      "migrationVerified": true,
+      "legacyRowsUnpromoted": 30978
+    },
+    "fourthLiveDialogue": {
+      "status": "FAIL",
+      "conversationId": 2189,
+      "sessionId": "80225914-da24-4917-8ab8-1def299725e7",
+      "turnId": "deca26dd-1fe2-41a7-a0e9-3f15387decd5",
+      "errorCode": "agent_manager_generation_failed",
+      "cause": "writer described one prioritized buyer question as the only fact needed for exact selection while three startup loads remained unknown"
+    },
+    "fourthCorrectiveBranch": "codex/generator-missing-startup-guidance"
   }
 }

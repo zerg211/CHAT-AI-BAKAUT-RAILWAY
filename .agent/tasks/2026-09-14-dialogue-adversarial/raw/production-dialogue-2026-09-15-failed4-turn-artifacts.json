@@ -1,0 +1,2805 @@
+{
+  "answers": [
+    {
+      "answer_text": "Предварительно подходят два варианта из каталога. Рабочая нагрузка по вашим данным — 2,9 кВт, а 3 кВт — это только ориентир по одновременной работе без учёта пусков. Пуск насоса, холодильника и инструмента не подтверждён, поэтому окончательно гарантировать запуск пока нельзя.\n\n1. DAEWOO GDA 4400i (3,4 кВт) — лучший по размеру: однофазный, бензиновый, номинальная мощность 3,4 кВт. Запас относительно расчётного рабочего ориентира — около 0,4 кВт, поэтому пуск насоса нужно подтвердить по его шильдику или паспорту.\n2. Zongshen PB 22000 E (17,0 кВт) 1T90DF220 — однофазный бензиновый генератор с номиналом 17 кВт. Это уже сильно избыточный вариант: примерно +14 кВт к рабочему ориентиру 3 кВт; каталожная цена также значительно выше — 399 990 ₽ против 56 990 ₽ у DAEWOO.\n\nFUBAG BS 3500 Duplex (2,8 кВт) не включаю в подбор: его номинал ниже даже рабочего ориентира 3 кВт, ещё до учёта пусковых токов.\n\nЧтобы перейти от предварительного подбора к точному, нужен один факт: марка и модель циркуляционного насоса либо его пусковая мощность/ток с шильдика.",
+      "contract": {
+        "factsUsed": [
+          {
+            "value": "бензин",
+            "factKey": "fuel_type",
+            "attribute": "fuel_type",
+            "claimKind": "confirmed_value",
+            "productName": null,
+            "sourceEventIds": [
+              "fact.confirmed:0a73d49008d45137332596dc242be788"
+            ],
+            "evidenceItemIds": []
+          },
+          {
+            "value": "single_phase",
+            "factKey": "phase",
+            "attribute": "phase",
+            "claimKind": "confirmed_value",
+            "productName": null,
+            "sourceEventIds": [
+              "fact.confirmed:0be28e348d3b71b932b73fd75ec537b7"
+            ],
+            "evidenceItemIds": []
+          },
+          {
+            "value": 2.9,
+            "factKey": "total_running_load",
+            "attribute": "totalRunningKw",
+            "claimKind": "confirmed_value",
+            "productName": null,
+            "sourceEventIds": [
+              "calc_generator_load_1"
+            ],
+            "evidenceItemIds": [
+              "calc_generator_load_1:payload:profile:totalRunningKw"
+            ]
+          },
+          {
+            "value": 3,
+            "factKey": "running_only_nominal_floor",
+            "attribute": "runningOnlyNominalFloorKw",
+            "claimKind": "confirmed_value",
+            "productName": null,
+            "sourceEventIds": [
+              "calc_generator_load_1"
+            ],
+            "evidenceItemIds": [
+              "calc_generator_load_1:payload:profile:runningOnlyNominalFloorKw"
+            ]
+          },
+          {
+            "value": "pump:циркуляционный_насос",
+            "factKey": "startup_loads_unknown",
+            "attribute": "missingStartingLoads",
+            "claimKind": "absence_or_unknown",
+            "productName": null,
+            "sourceEventIds": [
+              "calc_generator_load_1"
+            ],
+            "evidenceItemIds": [
+              "calc_generator_load_1:payload:profile:missingStartingLoads:1"
+            ]
+          },
+          {
+            "value": "3,4",
+            "factKey": "nominal_power",
+            "attribute": "мощность номинальная при 220 в, квт",
+            "claimKind": "confirmed_value",
+            "productName": "Генератор бензиновый инверторный DAEWOO GDA 4400i (3,4 кВт)",
+            "sourceEventIds": [
+              "search_generators_1"
+            ],
+            "evidenceItemIds": [
+              "search_generators_1:product:010c9196-3ec9-4e4c-8e73-8f32bcc45329:spec:мощность номинальная при 220 в, квт"
+            ]
+          },
+          {
+            "value": "однофазные",
+            "factKey": "phase",
+            "attribute": "число фаз",
+            "claimKind": "confirmed_value",
+            "productName": "Генератор бензиновый инверторный DAEWOO GDA 4400i (3,4 кВт)",
+            "sourceEventIds": [
+              "search_generators_1"
+            ],
+            "evidenceItemIds": [
+              "search_generators_1:product:010c9196-3ec9-4e4c-8e73-8f32bcc45329:spec:число фаз"
+            ]
+          },
+          {
+            "value": "бензиновые",
+            "factKey": "fuel_type",
+            "attribute": "вид топлива",
+            "claimKind": "confirmed_value",
+            "productName": "Генератор бензиновый инверторный DAEWOO GDA 4400i (3,4 кВт)",
+            "sourceEventIds": [
+              "search_generators_1"
+            ],
+            "evidenceItemIds": [
+              "search_generators_1:product:010c9196-3ec9-4e4c-8e73-8f32bcc45329:spec:вид топлива"
+            ]
+          },
+          {
+            "value": 56990,
+            "factKey": "price",
+            "attribute": "price",
+            "claimKind": "confirmed_value",
+            "productName": "Генератор бензиновый инверторный DAEWOO GDA 4400i (3,4 кВт)",
+            "sourceEventIds": [
+              "search_generators_1"
+            ],
+            "evidenceItemIds": [
+              "search_generators_1:product:010c9196-3ec9-4e4c-8e73-8f32bcc45329:field:price"
+            ]
+          },
+          {
+            "value": "17,0",
+            "factKey": "nominal_power",
+            "attribute": "мощность номинальная при 220 в, квт",
+            "claimKind": "confirmed_value",
+            "productName": "Генератор бензиновый Zongshen PB 22000 E (17,0 кВт) 1T90DF220",
+            "sourceEventIds": [
+              "search_generators_1"
+            ],
+            "evidenceItemIds": [
+              "search_generators_1:product:3d244008-78bc-45ca-94f4-76fa2d89585f:spec:мощность номинальная при 220 в, квт"
+            ]
+          },
+          {
+            "value": 399990,
+            "factKey": "price",
+            "attribute": "price",
+            "claimKind": "confirmed_value",
+            "productName": "Генератор бензиновый Zongshen PB 22000 E (17,0 кВт) 1T90DF220",
+            "sourceEventIds": [
+              "search_generators_1"
+            ],
+            "evidenceItemIds": [
+              "search_generators_1:product:3d244008-78bc-45ca-94f4-76fa2d89585f:field:price"
+            ]
+          },
+          {
+            "value": "2,8",
+            "factKey": "nominal_power",
+            "attribute": "мощность номинальная при 220 в, квт",
+            "claimKind": "confirmed_value",
+            "productName": "Генератор бензиновый FUBAG BS 3500 Duplex (2,8 кВт) 431249/8641453",
+            "sourceEventIds": [
+              "search_generators_1"
+            ],
+            "evidenceItemIds": [
+              "search_generators_1:product:538f3f62-d2b1-4470-b0f8-50bc3eb4b1c9:spec:мощность номинальная при 220 в, квт"
+            ]
+          }
+        ],
+        "riskFlags": [
+          "startup_capability_unconfirmed",
+          "running_only_floor_is_not_startup_capacity",
+          "live_stock_not_confirmed"
+        ],
+        "answerText": "Предварительно подходят два варианта из каталога. Рабочая нагрузка по вашим данным — 2,9 кВт, а 3 кВт — это только ориентир по одновременной работе без учёта пусков. Пуск насоса, холодильника и инструмента не подтверждён, поэтому окончательно гарантировать запуск пока нельзя.\n\n1. DAEWOO GDA 4400i (3,4 кВт) — лучший по размеру: однофазный, бензиновый, номинальная мощность 3,4 кВт. Запас относительно расчётного рабочего ориентира — около 0,4 кВт, поэтому пуск насоса нужно подтвердить по его шильдику или паспорту.\n2. Zongshen PB 22000 E (17,0 кВт) 1T90DF220 — однофазный бензиновый генератор с номиналом 17 кВт. Это уже сильно избыточный вариант: примерно +14 кВт к рабочему ориентиру 3 кВт; каталожная цена также значительно выше — 399 990 ₽ против 56 990 ₽ у DAEWOO.\n\nFUBAG BS 3500 Duplex (2,8 кВт) не включаю в подбор: его номинал ниже даже рабочего ориентира 3 кВт, ещё до учёта пусковых токов.\n\nЧтобы перейти от предварительного подбора к точному, нужен один факт: марка и модель циркуляционного насоса либо его пусковая мощность/ток с шильдика.",
+        "leadAction": "none",
+        "toolResultIds": [
+          "calc_generator_load_1",
+          "search_generators_1",
+          "research_generator_specs_1"
+        ],
+        "questionsAsked": [
+          {
+            "text": "Какая марка и модель насоса указана на шильдике, либо какой у него пусковой ток/мощность?",
+            "reason": "Без этого нельзя подтвердить, что генератор справится с пуском насоса.",
+            "questionId": "pump_model_or_starting_current"
+          }
+        ],
+        "selectedProductIds": [
+          "010c9196-3ec9-4e4c-8e73-8f32bcc45329",
+          "3d244008-78bc-45ca-94f4-76fa2d89585f"
+        ],
+        "selectionRationale": "DAEWOO выбран первым как ближайший к рабочему ориентиру номинал 3,4 кВт; Zongshen оставлен вторым как заведомо более мощный, но сильно избыточный и более дорогой вариант. Оба соответствуют подтверждённым требованиям по бензину и однофазному исполнению.",
+        "selectionReadiness": {
+          "status": "ready_for_preliminary_cards",
+          "rationale": "Есть подтверждённые требования по топливу и фазности, а также каталоговые кандидаты. Рабочая нагрузка рассчитана, но пусковые токи не подтверждены, поэтому карточки допустимы только как предварительный подбор.",
+          "missingFacts": [
+            "пусковая характеристика циркуляционного насоса",
+            "пусковые нагрузки холодильника и инструмента",
+            "актуальная проверка наличия"
+          ],
+          "productClass": "generator",
+          "canShowProductCards": true
+        }
+      },
+      "review": null,
+      "status": "draft",
+      "created_at": "2026-09-15T12:19:23.538Z"
+    },
+    {
+      "answer_text": "Предварительно подходят два варианта из каталога. Рабочая нагрузка по вашим данным — 2,9 кВт, а 3 кВт — это только ориентир по одновременной работе без учёта пусков. Пуск насоса, холодильника и инструмента не подтверждён, поэтому окончательно гарантировать запуск пока нельзя.\n\n1. DAEWOO GDA 4400i (3,4 кВт) — лучший по размеру: однофазный, бензиновый, номинальная мощность 3,4 кВт. Запас относительно расчётного рабочего ориентира — около 0,4 кВт, поэтому пуск насоса нужно подтвердить по его шильдику или паспорту.\n2. Zongshen PB 22000 E (17,0 кВт) 1T90DF220 — однофазный бензиновый генератор с номиналом 17 кВт. Это уже сильно избыточный вариант: примерно +14 кВт к рабочему ориентиру 3 кВт; каталожная цена также значительно выше — 399 990 ₽ против 56 990 ₽ у DAEWOO.\n\nFUBAG BS 3500 Duplex (2,8 кВт) не включаю в подбор: его номинал ниже даже рабочего ориентира 3 кВт, ещё до учёта пусковых токов.\n\nЧтобы перейти от предварительного подбора к точному, нужен один факт: марка и модель циркуляционного насоса либо его пусковая мощность/ток с шильдика.",
+      "contract": {
+        "factsUsed": [
+          {
+            "value": "бензин",
+            "factKey": "fuel_type",
+            "attribute": "fuel_type",
+            "claimKind": "confirmed_value",
+            "productName": null,
+            "sourceEventIds": [
+              "fact.confirmed:0a73d49008d45137332596dc242be788"
+            ],
+            "evidenceItemIds": []
+          },
+          {
+            "value": "single_phase",
+            "factKey": "phase",
+            "attribute": "phase",
+            "claimKind": "confirmed_value",
+            "productName": null,
+            "sourceEventIds": [
+              "fact.confirmed:0be28e348d3b71b932b73fd75ec537b7"
+            ],
+            "evidenceItemIds": []
+          },
+          {
+            "value": 2.9,
+            "factKey": "total_running_load",
+            "attribute": "totalRunningKw",
+            "claimKind": "confirmed_value",
+            "productName": null,
+            "sourceEventIds": [
+              "calc_generator_load_1"
+            ],
+            "evidenceItemIds": [
+              "calc_generator_load_1:payload:profile:totalRunningKw"
+            ]
+          },
+          {
+            "value": 3,
+            "factKey": "running_only_nominal_floor",
+            "attribute": "runningOnlyNominalFloorKw",
+            "claimKind": "confirmed_value",
+            "productName": null,
+            "sourceEventIds": [
+              "calc_generator_load_1"
+            ],
+            "evidenceItemIds": [
+              "calc_generator_load_1:payload:profile:runningOnlyNominalFloorKw"
+            ]
+          },
+          {
+            "value": "pump:циркуляционный_насос",
+            "factKey": "startup_loads_unknown",
+            "attribute": "missingStartingLoads",
+            "claimKind": "absence_or_unknown",
+            "productName": null,
+            "sourceEventIds": [
+              "calc_generator_load_1"
+            ],
+            "evidenceItemIds": [
+              "calc_generator_load_1:payload:profile:missingStartingLoads:1"
+            ]
+          },
+          {
+            "value": "3,4",
+            "factKey": "nominal_power",
+            "attribute": "мощность номинальная при 220 в, квт",
+            "claimKind": "confirmed_value",
+            "productName": "Генератор бензиновый инверторный DAEWOO GDA 4400i (3,4 кВт)",
+            "sourceEventIds": [
+              "search_generators_1"
+            ],
+            "evidenceItemIds": [
+              "search_generators_1:product:010c9196-3ec9-4e4c-8e73-8f32bcc45329:spec:мощность номинальная при 220 в, квт"
+            ]
+          },
+          {
+            "value": "однофазные",
+            "factKey": "phase",
+            "attribute": "число фаз",
+            "claimKind": "confirmed_value",
+            "productName": "Генератор бензиновый инверторный DAEWOO GDA 4400i (3,4 кВт)",
+            "sourceEventIds": [
+              "search_generators_1"
+            ],
+            "evidenceItemIds": [
+              "search_generators_1:product:010c9196-3ec9-4e4c-8e73-8f32bcc45329:spec:число фаз"
+            ]
+          },
+          {
+            "value": "бензиновые",
+            "factKey": "fuel_type",
+            "attribute": "вид топлива",
+            "claimKind": "confirmed_value",
+            "productName": "Генератор бензиновый инверторный DAEWOO GDA 4400i (3,4 кВт)",
+            "sourceEventIds": [
+              "search_generators_1"
+            ],
+            "evidenceItemIds": [
+              "search_generators_1:product:010c9196-3ec9-4e4c-8e73-8f32bcc45329:spec:вид топлива"
+            ]
+          },
+          {
+            "value": 56990,
+            "factKey": "price",
+            "attribute": "price",
+            "claimKind": "confirmed_value",
+            "productName": "Генератор бензиновый инверторный DAEWOO GDA 4400i (3,4 кВт)",
+            "sourceEventIds": [
+              "search_generators_1"
+            ],
+            "evidenceItemIds": [
+              "search_generators_1:product:010c9196-3ec9-4e4c-8e73-8f32bcc45329:field:price"
+            ]
+          },
+          {
+            "value": "17,0",
+            "factKey": "nominal_power",
+            "attribute": "мощность номинальная при 220 в, квт",
+            "claimKind": "confirmed_value",
+            "productName": "Генератор бензиновый Zongshen PB 22000 E (17,0 кВт) 1T90DF220",
+            "sourceEventIds": [
+              "search_generators_1"
+            ],
+            "evidenceItemIds": [
+              "search_generators_1:product:3d244008-78bc-45ca-94f4-76fa2d89585f:spec:мощность номинальная при 220 в, квт"
+            ]
+          },
+          {
+            "value": 399990,
+            "factKey": "price",
+            "attribute": "price",
+            "claimKind": "confirmed_value",
+            "productName": "Генератор бензиновый Zongshen PB 22000 E (17,0 кВт) 1T90DF220",
+            "sourceEventIds": [
+              "search_generators_1"
+            ],
+            "evidenceItemIds": [
+              "search_generators_1:product:3d244008-78bc-45ca-94f4-76fa2d89585f:field:price"
+            ]
+          },
+          {
+            "value": "2,8",
+            "factKey": "nominal_power",
+            "attribute": "мощность номинальная при 220 в, квт",
+            "claimKind": "confirmed_value",
+            "productName": "Генератор бензиновый FUBAG BS 3500 Duplex (2,8 кВт) 431249/8641453",
+            "sourceEventIds": [
+              "search_generators_1"
+            ],
+            "evidenceItemIds": [
+              "search_generators_1:product:538f3f62-d2b1-4470-b0f8-50bc3eb4b1c9:spec:мощность номинальная при 220 в, квт"
+            ]
+          }
+        ],
+        "riskFlags": [
+          "startup_capability_unconfirmed",
+          "running_only_floor_is_not_startup_capacity",
+          "live_stock_not_confirmed"
+        ],
+        "answerText": "Предварительно подходят два варианта из каталога. Рабочая нагрузка по вашим данным — 2,9 кВт, а 3 кВт — это только ориентир по одновременной работе без учёта пусков. Пуск насоса, холодильника и инструмента не подтверждён, поэтому окончательно гарантировать запуск пока нельзя.\n\n1. DAEWOO GDA 4400i (3,4 кВт) — лучший по размеру: однофазный, бензиновый, номинальная мощность 3,4 кВт. Запас относительно расчётного рабочего ориентира — около 0,4 кВт, поэтому пуск насоса нужно подтвердить по его шильдику или паспорту.\n2. Zongshen PB 22000 E (17,0 кВт) 1T90DF220 — однофазный бензиновый генератор с номиналом 17 кВт. Это уже сильно избыточный вариант: примерно +14 кВт к рабочему ориентиру 3 кВт; каталожная цена также значительно выше — 399 990 ₽ против 56 990 ₽ у DAEWOO.\n\nFUBAG BS 3500 Duplex (2,8 кВт) не включаю в подбор: его номинал ниже даже рабочего ориентира 3 кВт, ещё до учёта пусковых токов.\n\nЧтобы перейти от предварительного подбора к точному, нужен один факт: марка и модель циркуляционного насоса либо его пусковая мощность/ток с шильдика.",
+        "leadAction": "none",
+        "toolResultIds": [
+          "calc_generator_load_1",
+          "search_generators_1",
+          "research_generator_specs_1"
+        ],
+        "questionsAsked": [
+          {
+            "text": "Какая марка и модель насоса указана на шильдике, либо какой у него пусковой ток/мощность?",
+            "reason": "Без этого нельзя подтвердить, что генератор справится с пуском насоса.",
+            "questionId": "pump_model_or_starting_current"
+          }
+        ],
+        "selectedProductIds": [
+          "010c9196-3ec9-4e4c-8e73-8f32bcc45329",
+          "3d244008-78bc-45ca-94f4-76fa2d89585f"
+        ],
+        "selectionRationale": "DAEWOO выбран первым как ближайший к рабочему ориентиру номинал 3,4 кВт; Zongshen оставлен вторым как заведомо более мощный, но сильно избыточный и более дорогой вариант. Оба соответствуют подтверждённым требованиям по бензину и однофазному исполнению.",
+        "selectionReadiness": {
+          "status": "ready_for_preliminary_cards",
+          "rationale": "Есть подтверждённые требования по топливу и фазности, а также каталоговые кандидаты. Рабочая нагрузка рассчитана, но пусковые токи не подтверждены, поэтому карточки допустимы только как предварительный подбор.",
+          "missingFacts": [
+            "пусковая характеристика циркуляционного насоса",
+            "пусковые нагрузки холодильника и инструмента",
+            "актуальная проверка наличия"
+          ],
+          "productClass": "generator",
+          "canShowProductCards": true
+        }
+      },
+      "review": {
+        "issues": [
+          {
+            "code": "research_guidance_uncertainty_mismatch",
+            "message": "Grounded factual review rejected the claim \"Чтобы перейти от предварительного подбора к точному, нужен один факт: марка и модель циркуляционного насоса либо его пусковая мощность/ток с шильдика.\" using calc_generator_load_1: Формулировка «нужен один факт» и обещание перейти к «точному» подбору после данных только циркуляционного насоса слишком широки: расчёт также показывает неподтверждённые пусковые нагрузки холодильника и инструмента. Данные насоса действительно полезны и относятся к оборудованию покупателя, но сами по себе не подтверждают запуск всей заявленной нагрузки.",
+            "evidence": "Чтобы перейти от предварительного подбора к точному, нужен один факт: марка и модель циркуляционного насоса либо его пусковая мощность/ток с шильдика.",
+            "severity": "high"
+          }
+        ],
+        "verdict": "block"
+      },
+      "status": "rejected",
+      "created_at": "2026-09-15T12:19:32.707Z"
+    }
+  ],
+  "tools": [
+    {
+      "tool_name": "calculator.generatorLoad",
+      "tool_request_id": "calc_generator_load_1",
+      "status": "ok",
+      "payload": {
+        "loads": [
+          {
+            "kind": "refrigerator",
+            "name": "холодильник",
+            "count": 1,
+            "source": "explicit_user",
+            "evidence": "холодильник 300 Вт",
+            "basisKind": "exact_power",
+            "runningKw": 0.3,
+            "basisSignals": [
+              "consumer_type_known",
+              "explicit_power"
+            ],
+            "operationMode": "continuous",
+            "runningSource": "explicit_user",
+            "coRunningGroup": "all",
+            "startingSource": "not_provided",
+            "runningObservedKw": 0.3
+          },
+          {
+            "kind": "pump",
+            "name": "циркуляционный насос",
+            "count": 1,
+            "source": "explicit_user",
+            "evidence": "циркуляционный насос 1,1 кВт",
+            "basisKind": "exact_power",
+            "runningKw": 1.1,
+            "basisSignals": [
+              "consumer_type_known",
+              "consumer_function_known",
+              "voltage_or_phase_known",
+              "explicit_power"
+            ],
+            "operationMode": "continuous",
+            "runningSource": "explicit_user",
+            "coRunningGroup": "all",
+            "startingSource": "not_provided",
+            "runningObservedKw": 1.1
+          },
+          {
+            "kind": "workshop_tool",
+            "name": "инструмент",
+            "count": 1,
+            "source": "explicit_user",
+            "evidence": "инструмент около 1,5 кВт",
+            "basisKind": "exact_power",
+            "runningKw": 1.5,
+            "basisSignals": [
+              "consumer_type_known",
+              "voltage_or_phase_known",
+              "explicit_power"
+            ],
+            "operationMode": "occasional",
+            "runningSource": "explicit_user",
+            "coRunningGroup": "all",
+            "startingSource": "not_provided",
+            "runningObservedKw": 1.5
+          }
+        ],
+        "profile": {
+          "items": [
+            {
+              "kind": "refrigerator",
+              "name": "холодильник",
+              "count": 1,
+              "source": "explicit_user",
+              "evidence": "холодильник 300 Вт",
+              "basisKind": "exact_power",
+              "runningKw": 0.3,
+              "basisSignals": [
+                "consumer_type_known",
+                "explicit_power"
+              ],
+              "operationMode": "continuous",
+              "runningSource": "explicit_user",
+              "coRunningGroup": "all",
+              "startingSource": "not_provided",
+              "runningObservedKw": 0.3
+            },
+            {
+              "kind": "pump",
+              "name": "циркуляционный насос",
+              "count": 1,
+              "source": "explicit_user",
+              "evidence": "циркуляционный насос 1,1 кВт",
+              "basisKind": "exact_power",
+              "runningKw": 1.1,
+              "basisSignals": [
+                "consumer_type_known",
+                "consumer_function_known",
+                "voltage_or_phase_known",
+                "explicit_power"
+              ],
+              "operationMode": "continuous",
+              "runningSource": "explicit_user",
+              "coRunningGroup": "all",
+              "startingSource": "not_provided",
+              "runningObservedKw": 1.1
+            },
+            {
+              "kind": "workshop_tool",
+              "name": "инструмент",
+              "count": 1,
+              "source": "explicit_user",
+              "evidence": "инструмент около 1,5 кВт",
+              "basisKind": "exact_power",
+              "runningKw": 1.5,
+              "basisSignals": [
+                "consumer_type_known",
+                "voltage_or_phase_known",
+                "explicit_power"
+              ],
+              "operationMode": "occasional",
+              "runningSource": "explicit_user",
+              "coRunningGroup": "all",
+              "startingSource": "not_provided",
+              "runningObservedKw": 1.5
+            }
+          ],
+          "scenarios": [
+            {
+              "id": "base",
+              "label": "base continuous load",
+              "itemKinds": [
+                "refrigerator:холодильник",
+                "pump:циркуляционный_насос",
+                "workshop_tool:инструмент"
+              ],
+              "calculation": "холодильник: 1 x 0.3 kW run / ? kW start; циркуляционный насос: 1 x 1.1 kW run / ? kW start; инструмент: 1 x 1.5 kW run / ? kW start",
+              "totalRunningKw": 2.9,
+              "missingStartingLoads": [
+                "refrigerator:холодильник",
+                "pump:циркуляционный_насос",
+                "workshop_tool:инструмент"
+              ],
+              "runningOnlyNominalFloorKw": 3
+            }
+          ],
+          "calculation": "холодильник: 1 x 0.3 kW run / ? kW start; циркуляционный насос: 1 x 1.1 kW run / ? kW start; инструмент: 1 x 1.5 kW run / ? kW start",
+          "totalRunningKw": 2.9,
+          "primaryScenarioId": "base",
+          "simultaneousRunning": true,
+          "missingStartingLoads": [
+            "refrigerator:холодильник",
+            "pump:циркуляционный_насос",
+            "workshop_tool:инструмент"
+          ],
+          "simultaneousStarting": false,
+          "runningOnlyNominalFloorKw": 3,
+          "simultaneousStartingKinds": []
+        },
+        "estimateBasis": "bounded_assumption"
+      },
+      "warnings": [
+        "generator_load_startup_unconfirmed",
+        "attempts:1",
+        "duration_ms:7"
+      ],
+      "error_code": null,
+      "created_at": "2026-09-15T12:18:33.515Z"
+    },
+    {
+      "tool_name": "catalog.search",
+      "tool_request_id": "search_generators_1",
+      "status": "ok",
+      "payload": {
+        "query": "бензиновые однофазные генераторы 220 В для мастерской около 3 кВт",
+        "products": [
+          {
+            "id": "3d244008-78bc-45ca-94f4-76fa2d89585f",
+            "raw": {},
+            "name": "Генератор бензиновый Zongshen PB 22000 E (17,0 кВт) 1T90DF220",
+            "slug": "catalog/benzinovye_generatory/generator_benzinovyy_zongshen_pb_22000_e_17_0_kvt",
+            "brand": "Zongshen",
+            "price": 399990,
+            "specs": {
+              "knownFrom": "bakautprof blocks: ~17 kW single-phase",
+              "externalSpecs": "not found in this pass",
+              "артикул": "1T90DF220",
+              "дисплей": "Да",
+              "стартер": "с электростартером",
+              "число фаз": "однофазные",
+              "двигатель": "Zongshen",
+              "тип кожуха": "Открытый",
+              "автозапуск": "с автозапуском",
+              "частота, гц": "50",
+              "вид топлива": "бензиновые",
+              "альтернатор": "Синхронный",
+              "датчик масла": "с датчиком масла",
+              "класс товара": "Бытовой",
+              "контейнерный": "Нет",
+              "напряжение, в": "230В",
+              "родина бренда": "КИТАЙ",
+              "тип двигателя": "четырехтактные",
+              "производитель": "Zongshen",
+              "max. мощность, квт": "18,0",
+              "базовая единица": "шт",
+              "модель двигателя": "GB1000",
+              "вес в упаковке, кг": "265",
+              "номинальный ток, а": "73,9",
+              "счетчик моточасов": "со счетчиком моточасов",
+              "расход топлива, л/ч": "7.1",
+              "система охлаждения": "Воздушная",
+              "страна производства": "Китай/Китайские",
+              "высота в упаковке, мм": "890",
+              "ширина в упаковке, мм": "650",
+              "число оборотов, об/мин": "3000",
+              "гарантия производителя": "2 года",
+              "мощность двигателя, л.с.": "35",
+              "аккумулятор в комплекте": "с аккумулятором в комплекте",
+              "индикатор уровня топлива": "с индикатором уровня топлива",
+              "емкость топливного бака, л": "55",
+              "производитель оборудования": "Zongshen",
+              "габариты без упаковки (д/ш/в), мм": "941х762х997",
+              "мощность номинальная при 220 в, квт": "17,0"
+            },
+            "category": "Бензиновые генераторы",
+            "currency": "RUB",
+            "imageUrl": "https://bakautprof.ru/upload/iblock/048/n1z8dzlyq0gkul3yix533482jp37xzmc.jpg",
+            "isActive": true,
+            "sourceUrl": "https://bakautprof.ru/catalog/benzinovye_generatory/generator_benzinovyy_zongshen_pb_22000_e_17_0_kvt/",
+            "externalId": "bakaut:catalog/benzinovye_generatory/generator_benzinovyy_zongshen_pb_22000_e_17_0_kvt",
+            "lastSeenAt": "2026-04-26T20:08:35.870Z",
+            "description": "Специально разработанная система декомпрессии и транзисторное зажигание встроены в генератор. При достижении критического уровня масла, система контроля масла в картере отключает цепь зажигания. Большой бак для топлива объемом 50 литров обеспечивает долгое непрерывное функционирование. На корпусе генератора есть 4 розетки: две розетки силой 16А и две розетки силой 32А. Специальная рама защищает генератор от воздействия внешних факторов. Zongshen PB 22000E идеально подходит для использования в загородном доме или небольшом бизнесе. Этот профессиональный бензогенератор Zongshen PB 22000 E способен обеспечить надежное электроснабжение как для загородного дома, так и для небольшой промышленной мастерской. Система гашения вибрации оборудована на прочной раме, на которой установлен надежный и простой в обслуживании бензиновый генератор Зонгшен PB 22000 E. Двигатель GB 1000 с мощным электрическим стартером потребляет недорогой неэтилированный бензин и обеспечивает длительную и бесперебойную работу агрегата. Автоматический регулятор напряжения позволяет одновременно подключать несколько потребителей к генератору через четыре выходные розетки с разным номиналом. В случае критического падения уровня масла, в картере установлен датчик, который разъединит электрическую цепь. Прибор охлаждается воздушным способом. Устройство оснащено транспортировочными колесами и специальными ручками для удобства перемещения. Модель также имеет низкий уровень шума, небольшое потребление бензина, стабильное напряжение выработанного тока и длительный срок службы.",
+            "lastSyncedAt": "2026-04-26T20:08:35.870Z",
+            "retrievalScore": 0,
+            "retrievalSource": "text",
+            "technicalVersion": "b37b6d79c849200ab26706ce1f1a888cbb381aac14d6bfd99612911a195e7d9d",
+            "sourceContentHash": "35cb552852ca7589c366e79de32c9fdd0f102c6e5d41588ba2efbd5f20ce1faa"
+          },
+          {
+            "id": "010c9196-3ec9-4e4c-8e73-8f32bcc45329",
+            "raw": {},
+            "name": "Генератор бензиновый инверторный DAEWOO GDA 4400i (3,4 кВт)",
+            "slug": "catalog/invertornye_generatory/generator_benzinovyy_invertornyy_daewoo_gda_4400i_3_4_kvt",
+            "brand": "Daewoo",
+            "price": 56990,
+            "specs": {
+              "engine": "DAEWOO series 215, 4T, 212 см³, 7 л.с.",
+              "tank_l": "7",
+              "noise_dB": "74 @7м",
+              "weight_kg": "32",
+              "powerMax_kW": "3.7",
+              "dimensions_mm": "530x370x520",
+              "powerRated_kW": "3.4",
+              "артикул": "GDA 4400i",
+              "дисплей": "Да",
+              "стартер": "с ручным стартером",
+              "число фаз": "однофазные",
+              "runtime_h_at_50pct": "7",
+              "тип кожуха": "Открытый",
+              "автозапуск": "без автозапуска",
+              "частота, гц": "50",
+              "вид топлива": "бензиновые",
+              "альтернатор": "Синхронный",
+              "датчик масла": "с датчиком масла",
+              "класс товара": "Бытовой",
+              "контейнерный": "Нет",
+              "напряжение, в": "230В",
+              "родина бренда": "КОРЕЯ, РЕСПУБЛИКА",
+              "тип двигателя": "четырехтактные",
+              "max. мощность, квт": "3,7",
+              "базовая единица": "шт",
+              "модель двигателя": "series 215",
+              "вес в упаковке, кг": "32,6",
+              "счетчик моточасов": "без счетчика моточасов",
+              "расход топлива, л/ч": "2.2",
+              "страна производства": "Китай/Китайские",
+              "высота в упаковке, мм": "510",
+              "ширина в упаковке, мм": "370",
+              "гарантия производителя": "Гарантия производителя 1 год",
+              "мощность двигателя, л.с.": "7",
+              "аккумулятор в комплекте": "без аккумулятора в комплекте",
+              "индикатор уровня топлива": "с индикатором уровня топлива",
+              "емкость топливного бака, л": "7",
+              "производитель оборудования": "Daewoo",
+              "габариты без упаковки (д/ш/в), мм": "530x370x520",
+              "мощность номинальная при 220 в, квт": "3,4"
+            },
+            "category": "Инверторные генераторы",
+            "currency": "RUB",
+            "imageUrl": "https://bakautprof.ru/upload/iblock/39a/itir2d8xb3stl2dilutvk4k91ticmx6q.jpg",
+            "isActive": true,
+            "sourceUrl": "https://bakautprof.ru/catalog/invertornye_generatory/generator_benzinovyy_invertornyy_daewoo_gda_4400i_3_4_kvt/",
+            "externalId": "bakaut:catalog/invertornye_generatory/generator_benzinovyy_invertornyy_daewoo_gda_4400i_3_4_kvt",
+            "lastSeenAt": "2026-04-26T20:09:41.936Z",
+            "description": "Инверторный генератор Daewoo GDA 4400i на бензине - источник стабильного электрического тока высокого качества. Независимо от колебаний потребления электротока, устройство обеспечивает стабильность синусоиды и контроль за напряжением. Важно отметить, что генератор полностью защищен от влаги, включая розетки, которые оснащены заглушками, предотвращающими попадание воды на контакты. Это особенно важно при использовании генератора на улице во время дождливой погоды, так как такая защита предотвращает возможность короткого замыкания. Мощный двигатель, установленный в компактной модели, способен питать не только целый коттедж, но и обеспечить продолжительную работу необходимых бытовых приборов с предельной мощностью в 3 кВт. Кроме того, эту модель можно использовать в гараже и мастерской. Ее различные типы выходов, включая выход под 5В, позволяют также заряжать мобильные устройства.",
+            "lastSyncedAt": "2026-04-26T20:09:41.936Z",
+            "retrievalScore": 0,
+            "retrievalSource": "text",
+            "technicalVersion": "ea1bbce77e9125950050d1af994d01c83c1b9f655b4ff0b8bdfa1b5ea66a6848",
+            "sourceContentHash": "0ccc645d1ed42ecf5cccfb0396c87c72ce419866734f2a9a629f9c28217e5cbd"
+          },
+          {
+            "id": "538f3f62-d2b1-4470-b0f8-50bc3eb4b1c9",
+            "raw": {},
+            "name": "Генератор бензиновый FUBAG BS 3500 Duplex (2,8 кВт) 431249/8641453",
+            "slug": "catalog/benzinovye_generatory/generator_benzinovyy_fubag_bs_3500_duplex_2_8_kvt",
+            "brand": "Fubag",
+            "price": 41040,
+            "specs": {
+              "oil_l": "0.6",
+              "tank_l": "15",
+              "fuel_l_h": "1.5",
+              "noise_db": "74",
+              "ip_rating": "IP23",
+              "nominal_A": "12.2",
+              "weight_kg": "43",
+              "powerMax_kW": "3.1",
+              "powerNom_kW": "2.8",
+              "engine_model": "CBS210",
+              "артикул": "431249/8641453",
+              "дисплей": "Да",
+              "стартер": "с ручным стартером",
+              "число фаз": "однофазные",
+              "двигатель": "FUBAG",
+              "тип кожуха": "Открытый",
+              "автозапуск": "без автозапуска",
+              "частота, гц": "50",
+              "вид топлива": "бензиновые",
+              "альтернатор": "Синхронный",
+              "датчик масла": "с датчиком масла",
+              "класс товара": "Бытовой",
+              "контейнерный": "Нет",
+              "напряжение, в": "230В",
+              "родина бренда": "ГЕРМАНИЯ",
+              "тип двигателя": "четырехтактные",
+              "производитель": "FUBAG",
+              "max. мощность, квт": "3,1",
+              "базовая единица": "шт",
+              "вес в упаковке, кг": "49",
+              "счетчик моточасов": "без счетчика моточасов",
+              "система охлаждения": "Воздушная",
+              "страна производства": "Китай/Китайские",
+              "высота в упаковке, мм": "460",
+              "ширина в упаковке, мм": "540",
+              "гарантия производителя": "2 года",
+              "аккумулятор в комплекте": "без аккумулятора в комплекте",
+              "индикатор уровня топлива": "с индикатором уровня топлива",
+              "емкость топливного бака, л": "15",
+              "производитель оборудования": "Fubag",
+              "габариты без упаковки (д/ш/в), мм": "600х450х461",
+              "мощность номинальная при 220 в, квт": "2,8"
+            },
+            "category": "Бензиновые генераторы",
+            "currency": "RUB",
+            "imageUrl": "https://bakautprof.ru/upload/iblock/293/elgn3jsnc1qzrr1t0xin782tycmcfdz7.jpg",
+            "isActive": true,
+            "sourceUrl": "https://bakautprof.ru/catalog/benzinovye_generatory/generator_benzinovyy_fubag_bs_3500_duplex_2_8_kvt/",
+            "externalId": "bakaut:catalog/benzinovye_generatory/generator_benzinovyy_fubag_bs_3500_duplex_2_8_kvt",
+            "lastSeenAt": "2026-04-26T20:08:00.758Z",
+            "description": "Специально разработанная электростанция FUBAG BS 3500 Duplex 431249 с бензиновым двигателем предлагает удивительно легкий вес и долгое время автономной работы без необходимости дозаправки. Идеально подходит для использования на строительной площадке или для обеспечения энергией загородного дома во время отключения электричества. Уникальная рамная конструкция электростанции помогает снизить вибрации и облегчает эксплуатацию. Длительность работы составляет около 13 часов. Встроенная защита от перегрузки Пиковая мощность достигает 7 кВА - наличие защиты от перегрузки предохраняет FUBAG BS 3500 Duplex 431249 от поломок.",
+            "lastSyncedAt": "2026-04-26T20:08:00.758Z",
+            "retrievalScore": 0,
+            "retrievalSource": "text",
+            "technicalVersion": "801c51550a57cb586b09110280bc3f6718d082936790bf830a70aeba7be0d1db",
+            "sourceContentHash": "8041c79b594485feff53a0bed9f7decc2cbe266775f634eebd1935a2a489c7e8"
+          }
+        ],
+        "retrieval": {
+          "query": "бензиновые однофазные генераторы 220 В для мастерской около 3 кВт",
+          "intent": "generator",
+          "textCount": 200,
+          "vectorCount": 200,
+          "candidateTiers": [
+            {
+              "tier": "preliminary_match",
+              "productId": "3d244008-78bc-45ca-94f4-76fa2d89585f",
+              "tradeoffs": []
+            },
+            {
+              "tier": "preliminary_match",
+              "productId": "010c9196-3ec9-4e4c-8e73-8f32bcc45329",
+              "tradeoffs": []
+            },
+            {
+              "tier": "preliminary_match",
+              "productId": "538f3f62-d2b1-4470-b0f8-50bc3eb4b1c9",
+              "tradeoffs": []
+            },
+            {
+              "tier": "rejected",
+              "productId": "5a3ee595-5c16-4a14-b8d4-560fc4807a37",
+              "tradeoffs": []
+            },
+            {
+              "tier": "rejected",
+              "productId": "b71e1506-7a4e-4573-b034-376b07d6cd28",
+              "tradeoffs": []
+            },
+            {
+              "tier": "rejected",
+              "productId": "2de6ff3d-1aa6-4832-865b-d5a334796122",
+              "tradeoffs": []
+            },
+            {
+              "tier": "rejected",
+              "productId": "21915f7a-522b-49f1-a046-d92568f2001d",
+              "tradeoffs": []
+            },
+            {
+              "tier": "rejected",
+              "productId": "056e35d1-7a92-4446-9eba-0b05cbe43c8c",
+              "tradeoffs": []
+            },
+            {
+              "tier": "rejected",
+              "productId": "8a7351dd-b77f-4ed6-8cd6-a3e1405d1f7d",
+              "tradeoffs": []
+            },
+            {
+              "tier": "rejected",
+              "productId": "71ce30d6-02e0-4099-9010-8823d114c285",
+              "tradeoffs": []
+            },
+            {
+              "tier": "rejected",
+              "productId": "6fc4a58e-d74d-4e69-b814-7f73b84e8491",
+              "tradeoffs": []
+            },
+            {
+              "tier": "rejected",
+              "productId": "df76ee6c-30b9-4953-890d-b2b7effb0044",
+              "tradeoffs": []
+            }
+          ],
+          "embeddingQuery": "2–3 предварительных кандидата для заданной нагрузки",
+          "usedEmbeddings": true,
+          "identityMatches": [],
+          "primaryExpansion": null
+        },
+        "productIds": [
+          "3d244008-78bc-45ca-94f4-76fa2d89585f",
+          "010c9196-3ec9-4e4c-8e73-8f32bcc45329",
+          "538f3f62-d2b1-4470-b0f8-50bc3eb4b1c9"
+        ]
+      },
+      "warnings": [
+        "catalog_products_semantic_class_unconfirmed:generator:202",
+        "answer_products_filtered_by_structured_hard_constraints:60",
+        "answer_products_preliminary:unknown_evidence_kept:137",
+        "attempts:1",
+        "duration_ms:5970"
+      ],
+      "error_code": null,
+      "created_at": "2026-09-15T12:18:39.496Z"
+    },
+    {
+      "tool_name": "web.researchProductFacts",
+      "tool_request_id": "research_generator_specs_1",
+      "status": "ok",
+      "payload": {
+        "facts": [],
+        "products": [
+          {
+            "id": "3d244008-78bc-45ca-94f4-76fa2d89585f",
+            "raw": {},
+            "name": "Генератор бензиновый Zongshen PB 22000 E (17,0 кВт) 1T90DF220",
+            "slug": "catalog/benzinovye_generatory/generator_benzinovyy_zongshen_pb_22000_e_17_0_kvt",
+            "brand": "Zongshen",
+            "price": 399990,
+            "specs": {
+              "knownFrom": "bakautprof blocks: ~17 kW single-phase",
+              "externalSpecs": "not found in this pass",
+              "артикул": "1T90DF220",
+              "дисплей": "Да",
+              "стартер": "с электростартером",
+              "число фаз": "однофазные",
+              "двигатель": "Zongshen",
+              "тип кожуха": "Открытый",
+              "автозапуск": "с автозапуском",
+              "частота, гц": "50",
+              "вид топлива": "бензиновые",
+              "альтернатор": "Синхронный",
+              "датчик масла": "с датчиком масла",
+              "класс товара": "Бытовой",
+              "контейнерный": "Нет",
+              "напряжение, в": "230В",
+              "родина бренда": "КИТАЙ",
+              "тип двигателя": "четырехтактные",
+              "производитель": "Zongshen",
+              "max. мощность, квт": "18,0",
+              "базовая единица": "шт",
+              "модель двигателя": "GB1000",
+              "вес в упаковке, кг": "265",
+              "номинальный ток, а": "73,9",
+              "счетчик моточасов": "со счетчиком моточасов",
+              "расход топлива, л/ч": "7.1",
+              "система охлаждения": "Воздушная",
+              "страна производства": "Китай/Китайские",
+              "высота в упаковке, мм": "890",
+              "ширина в упаковке, мм": "650",
+              "число оборотов, об/мин": "3000",
+              "гарантия производителя": "2 года",
+              "мощность двигателя, л.с.": "35",
+              "аккумулятор в комплекте": "с аккумулятором в комплекте",
+              "индикатор уровня топлива": "с индикатором уровня топлива",
+              "емкость топливного бака, л": "55",
+              "производитель оборудования": "Zongshen",
+              "габариты без упаковки (д/ш/в), мм": "941х762х997",
+              "мощность номинальная при 220 в, квт": "17,0"
+            },
+            "category": "Бензиновые генераторы",
+            "currency": "RUB",
+            "imageUrl": "https://bakautprof.ru/upload/iblock/048/n1z8dzlyq0gkul3yix533482jp37xzmc.jpg",
+            "isActive": true,
+            "sourceUrl": "https://bakautprof.ru/catalog/benzinovye_generatory/generator_benzinovyy_zongshen_pb_22000_e_17_0_kvt/",
+            "externalId": "bakaut:catalog/benzinovye_generatory/generator_benzinovyy_zongshen_pb_22000_e_17_0_kvt",
+            "lastSeenAt": "2026-04-26T20:08:35.870Z",
+            "description": "Специально разработанная система декомпрессии и транзисторное зажигание встроены в генератор. При достижении критического уровня масла, система контроля масла в картере отключает цепь зажигания. Большой бак для топлива объемом 50 литров обеспечивает долгое непрерывное функционирование. На корпусе генератора есть 4 розетки: две розетки силой 16А и две розетки силой 32А. Специальная рама защищает генератор от воздействия внешних факторов. Zongshen PB 22000E идеально подходит для использования в загородном доме или небольшом бизнесе. Этот профессиональный бензогенератор Zongshen PB 22000 E способен обеспечить надежное электроснабжение как для загородного дома, так и для небольшой промышленной мастерской. Система гашения вибрации оборудована на прочной раме, на которой установлен надежный и простой в обслуживании бензиновый генератор Зонгшен PB 22000 E. Двигатель GB 1000 с мощным электрическим стартером потребляет недорогой неэтилированный бензин и обеспечивает длительную и бесперебойную работу агрегата. Автоматический регулятор напряжения позволяет одновременно подключать несколько потребителей к генератору через четыре выходные розетки с разным номиналом. В случае критического падения уровня масла, в картере установлен датчик, который разъединит электрическую цепь. Прибор охлаждается воздушным способом. Устройство оснащено транспортировочными колесами и специальными ручками для удобства перемещения. Модель также имеет низкий уровень шума, небольшое потребление бензина, стабильное напряжение выработанного тока и длительный срок службы.",
+            "lastSyncedAt": "2026-04-26T20:08:35.870Z",
+            "retrievalScore": 1,
+            "retrievalSource": "exact",
+            "technicalVersion": "b37b6d79c849200ab26706ce1f1a888cbb381aac14d6bfd99612911a195e7d9d",
+            "sourceContentHash": "35cb552852ca7589c366e79de32c9fdd0f102c6e5d41588ba2efbd5f20ce1faa"
+          },
+          {
+            "id": "010c9196-3ec9-4e4c-8e73-8f32bcc45329",
+            "raw": {},
+            "name": "Генератор бензиновый инверторный DAEWOO GDA 4400i (3,4 кВт)",
+            "slug": "catalog/invertornye_generatory/generator_benzinovyy_invertornyy_daewoo_gda_4400i_3_4_kvt",
+            "brand": "Daewoo",
+            "price": 56990,
+            "specs": {
+              "engine": "DAEWOO series 215, 4T, 212 см³, 7 л.с.",
+              "tank_l": "7",
+              "noise_dB": "74 @7м",
+              "weight_kg": "32",
+              "powerMax_kW": "3.7",
+              "dimensions_mm": "530x370x520",
+              "powerRated_kW": "3.4",
+              "артикул": "GDA 4400i",
+              "дисплей": "Да",
+              "стартер": "с ручным стартером",
+              "число фаз": "однофазные",
+              "runtime_h_at_50pct": "7",
+              "тип кожуха": "Открытый",
+              "автозапуск": "без автозапуска",
+              "частота, гц": "50",
+              "вид топлива": "бензиновые",
+              "альтернатор": "Синхронный",
+              "датчик масла": "с датчиком масла",
+              "класс товара": "Бытовой",
+              "контейнерный": "Нет",
+              "напряжение, в": "230В",
+              "родина бренда": "КОРЕЯ, РЕСПУБЛИКА",
+              "тип двигателя": "четырехтактные",
+              "max. мощность, квт": "3,7",
+              "базовая единица": "шт",
+              "модель двигателя": "series 215",
+              "вес в упаковке, кг": "32,6",
+              "счетчик моточасов": "без счетчика моточасов",
+              "расход топлива, л/ч": "2.2",
+              "страна производства": "Китай/Китайские",
+              "высота в упаковке, мм": "510",
+              "ширина в упаковке, мм": "370",
+              "гарантия производителя": "Гарантия производителя 1 год",
+              "мощность двигателя, л.с.": "7",
+              "аккумулятор в комплекте": "без аккумулятора в комплекте",
+              "индикатор уровня топлива": "с индикатором уровня топлива",
+              "емкость топливного бака, л": "7",
+              "производитель оборудования": "Daewoo",
+              "габариты без упаковки (д/ш/в), мм": "530x370x520",
+              "мощность номинальная при 220 в, квт": "3,4"
+            },
+            "category": "Инверторные генераторы",
+            "currency": "RUB",
+            "imageUrl": "https://bakautprof.ru/upload/iblock/39a/itir2d8xb3stl2dilutvk4k91ticmx6q.jpg",
+            "isActive": true,
+            "sourceUrl": "https://bakautprof.ru/catalog/invertornye_generatory/generator_benzinovyy_invertornyy_daewoo_gda_4400i_3_4_kvt/",
+            "externalId": "bakaut:catalog/invertornye_generatory/generator_benzinovyy_invertornyy_daewoo_gda_4400i_3_4_kvt",
+            "lastSeenAt": "2026-04-26T20:09:41.936Z",
+            "description": "Инверторный генератор Daewoo GDA 4400i на бензине - источник стабильного электрического тока высокого качества. Независимо от колебаний потребления электротока, устройство обеспечивает стабильность синусоиды и контроль за напряжением. Важно отметить, что генератор полностью защищен от влаги, включая розетки, которые оснащены заглушками, предотвращающими попадание воды на контакты. Это особенно важно при использовании генератора на улице во время дождливой погоды, так как такая защита предотвращает возможность короткого замыкания. Мощный двигатель, установленный в компактной модели, способен питать не только целый коттедж, но и обеспечить продолжительную работу необходимых бытовых приборов с предельной мощностью в 3 кВт. Кроме того, эту модель можно использовать в гараже и мастерской. Ее различные типы выходов, включая выход под 5В, позволяют также заряжать мобильные устройства.",
+            "lastSyncedAt": "2026-04-26T20:09:41.936Z",
+            "retrievalScore": 1,
+            "retrievalSource": "exact",
+            "technicalVersion": "ea1bbce77e9125950050d1af994d01c83c1b9f655b4ff0b8bdfa1b5ea66a6848",
+            "sourceContentHash": "0ccc645d1ed42ecf5cccfb0396c87c72ce419866734f2a9a629f9c28217e5cbd"
+          },
+          {
+            "id": "538f3f62-d2b1-4470-b0f8-50bc3eb4b1c9",
+            "raw": {},
+            "name": "Генератор бензиновый FUBAG BS 3500 Duplex (2,8 кВт) 431249/8641453",
+            "slug": "catalog/benzinovye_generatory/generator_benzinovyy_fubag_bs_3500_duplex_2_8_kvt",
+            "brand": "Fubag",
+            "price": 41040,
+            "specs": {
+              "oil_l": "0.6",
+              "tank_l": "15",
+              "fuel_l_h": "1.5",
+              "noise_db": "74",
+              "ip_rating": "IP23",
+              "nominal_A": "12.2",
+              "weight_kg": "43",
+              "powerMax_kW": "3.1",
+              "powerNom_kW": "2.8",
+              "engine_model": "CBS210",
+              "артикул": "431249/8641453",
+              "дисплей": "Да",
+              "стартер": "с ручным стартером",
+              "число фаз": "однофазные",
+              "двигатель": "FUBAG",
+              "тип кожуха": "Открытый",
+              "автозапуск": "без автозапуска",
+              "частота, гц": "50",
+              "вид топлива": "бензиновые",
+              "альтернатор": "Синхронный",
+              "датчик масла": "с датчиком масла",
+              "класс товара": "Бытовой",
+              "контейнерный": "Нет",
+              "напряжение, в": "230В",
+              "родина бренда": "ГЕРМАНИЯ",
+              "тип двигателя": "четырехтактные",
+              "производитель": "FUBAG",
+              "max. мощность, квт": "3,1",
+              "базовая единица": "шт",
+              "вес в упаковке, кг": "49",
+              "счетчик моточасов": "без счетчика моточасов",
+              "система охлаждения": "Воздушная",
+              "страна производства": "Китай/Китайские",
+              "высота в упаковке, мм": "460",
+              "ширина в упаковке, мм": "540",
+              "гарантия производителя": "2 года",
+              "аккумулятор в комплекте": "без аккумулятора в комплекте",
+              "индикатор уровня топлива": "с индикатором уровня топлива",
+              "емкость топливного бака, л": "15",
+              "производитель оборудования": "Fubag",
+              "габариты без упаковки (д/ш/в), мм": "600х450х461",
+              "мощность номинальная при 220 в, квт": "2,8"
+            },
+            "category": "Бензиновые генераторы",
+            "currency": "RUB",
+            "imageUrl": "https://bakautprof.ru/upload/iblock/293/elgn3jsnc1qzrr1t0xin782tycmcfdz7.jpg",
+            "isActive": true,
+            "sourceUrl": "https://bakautprof.ru/catalog/benzinovye_generatory/generator_benzinovyy_fubag_bs_3500_duplex_2_8_kvt/",
+            "externalId": "bakaut:catalog/benzinovye_generatory/generator_benzinovyy_fubag_bs_3500_duplex_2_8_kvt",
+            "lastSeenAt": "2026-04-26T20:08:00.758Z",
+            "description": "Специально разработанная электростанция FUBAG BS 3500 Duplex 431249 с бензиновым двигателем предлагает удивительно легкий вес и долгое время автономной работы без необходимости дозаправки. Идеально подходит для использования на строительной площадке или для обеспечения энергией загородного дома во время отключения электричества. Уникальная рамная конструкция электростанции помогает снизить вибрации и облегчает эксплуатацию. Длительность работы составляет около 13 часов. Встроенная защита от перегрузки Пиковая мощность достигает 7 кВА - наличие защиты от перегрузки предохраняет FUBAG BS 3500 Duplex 431249 от поломок.",
+            "lastSyncedAt": "2026-04-26T20:08:00.758Z",
+            "retrievalScore": 1,
+            "retrievalSource": "exact",
+            "technicalVersion": "801c51550a57cb586b09110280bc3f6718d082936790bf830a70aeba7be0d1db",
+            "sourceContentHash": "8041c79b594485feff53a0bed9f7decc2cbe266775f634eebd1935a2a489c7e8"
+          }
+        ],
+        "warnings": [
+          "catalog_extraction_skipped_insufficient_budget",
+          "source_tier_timed_out:official_page",
+          "official_manual_candidates_found_but_pdf_content_not_read_in_this_attempt",
+          "source_evidence_pdf_truncated_to_safe_page_limit",
+          "source_evidence_fetch_failed",
+          "document_read_text_truncated",
+          "Предоставленный документ относится к каталогу FUBAG, но переданные фрагменты не содержат точную модель FUBAG BS 3500 Duplex 431249/8641453.",
+          "Пусковой ток циркуляционного насоса неизвестен; starting_capability нельзя подтвердить без данных производителя генератора или насоса.",
+          "discovered_document_read",
+          "answer_guidance_invalidated_without_validated_support",
+          "reliable_secondary_skipped_insufficient_budget",
+          "verified_fact_memory_merged_with_gap_research"
+        ],
+        "conflicts": [],
+        "usedWebSearch": true,
+        "answerGuidance": {
+          "coverage": [],
+          "completeness": "not_answered",
+          "directAnswer": ""
+        },
+        "sourceAttempts": [
+          {
+            "tier": "catalog",
+            "outcome": "confirmed"
+          },
+          {
+            "tier": "reliable_secondary",
+            "outcome": "skipped_budget"
+          }
+        ],
+        "catalogPresence": [
+          {
+            "status": "present",
+            "productName": "Генератор бензиновый Zongshen PB 22000 E (17,0 кВт) 1T90DF220",
+            "exactProductIds": [
+              "3d244008-78bc-45ca-94f4-76fa2d89585f"
+            ]
+          },
+          {
+            "status": "present",
+            "productName": "Генератор бензиновый инверторный DAEWOO GDA 4400i (3,4 кВт)",
+            "exactProductIds": [
+              "010c9196-3ec9-4e4c-8e73-8f32bcc45329"
+            ]
+          },
+          {
+            "status": "present",
+            "productName": "Генератор бензиновый FUBAG BS 3500 Duplex (2,8 кВт) 431249/8641453",
+            "exactProductIds": [
+              "538f3f62-d2b1-4470-b0f8-50bc3eb4b1c9"
+            ]
+          }
+        ],
+        "researchOutcome": "partial",
+        "sourceCandidates": [
+          {
+            "url": "https://cdn.vseinstrumenti.ru/instruction/nomenclaturecontent/202403/33861606.pdf/pusko-zaryadnogo-ustrojstva-fubag-force-180-685308.pdf"
+          },
+          {
+            "url": "https://www.fubage.ru/upload/iblock/386/ha0ufdajl3jqhbp2wvjexkzja0f9kyop.pdf"
+          },
+          {
+            "url": "https://fubag.com/wp-content/uploads/2025/07/GeneralCatalog_2025_EN.pdf"
+          },
+          {
+            "url": "https://chl.generator.market/upload/iblock/768/mqujnqoprrveaazdkvagz33fd2r9owxr/Katalog-produktsii-Fubag.pdf"
+          },
+          {
+            "url": "https://benzo-spb.ru/f/instrukciya-generatora-fubag-bs3500-duplex.pdf"
+          },
+          {
+            "url": "https://spb.generator.market/upload/iblock/768/mqujnqoprrveaazdkvagz33fd2r9owxr/Katalog-produktsii-Fubag.pdf"
+          },
+          {
+            "url": "https://tehnopanorama.ru/instrukcii/brand/daewoo/model/gda-4400i"
+          },
+          {
+            "url": "https://spb.geon.ru/product/fubag-bs-3500-duplex-ehlektrostanciya-benzinovaya-431249/"
+          },
+          {
+            "url": "https://mcgrp.ru/manual/daewoo/gda-4400i"
+          },
+          {
+            "url": "https://ww.daewoo-shop.com/catalog/item/invertornyi_generator_daewoo_gda_4400i/"
+          },
+          {
+            "url": "https://novosibirsk.energocontinent.ru/catalog/benzinovye-generatory/fubag-bs-3500-duplex"
+          },
+          {
+            "url": "https://kemerovo.fubag.ru/catalog/generatory/fubag-benzinovyy-generator-bs-3500-duplex/"
+          }
+        ],
+        "sourcesExhausted": false,
+        "summaryForAnswer": "",
+        "unconfirmedFacts": [],
+        "usedDocumentRead": true,
+        "searchDisposition": "skipped_budget",
+        "sourceDiagnostics": [
+          {
+            "url": "https://www.fubage.ru/upload/iblock/386/ha0ufdajl3jqhbp2wvjexkzja0f9kyop.pdf",
+            "reason": "network",
+            "elapsedMs": 158
+          }
+        ],
+        "targetProductNames": [
+          "Генератор бензиновый Zongshen PB 22000 E (17,0 кВт) 1T90DF220",
+          "Генератор бензиновый инверторный DAEWOO GDA 4400i (3,4 кВт)",
+          "Генератор бензиновый FUBAG BS 3500 Duplex (2,8 кВт) 431249/8641453"
+        ],
+        "comparisonAttributes": [
+          "nominal_power_kw",
+          "starting_capability",
+          "phase",
+          "fuel_type"
+        ],
+        "nearbyCatalogProducts": [],
+        "suppressedTargetProductNames": []
+      },
+      "warnings": [
+        "catalog_extraction_skipped_insufficient_budget",
+        "source_tier_timed_out:official_page",
+        "official_manual_candidates_found_but_pdf_content_not_read_in_this_attempt",
+        "source_evidence_pdf_truncated_to_safe_page_limit",
+        "source_evidence_fetch_failed",
+        "document_read_text_truncated",
+        "Предоставленный документ относится к каталогу FUBAG, но переданные фрагменты не содержат точную модель FUBAG BS 3500 Duplex 431249/8641453.",
+        "Пусковой ток циркуляционного насоса неизвестен; starting_capability нельзя подтвердить без данных производителя генератора или насоса.",
+        "discovered_document_read",
+        "answer_guidance_invalidated_without_validated_support",
+        "reliable_secondary_skipped_insufficient_budget",
+        "verified_fact_memory_merged_with_gap_research",
+        "attempts:1",
+        "duration_ms:23534"
+      ],
+      "error_code": null,
+      "created_at": "2026-09-15T12:19:03.049Z"
+    }
+  ],
+  "checkpoints": [
+    {
+      "checkpoint": "semantic_decision_proposed",
+      "status": "succeeded",
+      "payload": {
+        "intent": {
+          "grounding": {
+            "taskType": "product_selection",
+            "rationale": "Каталог нужен для кандидатов, внешняя проверка — для решающей пусковой характеристики.",
+            "webPurpose": "technical_specs",
+            "responseMode": "recommend",
+            "sourcePolicy": "web_required",
+            "buyerQuestion": "Подберите 2–3 варианта из каталога",
+            "webRequirement": "conditional_on_catalog_gap",
+            "buyerRequestedWeb": false,
+            "requiredToolKinds": [
+              "calculator.generatorLoad",
+              "catalog.search",
+              "web.researchProductFacts"
+            ],
+            "catalogRequirement": "required",
+            "technicalAttributes": [
+              "nominal_power_kw",
+              "starting_capability",
+              "phase",
+              "fuel_type"
+            ]
+          },
+          "riskFlags": [],
+          "toolRequests": [
+            {
+              "id": "calc_generator_load_1",
+              "args": {
+                "loads": [
+                  {
+                    "kind": "refrigerator",
+                    "name": "холодильник",
+                    "count": 1,
+                    "source": "explicit_user",
+                    "evidence": "холодильник 300 Вт",
+                    "basisKind": "exact_power",
+                    "runningKw": 0.3,
+                    "basisSignals": [
+                      "consumer_type_known",
+                      "explicit_power"
+                    ],
+                    "operationMode": "continuous",
+                    "runningSource": "explicit_user",
+                    "coRunningGroup": "all",
+                    "startingSource": "not_provided"
+                  },
+                  {
+                    "kind": "circulation_pump",
+                    "name": "циркуляционный насос",
+                    "count": 1,
+                    "source": "explicit_user",
+                    "evidence": "циркуляционный насос 1,1 кВт",
+                    "basisKind": "exact_power",
+                    "runningKw": 1.1,
+                    "basisSignals": [
+                      "consumer_type_known",
+                      "consumer_function_known",
+                      "voltage_or_phase_known",
+                      "explicit_power"
+                    ],
+                    "operationMode": "continuous",
+                    "runningSource": "explicit_user",
+                    "coRunningGroup": "all",
+                    "startingSource": "not_provided"
+                  },
+                  {
+                    "kind": "workshop_tool",
+                    "name": "инструмент",
+                    "count": 1,
+                    "source": "explicit_user",
+                    "evidence": "инструмент около 1,5 кВт",
+                    "basisKind": "exact_power",
+                    "runningKw": 1.5,
+                    "basisSignals": [
+                      "consumer_type_known",
+                      "voltage_or_phase_known",
+                      "explicit_power"
+                    ],
+                    "operationMode": "occasional",
+                    "runningSource": "explicit_user",
+                    "coRunningGroup": "all",
+                    "startingSource": "not_provided"
+                  }
+                ],
+                "phase": "single_phase",
+                "query": "нагрузка мастерской: холодильник 0,3 кВт, циркуляционный насос 1,1 кВт, инструмент 1,5 кВт",
+                "powerSource": "fuel",
+                "estimateBasis": "bounded_assumption",
+                "productIntent": "предварительный подбор бензинового генератора",
+                "semanticQuery": "предварительный расчёт генератора для одновременной нагрузки мастерской",
+                "simultaneousRunning": true,
+                "simultaneousStarting": false,
+                "canonicalProductIntent": "generator",
+                "simultaneousStartingKinds": [
+                  "circulation_pump"
+                ]
+              },
+              "tool": "calculator.generatorLoad",
+              "required": true,
+              "rationale": "Рассчитать профиль нагрузки с неизвестным пуском насоса.",
+              "coversRequirementIds": [
+                "generator_load_scenario"
+              ]
+            },
+            {
+              "id": "search_generators_1",
+              "args": {
+                "limit": 3,
+                "phase": "single_phase",
+                "query": "бензиновые однофазные генераторы 220 В для мастерской около 3 кВт",
+                "identifiers": [],
+                "powerSource": "fuel",
+                "productIntent": "предварительный подбор генератора",
+                "semanticQuery": "2–3 предварительных кандидата для заданной нагрузки",
+                "comparisonAttributes": [
+                  "nominal_power_kw",
+                  "price_rub",
+                  "weight_kg"
+                ],
+                "canonicalProductIntent": "generator"
+              },
+              "tool": "catalog.search",
+              "required": true,
+              "rationale": "Найти кандидатов в каталоге.",
+              "coversRequirementIds": [
+                "fuel_type",
+                "phase"
+              ]
+            },
+            {
+              "id": "research_generator_specs_1",
+              "args": {
+                "limit": 3,
+                "phase": "single_phase",
+                "query": "проверить пусковую способность и номинальную мощность бензиновых однофазных генераторов для нагрузки мастерской",
+                "powerSource": "fuel",
+                "productNames": [],
+                "productIntent": "предварительный подбор генератора",
+                "researchScope": "product",
+                "semanticQuery": "проверка пусковой способности генераторов для насоса",
+                "comparisonAttributes": [
+                  "nominal_power_kw",
+                  "starting_capability",
+                  "phase",
+                  "fuel_type"
+                ],
+                "canonicalProductIntent": "generator",
+                "comparisonAttributeBindings": []
+              },
+              "tool": "web.researchProductFacts",
+              "required": true,
+              "rationale": "Проверить решающую характеристику запуска насоса.",
+              "coversRequirementIds": []
+            }
+          ],
+          "policyRuleIds": [
+            "cheap.preliminary_not_final"
+          ],
+          "requiresTools": true,
+          "productMentions": [
+            {
+              "name": "холодильник",
+              "role": "context_load_device",
+              "evidence": "холодильник 300 Вт",
+              "productClass": "электропотребитель",
+              "sourceMessageId": null
+            },
+            {
+              "name": "циркуляционный насос",
+              "role": "context_load_device",
+              "evidence": "циркуляционный насос 1,1 кВт",
+              "productClass": "электропотребитель",
+              "sourceMessageId": null
+            },
+            {
+              "name": "инструмент",
+              "role": "context_load_device",
+              "evidence": "инструмент около 1,5 кВт",
+              "productClass": "электропотребитель",
+              "sourceMessageId": null
+            }
+          ],
+          "selectionPolicy": {
+            "phase": "single_phase",
+            "maxCards": 3,
+            "rationale": "Показать предварительные варианты без гарантии запуска насоса.",
+            "needAction": "open",
+            "powerSource": "fuel",
+            "requirements": [
+              {
+                "id": "fuel_type",
+                "kind": "fuel_type",
+                "role": "hard_constraint",
+                "unit": null,
+                "value": "бензин",
+                "evidence": "бензиновый генератор",
+                "relation": "must_have",
+                "strictness": "strict",
+                "verification": {
+                  "mode": "product_attribute"
+                }
+              },
+              {
+                "id": "phase",
+                "kind": "phase",
+                "role": "hard_constraint",
+                "unit": null,
+                "value": "single_phase",
+                "evidence": "Всё однофазное 220 В",
+                "relation": "must_have",
+                "strictness": "strict",
+                "verification": {
+                  "mode": "product_attribute"
+                }
+              },
+              {
+                "id": "generator_load_scenario",
+                "kind": "generator_load_scenario",
+                "role": "hard_constraint",
+                "unit": null,
+                "value": true,
+                "evidence": "одновременно холодильник, насос и инструмент; пусковой ток насоса неизвестен",
+                "relation": "must_have",
+                "strictness": "strict",
+                "verification": {
+                  "mode": "typed_tool",
+                  "tool": "calculator.generatorLoad",
+                  "bindAs": "nominal_power_min_kw",
+                  "verifier": "generator_load_profile",
+                  "toolRequestId": "calc_generator_load_1"
+                }
+              }
+            ],
+            "selectionGoal": "preliminary_fit",
+            "alternativePolicy": "same_class_only",
+            "rankingObjectives": [],
+            "reusePreviousCards": false,
+            "targetProductClass": "бензиновый генератор для мастерской",
+            "canonicalProductClass": "generator"
+          },
+          "nextStepRationale": "Рассчитать нагрузку, найти кандидатов и проверить решающие характеристики внешним источником.",
+          "userMessageSummary": "Предварительный подбор 2–3 бензиновых однофазных генераторов.",
+          "dialogueUnderstanding": "Рабочая нагрузка задана, пуск насоса неизвестен; пригодность будет предварительной.",
+          "mustNotAskQuestionIds": [],
+          "leadCaptureAuthorization": {
+            "purpose": null,
+            "evidence": null,
+            "authorized": false,
+            "handoffKind": "none",
+            "buyerQuestion": null,
+            "contactSource": "none",
+            "pendingDraftId": null,
+            "handoffOfferMessageId": null
+          },
+          "buyerRequestedTechnicalHandoff": null
+        },
+        "ledgerDelta": {
+          "events": [
+            {
+              "scope": "need",
+              "source": "llm_state_delta",
+              "status": "active",
+              "payload": {
+                "role": "unknown",
+                "text": null,
+                "unit": null,
+                "notes": null,
+                "value": null,
+                "answer": null,
+                "needId": "need_generator_workshop_1",
+                "status": "open",
+                "factKey": null,
+                "ranking": null,
+                "summary": "Предварительный подбор бензинового однофазного генератора для мастерской",
+                "activate": true,
+                "relation": null,
+                "productId": null,
+                "valueText": null,
+                "confidence": 1,
+                "productIds": [],
+                "questionId": null,
+                "answerKnown": null,
+                "constraints": [
+                  "fuel_type: бензин",
+                  "phase: single_phase",
+                  "generator_load_scenario: {\"loads\":[{\"kind\":\"refrigerator\",\"name\":\"холодильник\",\"count\":1,\"runningKw\":0.3,\"startingKw\":null,\"runningApparentPower\":null,\"startingApparentPower\":null,\"source\":\"explicit_user\",\"runningSource\":\"explicit_user\",\"startingSource\":\"not_provided\",\"operationMode\":\"continuous\",\"coRunningGroup\":\"all\",\"evidence\":\"холодильник 300 Вт\",\"basisKind\":\"exact_power\",\"basisSignals\":[\"consumer_type_known\",\"explicit_power\"]},{\"kind\":\"circulation_pump\",\"name\":\"циркуляционный насос\",\"count\":1,\"runningKw\":1.1,\"startingKw\":null,\"runningApparentPower\":null,\"startingApparentPower\":null,\"source\":\"explicit_user\",\"runningSource\":\"explicit_user\",\"startingSource\":\"not_provided\",\"operationMode\":\"continuous\",\"coRunningGroup\":\"all\",\"evidence\":\"циркуляционный насос 1,1 кВт\",\"basisKind\":\"exact_power\",\"basisSignals\":[\"consumer_type_known\",\"consumer_function_known\",\"voltage_or_phase_known\",\"explicit_power\"]},{\"kind\":\"workshop_tool\",\"name\":\"инструмент\",\"count\":1,\"runningKw\":1.5,\"startingKw\":null,\"runningApparentPower\":null,\"startingApparentPower\":null,\"source\":\"explicit_user\",\"runningSource\":\"explicit_user\",\"startingSource\":\"not_provided\",\"operationMode\":\"occasional\",\"coRunningGroup\":\"all\",\"evidence\":\"инструмент около 1,5 кВт\",\"basisKind\":\"exact_power\",\"basisSignals\":[\"consumer_type_known\",\"voltage_or_phase_known\",\"explicit_power\"]}],\"simultaneousRunning\":true,\"simultaneousStarting\":false}"
+                ],
+                "productClass": "generator",
+                "openQuestions": [],
+                "toolRequestId": null,
+                "sourceResultId": null,
+                "targetEventIds": [],
+                "negatesEventIds": [],
+                "closesQuestionIds": [],
+                "targetQuestionIds": [],
+                "rejectedProductIds": [],
+                "selectedProductIds": [],
+                "supersedesEventIds": [],
+                "selectionUpdateMode": "replace",
+                "constraintsUpdateMode": "merge",
+                "invalidatedProductIds": [],
+                "constraintFactBindings": [
+                  {
+                    "factKey": "fuel_type",
+                    "constraint": "fuel_type: бензин"
+                  },
+                  {
+                    "factKey": "phase",
+                    "constraint": "phase: single_phase"
+                  },
+                  {
+                    "factKey": "generator_load_scenario",
+                    "constraint": "generator_load_scenario: {\"loads\":[{\"kind\":\"refrigerator\",\"name\":\"холодильник\",\"count\":1,\"runningKw\":0.3,\"startingKw\":null,\"runningApparentPower\":null,\"startingApparentPower\":null,\"source\":\"explicit_user\",\"runningSource\":\"explicit_user\",\"startingSource\":\"not_provided\",\"operationMode\":\"continuous\",\"coRunningGroup\":\"all\",\"evidence\":\"холодильник 300 Вт\",\"basisKind\":\"exact_power\",\"basisSignals\":[\"consumer_type_known\",\"explicit_power\"]},{\"kind\":\"circulation_pump\",\"name\":\"циркуляционный насос\",\"count\":1,\"runningKw\":1.1,\"startingKw\":null,\"runningApparentPower\":null,\"startingApparentPower\":null,\"source\":\"explicit_user\",\"runningSource\":\"explicit_user\",\"startingSource\":\"not_provided\",\"operationMode\":\"continuous\",\"coRunningGroup\":\"all\",\"evidence\":\"циркуляционный насос 1,1 кВт\",\"basisKind\":\"exact_power\",\"basisSignals\":[\"consumer_type_known\",\"consumer_function_known\",\"voltage_or_phase_known\",\"explicit_power\"]},{\"kind\":\"workshop_tool\",\"name\":\"инструмент\",\"count\":1,\"runningKw\":1.5,\"startingKw\":null,\"runningApparentPower\":null,\"startingApparentPower\":null,\"source\":\"explicit_user\",\"runningSource\":\"explicit_user\",\"startingSource\":\"not_provided\",\"operationMode\":\"occasional\",\"coRunningGroup\":\"all\",\"evidence\":\"инструмент около 1,5 кВт\",\"basisKind\":\"exact_power\",\"basisSignals\":[\"consumer_type_known\",\"voltage_or_phase_known\",\"explicit_power\"]}],\"simultaneousRunning\":true,\"simultaneousStarting\":false}"
+                  }
+                ],
+                "openQuestionsUpdateMode": "merge",
+                "rejectedProductIdsUpdateMode": "merge"
+              },
+              "evidence": "Нужен бензиновый генератор для мастерской",
+              "eventType": "need.opened"
+            },
+            {
+              "scope": "need",
+              "source": "llm_state_delta",
+              "status": "active",
+              "payload": {
+                "role": "hard_requirement",
+                "text": null,
+                "unit": null,
+                "notes": null,
+                "value": "бензин",
+                "answer": null,
+                "needId": "need_generator_workshop_1",
+                "status": null,
+                "factKey": "fuel_type",
+                "ranking": null,
+                "summary": null,
+                "activate": null,
+                "relation": "must_have",
+                "productId": null,
+                "valueText": "бензиновый",
+                "confidence": 1,
+                "productIds": [],
+                "questionId": null,
+                "answerKnown": null,
+                "constraints": [],
+                "productClass": "generator",
+                "openQuestions": [],
+                "toolRequestId": null,
+                "sourceResultId": null,
+                "targetEventIds": [],
+                "negatesEventIds": [],
+                "closesQuestionIds": [],
+                "targetQuestionIds": [],
+                "rejectedProductIds": [],
+                "selectedProductIds": [],
+                "supersedesEventIds": [],
+                "selectionUpdateMode": null,
+                "constraintsUpdateMode": null,
+                "invalidatedProductIds": [],
+                "openQuestionsUpdateMode": null,
+                "rejectedProductIdsUpdateMode": null
+              },
+              "evidence": "бензиновый генератор",
+              "eventType": "fact.confirmed"
+            },
+            {
+              "scope": "need",
+              "source": "llm_state_delta",
+              "status": "active",
+              "payload": {
+                "role": "hard_requirement",
+                "text": null,
+                "unit": null,
+                "notes": null,
+                "value": "single_phase",
+                "answer": null,
+                "needId": "need_generator_workshop_1",
+                "status": null,
+                "factKey": "phase",
+                "ranking": null,
+                "summary": null,
+                "activate": null,
+                "relation": "must_have",
+                "productId": null,
+                "valueText": "однофазное 220 В",
+                "confidence": 1,
+                "productIds": [],
+                "questionId": null,
+                "answerKnown": null,
+                "constraints": [],
+                "productClass": "generator",
+                "openQuestions": [],
+                "toolRequestId": null,
+                "sourceResultId": null,
+                "targetEventIds": [],
+                "negatesEventIds": [],
+                "closesQuestionIds": [],
+                "targetQuestionIds": [],
+                "rejectedProductIds": [],
+                "selectedProductIds": [],
+                "supersedesEventIds": [],
+                "selectionUpdateMode": null,
+                "constraintsUpdateMode": null,
+                "invalidatedProductIds": [],
+                "openQuestionsUpdateMode": null,
+                "rejectedProductIdsUpdateMode": null
+              },
+              "evidence": "Всё однофазное 220 В",
+              "eventType": "fact.confirmed"
+            },
+            {
+              "scope": "need",
+              "source": "llm_state_delta",
+              "status": "active",
+              "payload": {
+                "role": "hard_requirement",
+                "text": null,
+                "unit": null,
+                "notes": null,
+                "value": {
+                  "loads": [
+                    {
+                      "kind": "refrigerator",
+                      "name": "холодильник",
+                      "count": 1,
+                      "source": "explicit_user",
+                      "evidence": "холодильник 300 Вт",
+                      "basisKind": "exact_power",
+                      "runningKw": 0.3,
+                      "startingKw": null,
+                      "basisSignals": [
+                        "consumer_type_known",
+                        "explicit_power"
+                      ],
+                      "operationMode": "continuous",
+                      "runningSource": "explicit_user",
+                      "coRunningGroup": "all",
+                      "startingSource": "not_provided",
+                      "runningApparentPower": null,
+                      "startingApparentPower": null
+                    },
+                    {
+                      "kind": "circulation_pump",
+                      "name": "циркуляционный насос",
+                      "count": 1,
+                      "source": "explicit_user",
+                      "evidence": "циркуляционный насос 1,1 кВт",
+                      "basisKind": "exact_power",
+                      "runningKw": 1.1,
+                      "startingKw": null,
+                      "basisSignals": [
+                        "consumer_type_known",
+                        "consumer_function_known",
+                        "voltage_or_phase_known",
+                        "explicit_power"
+                      ],
+                      "operationMode": "continuous",
+                      "runningSource": "explicit_user",
+                      "coRunningGroup": "all",
+                      "startingSource": "not_provided",
+                      "runningApparentPower": null,
+                      "startingApparentPower": null
+                    },
+                    {
+                      "kind": "workshop_tool",
+                      "name": "инструмент",
+                      "count": 1,
+                      "source": "explicit_user",
+                      "evidence": "инструмент около 1,5 кВт",
+                      "basisKind": "exact_power",
+                      "runningKw": 1.5,
+                      "startingKw": null,
+                      "basisSignals": [
+                        "consumer_type_known",
+                        "voltage_or_phase_known",
+                        "explicit_power"
+                      ],
+                      "operationMode": "occasional",
+                      "runningSource": "explicit_user",
+                      "coRunningGroup": "all",
+                      "startingSource": "not_provided",
+                      "runningApparentPower": null,
+                      "startingApparentPower": null
+                    }
+                  ],
+                  "simultaneousRunning": true,
+                  "simultaneousStarting": false
+                },
+                "answer": null,
+                "needId": "need_generator_workshop_1",
+                "status": null,
+                "factKey": "generator_load_scenario",
+                "ranking": null,
+                "summary": null,
+                "activate": null,
+                "relation": "must_have",
+                "productId": null,
+                "valueText": null,
+                "confidence": 1,
+                "productIds": [],
+                "questionId": null,
+                "answerKnown": null,
+                "constraints": [],
+                "productClass": "generator",
+                "openQuestions": [],
+                "toolRequestId": null,
+                "sourceResultId": null,
+                "targetEventIds": [],
+                "negatesEventIds": [],
+                "closesQuestionIds": [],
+                "targetQuestionIds": [],
+                "rejectedProductIds": [],
+                "selectedProductIds": [],
+                "supersedesEventIds": [],
+                "selectionUpdateMode": null,
+                "constraintsUpdateMode": null,
+                "invalidatedProductIds": [],
+                "openQuestionsUpdateMode": null,
+                "rejectedProductIdsUpdateMode": null
+              },
+              "evidence": "одновременно холодильник 300 Вт, циркуляционный насос 1,1 кВт и инструмент около 1,5 кВт; инструмент включаю после запуска насоса; пусковой ток насоса мне неизвестен",
+              "eventType": "fact.confirmed"
+            }
+          ],
+          "rationale": "Открыта потребность и зафиксированы параметры топлива, фазы и нагрузки."
+        }
+      },
+      "error_code": null,
+      "error_message": null,
+      "created_at": "2026-09-15T12:18:33.379Z",
+      "updated_at": "2026-09-15T12:18:33.379Z"
+    },
+    {
+      "checkpoint": "ledger_delta_proposed",
+      "status": "succeeded",
+      "payload": {
+        "events": [
+          {
+            "scope": "need",
+            "source": "llm_state_delta",
+            "status": "active",
+            "payload": {
+              "role": "unknown",
+              "text": null,
+              "unit": null,
+              "notes": null,
+              "value": null,
+              "answer": null,
+              "needId": "need_generator_workshop_1",
+              "status": "open",
+              "factKey": null,
+              "ranking": null,
+              "summary": "Предварительный подбор бензинового однофазного генератора для мастерской",
+              "activate": true,
+              "relation": null,
+              "productId": null,
+              "valueText": null,
+              "confidence": 1,
+              "productIds": [],
+              "questionId": null,
+              "answerKnown": null,
+              "constraints": [
+                "fuel_type: бензин",
+                "phase: single_phase",
+                "generator_load_scenario: {\"loads\":[{\"kind\":\"refrigerator\",\"name\":\"холодильник\",\"count\":1,\"runningKw\":0.3,\"startingKw\":null,\"runningApparentPower\":null,\"startingApparentPower\":null,\"source\":\"explicit_user\",\"runningSource\":\"explicit_user\",\"startingSource\":\"not_provided\",\"operationMode\":\"continuous\",\"coRunningGroup\":\"all\",\"evidence\":\"холодильник 300 Вт\",\"basisKind\":\"exact_power\",\"basisSignals\":[\"consumer_type_known\",\"explicit_power\"]},{\"kind\":\"circulation_pump\",\"name\":\"циркуляционный насос\",\"count\":1,\"runningKw\":1.1,\"startingKw\":null,\"runningApparentPower\":null,\"startingApparentPower\":null,\"source\":\"explicit_user\",\"runningSource\":\"explicit_user\",\"startingSource\":\"not_provided\",\"operationMode\":\"continuous\",\"coRunningGroup\":\"all\",\"evidence\":\"циркуляционный насос 1,1 кВт\",\"basisKind\":\"exact_power\",\"basisSignals\":[\"consumer_type_known\",\"consumer_function_known\",\"voltage_or_phase_known\",\"explicit_power\"]},{\"kind\":\"workshop_tool\",\"name\":\"инструмент\",\"count\":1,\"runningKw\":1.5,\"startingKw\":null,\"runningApparentPower\":null,\"startingApparentPower\":null,\"source\":\"explicit_user\",\"runningSource\":\"explicit_user\",\"startingSource\":\"not_provided\",\"operationMode\":\"occasional\",\"coRunningGroup\":\"all\",\"evidence\":\"инструмент около 1,5 кВт\",\"basisKind\":\"exact_power\",\"basisSignals\":[\"consumer_type_known\",\"voltage_or_phase_known\",\"explicit_power\"]}],\"simultaneousRunning\":true,\"simultaneousStarting\":false}"
+              ],
+              "productClass": "generator",
+              "openQuestions": [],
+              "toolRequestId": null,
+              "sourceResultId": null,
+              "targetEventIds": [],
+              "negatesEventIds": [],
+              "closesQuestionIds": [],
+              "targetQuestionIds": [],
+              "rejectedProductIds": [],
+              "selectedProductIds": [],
+              "supersedesEventIds": [],
+              "selectionUpdateMode": "replace",
+              "constraintsUpdateMode": "merge",
+              "invalidatedProductIds": [],
+              "constraintFactBindings": [
+                {
+                  "factKey": "fuel_type",
+                  "constraint": "fuel_type: бензин"
+                },
+                {
+                  "factKey": "phase",
+                  "constraint": "phase: single_phase"
+                },
+                {
+                  "factKey": "generator_load_scenario",
+                  "constraint": "generator_load_scenario: {\"loads\":[{\"kind\":\"refrigerator\",\"name\":\"холодильник\",\"count\":1,\"runningKw\":0.3,\"startingKw\":null,\"runningApparentPower\":null,\"startingApparentPower\":null,\"source\":\"explicit_user\",\"runningSource\":\"explicit_user\",\"startingSource\":\"not_provided\",\"operationMode\":\"continuous\",\"coRunningGroup\":\"all\",\"evidence\":\"холодильник 300 Вт\",\"basisKind\":\"exact_power\",\"basisSignals\":[\"consumer_type_known\",\"explicit_power\"]},{\"kind\":\"circulation_pump\",\"name\":\"циркуляционный насос\",\"count\":1,\"runningKw\":1.1,\"startingKw\":null,\"runningApparentPower\":null,\"startingApparentPower\":null,\"source\":\"explicit_user\",\"runningSource\":\"explicit_user\",\"startingSource\":\"not_provided\",\"operationMode\":\"continuous\",\"coRunningGroup\":\"all\",\"evidence\":\"циркуляционный насос 1,1 кВт\",\"basisKind\":\"exact_power\",\"basisSignals\":[\"consumer_type_known\",\"consumer_function_known\",\"voltage_or_phase_known\",\"explicit_power\"]},{\"kind\":\"workshop_tool\",\"name\":\"инструмент\",\"count\":1,\"runningKw\":1.5,\"startingKw\":null,\"runningApparentPower\":null,\"startingApparentPower\":null,\"source\":\"explicit_user\",\"runningSource\":\"explicit_user\",\"startingSource\":\"not_provided\",\"operationMode\":\"occasional\",\"coRunningGroup\":\"all\",\"evidence\":\"инструмент около 1,5 кВт\",\"basisKind\":\"exact_power\",\"basisSignals\":[\"consumer_type_known\",\"voltage_or_phase_known\",\"explicit_power\"]}],\"simultaneousRunning\":true,\"simultaneousStarting\":false}"
+                }
+              ],
+              "openQuestionsUpdateMode": "merge",
+              "rejectedProductIdsUpdateMode": "merge"
+            },
+            "evidence": "Нужен бензиновый генератор для мастерской",
+            "eventType": "need.opened"
+          },
+          {
+            "scope": "need",
+            "source": "llm_state_delta",
+            "status": "active",
+            "payload": {
+              "role": "hard_requirement",
+              "text": null,
+              "unit": null,
+              "notes": null,
+              "value": "бензин",
+              "answer": null,
+              "needId": "need_generator_workshop_1",
+              "status": null,
+              "factKey": "fuel_type",
+              "ranking": null,
+              "summary": null,
+              "activate": null,
+              "relation": "must_have",
+              "productId": null,
+              "valueText": "бензиновый",
+              "confidence": 1,
+              "productIds": [],
+              "questionId": null,
+              "answerKnown": null,
+              "constraints": [],
+              "productClass": "generator",
+              "openQuestions": [],
+              "toolRequestId": null,
+              "sourceResultId": null,
+              "targetEventIds": [],
+              "negatesEventIds": [],
+              "closesQuestionIds": [],
+              "targetQuestionIds": [],
+              "rejectedProductIds": [],
+              "selectedProductIds": [],
+              "supersedesEventIds": [],
+              "selectionUpdateMode": null,
+              "constraintsUpdateMode": null,
+              "invalidatedProductIds": [],
+              "openQuestionsUpdateMode": null,
+              "rejectedProductIdsUpdateMode": null
+            },
+            "evidence": "бензиновый генератор",
+            "eventType": "fact.confirmed"
+          },
+          {
+            "scope": "need",
+            "source": "llm_state_delta",
+            "status": "active",
+            "payload": {
+              "role": "hard_requirement",
+              "text": null,
+              "unit": null,
+              "notes": null,
+              "value": "single_phase",
+              "answer": null,
+              "needId": "need_generator_workshop_1",
+              "status": null,
+              "factKey": "phase",
+              "ranking": null,
+              "summary": null,
+              "activate": null,
+              "relation": "must_have",
+              "productId": null,
+              "valueText": "однофазное 220 В",
+              "confidence": 1,
+              "productIds": [],
+              "questionId": null,
+              "answerKnown": null,
+              "constraints": [],
+              "productClass": "generator",
+              "openQuestions": [],
+              "toolRequestId": null,
+              "sourceResultId": null,
+              "targetEventIds": [],
+              "negatesEventIds": [],
+              "closesQuestionIds": [],
+              "targetQuestionIds": [],
+              "rejectedProductIds": [],
+              "selectedProductIds": [],
+              "supersedesEventIds": [],
+              "selectionUpdateMode": null,
+              "constraintsUpdateMode": null,
+              "invalidatedProductIds": [],
+              "openQuestionsUpdateMode": null,
+              "rejectedProductIdsUpdateMode": null
+            },
+            "evidence": "Всё однофазное 220 В",
+            "eventType": "fact.confirmed"
+          },
+          {
+            "scope": "need",
+            "source": "llm_state_delta",
+            "status": "active",
+            "payload": {
+              "role": "hard_requirement",
+              "text": null,
+              "unit": null,
+              "notes": null,
+              "value": {
+                "loads": [
+                  {
+                    "kind": "refrigerator",
+                    "name": "холодильник",
+                    "count": 1,
+                    "source": "explicit_user",
+                    "evidence": "холодильник 300 Вт",
+                    "basisKind": "exact_power",
+                    "runningKw": 0.3,
+                    "startingKw": null,
+                    "basisSignals": [
+                      "consumer_type_known",
+                      "explicit_power"
+                    ],
+                    "operationMode": "continuous",
+                    "runningSource": "explicit_user",
+                    "coRunningGroup": "all",
+                    "startingSource": "not_provided",
+                    "runningApparentPower": null,
+                    "startingApparentPower": null
+                  },
+                  {
+                    "kind": "circulation_pump",
+                    "name": "циркуляционный насос",
+                    "count": 1,
+                    "source": "explicit_user",
+                    "evidence": "циркуляционный насос 1,1 кВт",
+                    "basisKind": "exact_power",
+                    "runningKw": 1.1,
+                    "startingKw": null,
+                    "basisSignals": [
+                      "consumer_type_known",
+                      "consumer_function_known",
+                      "voltage_or_phase_known",
+                      "explicit_power"
+                    ],
+                    "operationMode": "continuous",
+                    "runningSource": "explicit_user",
+                    "coRunningGroup": "all",
+                    "startingSource": "not_provided",
+                    "runningApparentPower": null,
+                    "startingApparentPower": null
+                  },
+                  {
+                    "kind": "workshop_tool",
+                    "name": "инструмент",
+                    "count": 1,
+                    "source": "explicit_user",
+                    "evidence": "инструмент около 1,5 кВт",
+                    "basisKind": "exact_power",
+                    "runningKw": 1.5,
+                    "startingKw": null,
+                    "basisSignals": [
+                      "consumer_type_known",
+                      "voltage_or_phase_known",
+                      "explicit_power"
+                    ],
+                    "operationMode": "occasional",
+                    "runningSource": "explicit_user",
+                    "coRunningGroup": "all",
+                    "startingSource": "not_provided",
+                    "runningApparentPower": null,
+                    "startingApparentPower": null
+                  }
+                ],
+                "simultaneousRunning": true,
+                "simultaneousStarting": false
+              },
+              "answer": null,
+              "needId": "need_generator_workshop_1",
+              "status": null,
+              "factKey": "generator_load_scenario",
+              "ranking": null,
+              "summary": null,
+              "activate": null,
+              "relation": "must_have",
+              "productId": null,
+              "valueText": null,
+              "confidence": 1,
+              "productIds": [],
+              "questionId": null,
+              "answerKnown": null,
+              "constraints": [],
+              "productClass": "generator",
+              "openQuestions": [],
+              "toolRequestId": null,
+              "sourceResultId": null,
+              "targetEventIds": [],
+              "negatesEventIds": [],
+              "closesQuestionIds": [],
+              "targetQuestionIds": [],
+              "rejectedProductIds": [],
+              "selectedProductIds": [],
+              "supersedesEventIds": [],
+              "selectionUpdateMode": null,
+              "constraintsUpdateMode": null,
+              "invalidatedProductIds": [],
+              "openQuestionsUpdateMode": null,
+              "rejectedProductIdsUpdateMode": null
+            },
+            "evidence": "одновременно холодильник 300 Вт, циркуляционный насос 1,1 кВт и инструмент около 1,5 кВт; инструмент включаю после запуска насоса; пусковой ток насоса мне неизвестен",
+            "eventType": "fact.confirmed"
+          }
+        ],
+        "rationale": "Открыта потребность и зафиксированы параметры топлива, фазы и нагрузки."
+      },
+      "error_code": null,
+      "error_message": null,
+      "created_at": "2026-09-15T12:18:33.393Z",
+      "updated_at": "2026-09-15T12:18:33.393Z"
+    },
+    {
+      "checkpoint": "intent_contract_proposed",
+      "status": "succeeded",
+      "payload": {
+        "grounding": {
+          "taskType": "product_selection",
+          "rationale": "Каталог нужен для кандидатов, внешняя проверка — для решающей пусковой характеристики.",
+          "webPurpose": "technical_specs",
+          "responseMode": "recommend",
+          "sourcePolicy": "web_required",
+          "buyerQuestion": "Подберите 2–3 варианта из каталога",
+          "webRequirement": "conditional_on_catalog_gap",
+          "buyerRequestedWeb": false,
+          "requiredToolKinds": [
+            "calculator.generatorLoad",
+            "catalog.search",
+            "web.researchProductFacts"
+          ],
+          "catalogRequirement": "required",
+          "technicalAttributes": [
+            "nominal_power_kw",
+            "starting_capability",
+            "phase",
+            "fuel_type"
+          ]
+        },
+        "riskFlags": [],
+        "toolRequests": [
+          {
+            "id": "calc_generator_load_1",
+            "args": {
+              "loads": [
+                {
+                  "kind": "refrigerator",
+                  "name": "холодильник",
+                  "count": 1,
+                  "source": "explicit_user",
+                  "evidence": "холодильник 300 Вт",
+                  "basisKind": "exact_power",
+                  "runningKw": 0.3,
+                  "basisSignals": [
+                    "consumer_type_known",
+                    "explicit_power"
+                  ],
+                  "operationMode": "continuous",
+                  "runningSource": "explicit_user",
+                  "coRunningGroup": "all",
+                  "startingSource": "not_provided"
+                },
+                {
+                  "kind": "circulation_pump",
+                  "name": "циркуляционный насос",
+                  "count": 1,
+                  "source": "explicit_user",
+                  "evidence": "циркуляционный насос 1,1 кВт",
+                  "basisKind": "exact_power",
+                  "runningKw": 1.1,
+                  "basisSignals": [
+                    "consumer_type_known",
+                    "consumer_function_known",
+                    "voltage_or_phase_known",
+                    "explicit_power"
+                  ],
+                  "operationMode": "continuous",
+                  "runningSource": "explicit_user",
+                  "coRunningGroup": "all",
+                  "startingSource": "not_provided"
+                },
+                {
+                  "kind": "workshop_tool",
+                  "name": "инструмент",
+                  "count": 1,
+                  "source": "explicit_user",
+                  "evidence": "инструмент около 1,5 кВт",
+                  "basisKind": "exact_power",
+                  "runningKw": 1.5,
+                  "basisSignals": [
+                    "consumer_type_known",
+                    "voltage_or_phase_known",
+                    "explicit_power"
+                  ],
+                  "operationMode": "occasional",
+                  "runningSource": "explicit_user",
+                  "coRunningGroup": "all",
+                  "startingSource": "not_provided"
+                }
+              ],
+              "phase": "single_phase",
+              "query": "нагрузка мастерской: холодильник 0,3 кВт, циркуляционный насос 1,1 кВт, инструмент 1,5 кВт",
+              "powerSource": "fuel",
+              "estimateBasis": "bounded_assumption",
+              "productIntent": "предварительный подбор бензинового генератора",
+              "semanticQuery": "предварительный расчёт генератора для одновременной нагрузки мастерской",
+              "simultaneousRunning": true,
+              "simultaneousStarting": false,
+              "canonicalProductIntent": "generator",
+              "simultaneousStartingKinds": [
+                "circulation_pump"
+              ]
+            },
+            "tool": "calculator.generatorLoad",
+            "required": true,
+            "rationale": "Рассчитать профиль нагрузки с неизвестным пуском насоса.",
+            "coversRequirementIds": [
+              "generator_load_scenario"
+            ]
+          },
+          {
+            "id": "search_generators_1",
+            "args": {
+              "limit": 3,
+              "phase": "single_phase",
+              "query": "бензиновые однофазные генераторы 220 В для мастерской около 3 кВт",
+              "identifiers": [],
+              "powerSource": "fuel",
+              "productIntent": "предварительный подбор генератора",
+              "semanticQuery": "2–3 предварительных кандидата для заданной нагрузки",
+              "comparisonAttributes": [
+                "nominal_power_kw",
+                "price_rub",
+                "weight_kg"
+              ],
+              "canonicalProductIntent": "generator"
+            },
+            "tool": "catalog.search",
+            "required": true,
+            "rationale": "Найти кандидатов в каталоге.",
+            "coversRequirementIds": [
+              "fuel_type",
+              "phase"
+            ]
+          },
+          {
+            "id": "research_generator_specs_1",
+            "args": {
+              "limit": 3,
+              "phase": "single_phase",
+              "query": "проверить пусковую способность и номинальную мощность бензиновых однофазных генераторов для нагрузки мастерской",
+              "powerSource": "fuel",
+              "productNames": [],
+              "productIntent": "предварительный подбор генератора",
+              "researchScope": "product",
+              "semanticQuery": "проверка пусковой способности генераторов для насоса",
+              "comparisonAttributes": [
+                "nominal_power_kw",
+                "starting_capability",
+                "phase",
+                "fuel_type"
+              ],
+              "canonicalProductIntent": "generator",
+              "comparisonAttributeBindings": []
+            },
+            "tool": "web.researchProductFacts",
+            "required": true,
+            "rationale": "Проверить решающую характеристику запуска насоса.",
+            "coversRequirementIds": []
+          }
+        ],
+        "policyRuleIds": [
+          "cheap.preliminary_not_final"
+        ],
+        "requiresTools": true,
+        "productMentions": [
+          {
+            "name": "холодильник",
+            "role": "context_load_device",
+            "evidence": "холодильник 300 Вт",
+            "productClass": "электропотребитель",
+            "sourceMessageId": null
+          },
+          {
+            "name": "циркуляционный насос",
+            "role": "context_load_device",
+            "evidence": "циркуляционный насос 1,1 кВт",
+            "productClass": "электропотребитель",
+            "sourceMessageId": null
+          },
+          {
+            "name": "инструмент",
+            "role": "context_load_device",
+            "evidence": "инструмент около 1,5 кВт",
+            "productClass": "электропотребитель",
+            "sourceMessageId": null
+          }
+        ],
+        "selectionPolicy": {
+          "phase": "single_phase",
+          "maxCards": 3,
+          "rationale": "Показать предварительные варианты без гарантии запуска насоса.",
+          "needAction": "open",
+          "powerSource": "fuel",
+          "requirements": [
+            {
+              "id": "fuel_type",
+              "kind": "fuel_type",
+              "role": "hard_constraint",
+              "unit": null,
+              "value": "бензин",
+              "evidence": "бензиновый генератор",
+              "relation": "must_have",
+              "strictness": "strict",
+              "verification": {
+                "mode": "product_attribute"
+              }
+            },
+            {
+              "id": "phase",
+              "kind": "phase",
+              "role": "hard_constraint",
+              "unit": null,
+              "value": "single_phase",
+              "evidence": "Всё однофазное 220 В",
+              "relation": "must_have",
+              "strictness": "strict",
+              "verification": {
+                "mode": "product_attribute"
+              }
+            },
+            {
+              "id": "generator_load_scenario",
+              "kind": "generator_load_scenario",
+              "role": "hard_constraint",
+              "unit": null,
+              "value": true,
+              "evidence": "одновременно холодильник, насос и инструмент; пусковой ток насоса неизвестен",
+              "relation": "must_have",
+              "strictness": "strict",
+              "verification": {
+                "mode": "typed_tool",
+                "tool": "calculator.generatorLoad",
+                "bindAs": "nominal_power_min_kw",
+                "verifier": "generator_load_profile",
+                "toolRequestId": "calc_generator_load_1"
+              }
+            }
+          ],
+          "selectionGoal": "preliminary_fit",
+          "alternativePolicy": "same_class_only",
+          "rankingObjectives": [],
+          "reusePreviousCards": false,
+          "targetProductClass": "бензиновый генератор для мастерской",
+          "canonicalProductClass": "generator"
+        },
+        "nextStepRationale": "Рассчитать нагрузку, найти кандидатов и проверить решающие характеристики внешним источником.",
+        "userMessageSummary": "Предварительный подбор 2–3 бензиновых однофазных генераторов.",
+        "dialogueUnderstanding": "Рабочая нагрузка задана, пуск насоса неизвестен; пригодность будет предварительной.",
+        "mustNotAskQuestionIds": [],
+        "leadCaptureAuthorization": {
+          "purpose": null,
+          "evidence": null,
+          "authorized": false,
+          "handoffKind": "none",
+          "buyerQuestion": null,
+          "contactSource": "none",
+          "pendingDraftId": null,
+          "handoffOfferMessageId": null
+        },
+        "buyerRequestedTechnicalHandoff": null
+      },
+      "error_code": null,
+      "error_message": null,
+      "created_at": "2026-09-15T12:18:33.400Z",
+      "updated_at": "2026-09-15T12:18:33.400Z"
+    },
+    {
+      "checkpoint": "ledger_delta_applied",
+      "status": "succeeded",
+      "payload": {
+        "eventIds": [
+          "need.opened:82a71a8bdeac9e6be7ca4db0ddad5012",
+          "fact.confirmed:0a73d49008d45137332596dc242be788",
+          "fact.confirmed:0be28e348d3b71b932b73fd75ec537b7",
+          "fact.confirmed:7d4647b9ff963cac9ee948a5ce61dccb"
+        ]
+      },
+      "error_code": null,
+      "error_message": null,
+      "created_at": "2026-09-15T12:18:33.448Z",
+      "updated_at": "2026-09-15T12:18:33.448Z"
+    },
+    {
+      "checkpoint": "intent_contract_created",
+      "status": "succeeded",
+      "payload": {
+        "grounding": {
+          "taskType": "product_selection",
+          "rationale": "Каталог нужен для кандидатов, внешняя проверка — для решающей пусковой характеристики.",
+          "webPurpose": "technical_specs",
+          "responseMode": "recommend",
+          "sourcePolicy": "web_required",
+          "buyerQuestion": "Подберите 2–3 варианта из каталога",
+          "webRequirement": "conditional_on_catalog_gap",
+          "buyerRequestedWeb": false,
+          "requiredToolKinds": [
+            "calculator.generatorLoad",
+            "catalog.search",
+            "web.researchProductFacts"
+          ],
+          "catalogRequirement": "required",
+          "technicalAttributes": [
+            "nominal_power_kw",
+            "starting_capability",
+            "phase",
+            "fuel_type"
+          ]
+        },
+        "riskFlags": [],
+        "toolRequests": [
+          {
+            "id": "calc_generator_load_1",
+            "args": {
+              "loads": [
+                {
+                  "kind": "refrigerator",
+                  "name": "холодильник",
+                  "count": 1,
+                  "source": "explicit_user",
+                  "evidence": "холодильник 300 Вт",
+                  "basisKind": "exact_power",
+                  "runningKw": 0.3,
+                  "basisSignals": [
+                    "consumer_type_known",
+                    "explicit_power"
+                  ],
+                  "operationMode": "continuous",
+                  "runningSource": "explicit_user",
+                  "coRunningGroup": "all",
+                  "startingSource": "not_provided"
+                },
+                {
+                  "kind": "circulation_pump",
+                  "name": "циркуляционный насос",
+                  "count": 1,
+                  "source": "explicit_user",
+                  "evidence": "циркуляционный насос 1,1 кВт",
+                  "basisKind": "exact_power",
+                  "runningKw": 1.1,
+                  "basisSignals": [
+                    "consumer_type_known",
+                    "consumer_function_known",
+                    "voltage_or_phase_known",
+                    "explicit_power"
+                  ],
+                  "operationMode": "continuous",
+                  "runningSource": "explicit_user",
+                  "coRunningGroup": "all",
+                  "startingSource": "not_provided"
+                },
+                {
+                  "kind": "workshop_tool",
+                  "name": "инструмент",
+                  "count": 1,
+                  "source": "explicit_user",
+                  "evidence": "инструмент около 1,5 кВт",
+                  "basisKind": "exact_power",
+                  "runningKw": 1.5,
+                  "basisSignals": [
+                    "consumer_type_known",
+                    "voltage_or_phase_known",
+                    "explicit_power"
+                  ],
+                  "operationMode": "occasional",
+                  "runningSource": "explicit_user",
+                  "coRunningGroup": "all",
+                  "startingSource": "not_provided"
+                }
+              ],
+              "phase": "single_phase",
+              "query": "нагрузка мастерской: холодильник 0,3 кВт, циркуляционный насос 1,1 кВт, инструмент 1,5 кВт",
+              "powerSource": "fuel",
+              "estimateBasis": "bounded_assumption",
+              "productIntent": "предварительный подбор бензинового генератора",
+              "semanticQuery": "предварительный расчёт генератора для одновременной нагрузки мастерской",
+              "simultaneousRunning": true,
+              "simultaneousStarting": false,
+              "canonicalProductIntent": "generator",
+              "simultaneousStartingKinds": [
+                "circulation_pump"
+              ]
+            },
+            "tool": "calculator.generatorLoad",
+            "required": true,
+            "rationale": "Рассчитать профиль нагрузки с неизвестным пуском насоса.",
+            "coversRequirementIds": [
+              "generator_load_scenario"
+            ]
+          },
+          {
+            "id": "search_generators_1",
+            "args": {
+              "limit": 3,
+              "phase": "single_phase",
+              "query": "бензиновые однофазные генераторы 220 В для мастерской около 3 кВт",
+              "identifiers": [],
+              "powerSource": "fuel",
+              "productIntent": "предварительный подбор генератора",
+              "semanticQuery": "2–3 предварительных кандидата для заданной нагрузки",
+              "comparisonAttributes": [
+                "nominal_power_kw",
+                "price_rub",
+                "weight_kg"
+              ],
+              "canonicalProductIntent": "generator"
+            },
+            "tool": "catalog.search",
+            "required": true,
+            "rationale": "Найти кандидатов в каталоге.",
+            "coversRequirementIds": [
+              "fuel_type",
+              "phase"
+            ]
+          },
+          {
+            "id": "research_generator_specs_1",
+            "args": {
+              "limit": 3,
+              "phase": "single_phase",
+              "query": "проверить пусковую способность и номинальную мощность бензиновых однофазных генераторов для нагрузки мастерской",
+              "powerSource": "fuel",
+              "productNames": [],
+              "productIntent": "предварительный подбор генератора",
+              "researchScope": "product",
+              "semanticQuery": "проверка пусковой способности генераторов для насоса",
+              "comparisonAttributes": [
+                "nominal_power_kw",
+                "starting_capability",
+                "phase",
+                "fuel_type"
+              ],
+              "canonicalProductIntent": "generator",
+              "comparisonAttributeBindings": []
+            },
+            "tool": "web.researchProductFacts",
+            "required": true,
+            "rationale": "Проверить решающую характеристику запуска насоса.",
+            "coversRequirementIds": []
+          }
+        ],
+        "policyRuleIds": [
+          "cheap.preliminary_not_final"
+        ],
+        "requiresTools": true,
+        "productMentions": [
+          {
+            "name": "холодильник",
+            "role": "context_load_device",
+            "evidence": "холодильник 300 Вт",
+            "productClass": "электропотребитель",
+            "sourceMessageId": null
+          },
+          {
+            "name": "циркуляционный насос",
+            "role": "context_load_device",
+            "evidence": "циркуляционный насос 1,1 кВт",
+            "productClass": "электропотребитель",
+            "sourceMessageId": null
+          },
+          {
+            "name": "инструмент",
+            "role": "context_load_device",
+            "evidence": "инструмент около 1,5 кВт",
+            "productClass": "электропотребитель",
+            "sourceMessageId": null
+          }
+        ],
+        "selectionPolicy": {
+          "phase": "single_phase",
+          "maxCards": 3,
+          "rationale": "Показать предварительные варианты без гарантии запуска насоса.",
+          "needAction": "open",
+          "powerSource": "fuel",
+          "requirements": [
+            {
+              "id": "fuel_type",
+              "kind": "fuel_type",
+              "role": "hard_constraint",
+              "unit": null,
+              "value": "бензин",
+              "evidence": "бензиновый генератор",
+              "relation": "must_have",
+              "strictness": "strict",
+              "verification": {
+                "mode": "product_attribute"
+              }
+            },
+            {
+              "id": "phase",
+              "kind": "phase",
+              "role": "hard_constraint",
+              "unit": null,
+              "value": "single_phase",
+              "evidence": "Всё однофазное 220 В",
+              "relation": "must_have",
+              "strictness": "strict",
+              "verification": {
+                "mode": "product_attribute"
+              }
+            },
+            {
+              "id": "generator_load_scenario",
+              "kind": "generator_load_scenario",
+              "role": "hard_constraint",
+              "unit": null,
+              "value": true,
+              "evidence": "одновременно холодильник, насос и инструмент; пусковой ток насоса неизвестен",
+              "relation": "must_have",
+              "strictness": "strict",
+              "verification": {
+                "mode": "typed_tool",
+                "tool": "calculator.generatorLoad",
+                "bindAs": "nominal_power_min_kw",
+                "verifier": "generator_load_profile",
+                "toolRequestId": "calc_generator_load_1"
+              }
+            }
+          ],
+          "selectionGoal": "preliminary_fit",
+          "alternativePolicy": "same_class_only",
+          "rankingObjectives": [],
+          "reusePreviousCards": false,
+          "targetProductClass": "бензиновый генератор для мастерской",
+          "canonicalProductClass": "generator"
+        },
+        "nextStepRationale": "Рассчитать нагрузку, найти кандидатов и проверить решающие характеристики внешним источником.",
+        "userMessageSummary": "Предварительный подбор 2–3 бензиновых однофазных генераторов.",
+        "dialogueUnderstanding": "Рабочая нагрузка задана, пуск насоса неизвестен; пригодность будет предварительной.",
+        "mustNotAskQuestionIds": [],
+        "leadCaptureAuthorization": {
+          "purpose": null,
+          "evidence": null,
+          "authorized": false,
+          "handoffKind": "none",
+          "buyerQuestion": null,
+          "contactSource": "none",
+          "pendingDraftId": null,
+          "handoffOfferMessageId": null
+        },
+        "buyerRequestedTechnicalHandoff": null
+      },
+      "error_code": null,
+      "error_message": null,
+      "created_at": "2026-09-15T12:18:33.496Z",
+      "updated_at": "2026-09-15T12:18:33.496Z"
+    },
+    {
+      "checkpoint": "observation_stopped_1",
+      "status": "succeeded",
+      "payload": {
+        "rounds": 0,
+        "status": "stopped",
+        "rationale": "The observation cycle stopped before readiness was established.",
+        "stopReason": "answer_time_reserve",
+        "missingFacts": [],
+        "candidateProductIds": []
+      },
+      "error_code": null,
+      "error_message": null,
+      "created_at": "2026-09-15T12:19:03.080Z",
+      "updated_at": "2026-09-15T12:19:03.080Z"
+    },
+    {
+      "checkpoint": "tool_artifacts_saved",
+      "status": "succeeded",
+      "payload": {
+        "resultCount": 3
+      },
+      "error_code": null,
+      "error_message": null,
+      "created_at": "2026-09-15T12:19:03.092Z",
+      "updated_at": "2026-09-15T12:19:03.092Z"
+    },
+    {
+      "checkpoint": "answer_contract_created",
+      "status": "failed",
+      "payload": {
+        "factsUsed": [
+          {
+            "value": "бензин",
+            "factKey": "fuel_type",
+            "attribute": "fuel_type",
+            "claimKind": "confirmed_value",
+            "productName": null,
+            "sourceEventIds": [
+              "fact.confirmed:0a73d49008d45137332596dc242be788"
+            ],
+            "evidenceItemIds": []
+          },
+          {
+            "value": "single_phase",
+            "factKey": "phase",
+            "attribute": "phase",
+            "claimKind": "confirmed_value",
+            "productName": null,
+            "sourceEventIds": [
+              "fact.confirmed:0be28e348d3b71b932b73fd75ec537b7"
+            ],
+            "evidenceItemIds": []
+          },
+          {
+            "value": 2.9,
+            "factKey": "total_running_load",
+            "attribute": "totalRunningKw",
+            "claimKind": "confirmed_value",
+            "productName": null,
+            "sourceEventIds": [
+              "calc_generator_load_1"
+            ],
+            "evidenceItemIds": [
+              "calc_generator_load_1:payload:profile:totalRunningKw"
+            ]
+          },
+          {
+            "value": 3,
+            "factKey": "running_only_nominal_floor",
+            "attribute": "runningOnlyNominalFloorKw",
+            "claimKind": "confirmed_value",
+            "productName": null,
+            "sourceEventIds": [
+              "calc_generator_load_1"
+            ],
+            "evidenceItemIds": [
+              "calc_generator_load_1:payload:profile:runningOnlyNominalFloorKw"
+            ]
+          },
+          {
+            "value": "pump:циркуляционный_насос",
+            "factKey": "startup_loads_unknown",
+            "attribute": "missingStartingLoads",
+            "claimKind": "absence_or_unknown",
+            "productName": null,
+            "sourceEventIds": [
+              "calc_generator_load_1"
+            ],
+            "evidenceItemIds": [
+              "calc_generator_load_1:payload:profile:missingStartingLoads:1"
+            ]
+          },
+          {
+            "value": "3,4",
+            "factKey": "nominal_power",
+            "attribute": "мощность номинальная при 220 в, квт",
+            "claimKind": "confirmed_value",
+            "productName": "Генератор бензиновый инверторный DAEWOO GDA 4400i (3,4 кВт)",
+            "sourceEventIds": [
+              "search_generators_1"
+            ],
+            "evidenceItemIds": [
+              "search_generators_1:product:010c9196-3ec9-4e4c-8e73-8f32bcc45329:spec:мощность номинальная при 220 в, квт"
+            ]
+          },
+          {
+            "value": "однофазные",
+            "factKey": "phase",
+            "attribute": "число фаз",
+            "claimKind": "confirmed_value",
+            "productName": "Генератор бензиновый инверторный DAEWOO GDA 4400i (3,4 кВт)",
+            "sourceEventIds": [
+              "search_generators_1"
+            ],
+            "evidenceItemIds": [
+              "search_generators_1:product:010c9196-3ec9-4e4c-8e73-8f32bcc45329:spec:число фаз"
+            ]
+          },
+          {
+            "value": "бензиновые",
+            "factKey": "fuel_type",
+            "attribute": "вид топлива",
+            "claimKind": "confirmed_value",
+            "productName": "Генератор бензиновый инверторный DAEWOO GDA 4400i (3,4 кВт)",
+            "sourceEventIds": [
+              "search_generators_1"
+            ],
+            "evidenceItemIds": [
+              "search_generators_1:product:010c9196-3ec9-4e4c-8e73-8f32bcc45329:spec:вид топлива"
+            ]
+          },
+          {
+            "value": 56990,
+            "factKey": "price",
+            "attribute": "price",
+            "claimKind": "confirmed_value",
+            "productName": "Генератор бензиновый инверторный DAEWOO GDA 4400i (3,4 кВт)",
+            "sourceEventIds": [
+              "search_generators_1"
+            ],
+            "evidenceItemIds": [
+              "search_generators_1:product:010c9196-3ec9-4e4c-8e73-8f32bcc45329:field:price"
+            ]
+          },
+          {
+            "value": "17,0",
+            "factKey": "nominal_power",
+            "attribute": "мощность номинальная при 220 в, квт",
+            "claimKind": "confirmed_value",
+            "productName": "Генератор бензиновый Zongshen PB 22000 E (17,0 кВт) 1T90DF220",
+            "sourceEventIds": [
+              "search_generators_1"
+            ],
+            "evidenceItemIds": [
+              "search_generators_1:product:3d244008-78bc-45ca-94f4-76fa2d89585f:spec:мощность номинальная при 220 в, квт"
+            ]
+          },
+          {
+            "value": 399990,
+            "factKey": "price",
+            "attribute": "price",
+            "claimKind": "confirmed_value",
+            "productName": "Генератор бензиновый Zongshen PB 22000 E (17,0 кВт) 1T90DF220",
+            "sourceEventIds": [
+              "search_generators_1"
+            ],
+            "evidenceItemIds": [
+              "search_generators_1:product:3d244008-78bc-45ca-94f4-76fa2d89585f:field:price"
+            ]
+          },
+          {
+            "value": "2,8",
+            "factKey": "nominal_power",
+            "attribute": "мощность номинальная при 220 в, квт",
+            "claimKind": "confirmed_value",
+            "productName": "Генератор бензиновый FUBAG BS 3500 Duplex (2,8 кВт) 431249/8641453",
+            "sourceEventIds": [
+              "search_generators_1"
+            ],
+            "evidenceItemIds": [
+              "search_generators_1:product:538f3f62-d2b1-4470-b0f8-50bc3eb4b1c9:spec:мощность номинальная при 220 в, квт"
+            ]
+          }
+        ],
+        "riskFlags": [
+          "startup_capability_unconfirmed",
+          "running_only_floor_is_not_startup_capacity",
+          "live_stock_not_confirmed"
+        ],
+        "answerText": "Предварительно подходят два варианта из каталога. Рабочая нагрузка по вашим данным — 2,9 кВт, а 3 кВт — это только ориентир по одновременной работе без учёта пусков. Пуск насоса, холодильника и инструмента не подтверждён, поэтому окончательно гарантировать запуск пока нельзя.\n\n1. DAEWOO GDA 4400i (3,4 кВт) — лучший по размеру: однофазный, бензиновый, номинальная мощность 3,4 кВт. Запас относительно расчётного рабочего ориентира — около 0,4 кВт, поэтому пуск насоса нужно подтвердить по его шильдику или паспорту.\n2. Zongshen PB 22000 E (17,0 кВт) 1T90DF220 — однофазный бензиновый генератор с номиналом 17 кВт. Это уже сильно избыточный вариант: примерно +14 кВт к рабочему ориентиру 3 кВт; каталожная цена также значительно выше — 399 990 ₽ против 56 990 ₽ у DAEWOO.\n\nFUBAG BS 3500 Duplex (2,8 кВт) не включаю в подбор: его номинал ниже даже рабочего ориентира 3 кВт, ещё до учёта пусковых токов.\n\nЧтобы перейти от предварительного подбора к точному, нужен один факт: марка и модель циркуляционного насоса либо его пусковая мощность/ток с шильдика.",
+        "leadAction": "none",
+        "toolResultIds": [
+          "calc_generator_load_1",
+          "search_generators_1",
+          "research_generator_specs_1"
+        ],
+        "questionsAsked": [
+          {
+            "text": "Какая марка и модель насоса указана на шильдике, либо какой у него пусковой ток/мощность?",
+            "reason": "Без этого нельзя подтвердить, что генератор справится с пуском насоса.",
+            "questionId": "pump_model_or_starting_current"
+          }
+        ],
+        "selectedProductIds": [
+          "010c9196-3ec9-4e4c-8e73-8f32bcc45329",
+          "3d244008-78bc-45ca-94f4-76fa2d89585f"
+        ],
+        "selectionRationale": "DAEWOO выбран первым как ближайший к рабочему ориентиру номинал 3,4 кВт; Zongshen оставлен вторым как заведомо более мощный, но сильно избыточный и более дорогой вариант. Оба соответствуют подтверждённым требованиям по бензину и однофазному исполнению.",
+        "selectionReadiness": {
+          "status": "ready_for_preliminary_cards",
+          "rationale": "Есть подтверждённые требования по топливу и фазности, а также каталоговые кандидаты. Рабочая нагрузка рассчитана, но пусковые токи не подтверждены, поэтому карточки допустимы только как предварительный подбор.",
+          "missingFacts": [
+            "пусковая характеристика циркуляционного насоса",
+            "пусковые нагрузки холодильника и инструмента",
+            "актуальная проверка наличия"
+          ],
+          "productClass": "generator",
+          "canShowProductCards": true
+        }
+      },
+      "error_code": "answer_contract_blocked_by_validation",
+      "error_message": "research_guidance_uncertainty_mismatch",
+      "created_at": "2026-09-15T12:19:23.544Z",
+      "updated_at": "2026-09-15T12:19:32.691Z"
+    },
+    {
+      "checkpoint": "review_completed",
+      "status": "failed",
+      "payload": {
+        "issues": [
+          {
+            "code": "research_guidance_uncertainty_mismatch",
+            "message": "Grounded factual review rejected the claim \"Чтобы перейти от предварительного подбора к точному, нужен один факт: марка и модель циркуляционного насоса либо его пусковая мощность/ток с шильдика.\" using calc_generator_load_1: Формулировка «нужен один факт» и обещание перейти к «точному» подбору после данных только циркуляционного насоса слишком широки: расчёт также показывает неподтверждённые пусковые нагрузки холодильника и инструмента. Данные насоса действительно полезны и относятся к оборудованию покупателя, но сами по себе не подтверждают запуск всей заявленной нагрузки.",
+            "evidence": "Чтобы перейти от предварительного подбора к точному, нужен один факт: марка и модель циркуляционного насоса либо его пусковая мощность/ток с шильдика.",
+            "severity": "high"
+          }
+        ],
+        "verdict": "block"
+      },
+      "error_code": "answer_contract_blocked_by_validation",
+      "error_message": "research_guidance_uncertainty_mismatch",
+      "created_at": "2026-09-15T12:19:32.699Z",
+      "updated_at": "2026-09-15T12:19:32.699Z"
+    }
+  ]
+}

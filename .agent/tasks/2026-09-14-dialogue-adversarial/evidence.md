@@ -63,6 +63,15 @@ Raw logs are stored in `raw/`. The first parallel timeout run and its clean sequ
 - Fresh focused verification — PASS: 285/285 tests. Final direct root verification — PASS: 40/40. TypeScript, no-new-regex and production build PASS. The isolated generated dialogue-ledger suite passed 24/24. The full-suite run passed 1,509 tests, skipped one, and recorded the removed remote PDF fixture plus two resource timeouts; the two generated-sequence timeouts passed on the isolated 24/24 rerun. One obsolete binder assertion failed only because the critic updated its production-shaped fixture while that long run was already in progress; the finalized test passes in both the critic's and root's fresh runs.
 - Raw focused output is `raw/verified-memory-focused-2026-09-15.log`. Publication and a new clean-session production dialogue remain pending.
 
+## Fourth production checkpoint and multi-gap wording correction
+
+- PR #29 merged as `f841e15bebb01718ac0cf1a5b0819e6158edd7dd`; required GitHub workflow run `34967180040` passed the complete 1,514-test suite, migration/knowledge checks on isolated PostgreSQL, backend acceptance and build. Railway deployment `971c29e1-cc57-45a2-a78a-aded93a90218` reached SUCCESS at the exact merge SHA and the public backend marker matched.
+- A read-only production database check confirmed `verified_product_facts.evidence_verified_exact boolean NOT NULL DEFAULT false`; all 30,978 legacy rows remained false, proving that migration did not promote historical evidence.
+- Production dialogue `#2189`, session `80225914-da24-4917-8ab8-1def299725e7`, turn `deca26dd-1fe2-41a7-a0e9-3f15387decd5`, produced a grounded preliminary draft but no assistant message. The buyer saw the generic completion error. Captures are `raw/production-dialogue-2026-09-15-failed4-admin.json` and `raw/production-dialogue-2026-09-15-failed4-turn-artifacts.json`.
+- Calculator evidence correctly listed three unresolved startup loads. The draft preserved all three initially, then incorrectly called the pump nameplate the one fact needed for exact selection. The semantic factual reviewer correctly blocked this as `research_guidance_uncertainty_mismatch`. Repair remained closed below the proven 47-second full writer/review boundary.
+- Root and critic agreed not to weaken review, lower the repair threshold or add phrase matching. The correction passes the complete `missingStartingLoads` list to the writer and tells both writer and reviewer that one focused question is only the next step while any other blocker remains.
+- Focused verification — PASS: 33/33 tests; broader orchestrator/evidence regression — PASS: 232/232; TypeScript, no-new-regex and build PASS. The critic independently inspected the final diff, repeated 33/33 tests and returned PASS. Publication and another clean-session production dialogue remain pending.
+
 ## Known scoped limits
 
 - The deterministic validator proves structured `factsUsed` bindings. Exhaustive extraction of every factual statement from free-form answer text remains under the semantic factual reviewer.

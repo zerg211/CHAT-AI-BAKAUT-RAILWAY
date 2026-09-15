@@ -1852,15 +1852,22 @@ function generatorLoadProfileNumbers(result: ToolResult) {
       requiredNominalKw?: unknown;
       requiredStartingKw?: unknown;
       confidence?: unknown;
+      missingStartingLoads?: unknown;
     };
   }).profile;
   const requiredNominalKw = Number(profile?.requiredNominalKw);
   const requiredStartingKw = Number(profile?.requiredStartingKw);
   const confidence = Number(profile?.confidence);
+  const missingStartingLoads = Array.isArray(profile?.missingStartingLoads)
+    ? [...new Set(profile.missingStartingLoads
+      .filter((value): value is string => typeof value === 'string' && Boolean(value.trim()))
+      .map((value) => value.trim()))].slice(0, 24)
+    : [];
   return {
     requiredNominalKw: Number.isFinite(requiredNominalKw) && requiredNominalKw > 0 ? requiredNominalKw : undefined,
     requiredStartingKw: Number.isFinite(requiredStartingKw) && requiredStartingKw > 0 ? requiredStartingKw : undefined,
-    confidence: Number.isFinite(confidence) && confidence >= 0 ? confidence : undefined
+    confidence: Number.isFinite(confidence) && confidence >= 0 ? confidence : undefined,
+    missingStartingLoads
   };
 }
 
@@ -1883,10 +1890,13 @@ export function requiredResponseClausesForToolResults(
       const profileInstruction = profile.requiredNominalKw !== undefined
         ? `Do not ignore payload.profile.requiredNominalKw=${profile.requiredNominalKw}: either use it as a rough or partial orientation with an explicit caveat about the missing load basis, or explain that it covers only the counted loads and is not enough for final generator selection.`
         : 'Do not invent a kW number when payload.profile.requiredNominalKw is absent.';
+      const missingStartingInstruction = profile.missingStartingLoads.length
+        ? `The complete unresolved payload.profile.missingStartingLoads list is ${JSON.stringify(profile.missingStartingLoads)}. Every listed load remains a blocker for exact startup sizing. You may ask one highest-value next question to keep the dialogue focused, but describe it only as the next step. Do not call it the only remaining fact or promise exact/final selection after that one answer unless it is the only unresolved load and no other blocker remains. Preserve every unresolved load in selectionReadiness.missingFacts.`
+        : 'If there are several unresolved load facts elsewhere in the evidence, one focused question is only the next step and must not be described as the sole blocker.';
       clauses.push({
         code: 'generator_unconfirmed_load_stage_aware_selection',
         sourceRequestId: result.requestId,
-        instruction: `This generator load calculation has an unconfirmed or incomplete load basis. ${profileInstruction} Do not present the number as a confirmed recommendation, confirmed minimum, or purchase-safe final selection. Product cards and prices may still be shown for browse_catalog, or for a clearly labelled preliminary_fit when the available basis supports it. Name the missing load power/model/type and ask for the smallest fact needed before final_fit. If payload.profile.missingStartingLoads is nonempty, totalRunningKw and runningOnlyNominalFloorKw describe running loads only, never a sufficient generator minimum or startup capacity. Preserve that distinction; use a justified explicit startup estimate for preliminary selection or obtain the missing startup data before final suitability.`
+        instruction: `This generator load calculation has an unconfirmed or incomplete load basis. ${profileInstruction} ${missingStartingInstruction} Do not present the number as a confirmed recommendation, confirmed minimum, or purchase-safe final selection. Product cards and prices may still be shown for browse_catalog, or for a clearly labelled preliminary_fit when the available basis supports it. If payload.profile.missingStartingLoads is nonempty, totalRunningKw and runningOnlyNominalFloorKw describe running loads only, never a sufficient generator minimum or startup capacity. Preserve that distinction; use a justified explicit startup estimate for preliminary selection or obtain every missing startup datum before final suitability.`
       });
     }
     if (

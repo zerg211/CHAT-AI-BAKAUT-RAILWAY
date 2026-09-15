@@ -110,3 +110,11 @@ After the first implementation, the critic found that production projects a stor
 Root also challenged the repository-wide rejection of new web/manual rows without `evidenceVerifiedExact=true`. The critic checked every runtime caller: exact research persistence is the only producer, both direct and queued paths carry `true`, and the worker separately enforces it. SQL legacy rows receive the migration default `false`, remain URL candidates, and cannot supply confirmed values. The repository guard therefore prevents a future unvalidated caller from replacing evidence or refreshing the TTL of an exact row. This is the final shared opinion.
 
 Final verification: root focused 285/285 and final direct 40/40 PASS; critic focused 285/285, direct 27/27, typecheck, no-new-regex and build PASS. The isolated long generated-state file passed 24/24. Real PostgreSQL integration was not run because no isolated test database was configured.
+
+## Fourth post-deployment dispute: one next question versus one sufficient fact
+
+Production dialogue #2189 contained a useful grounded draft, but its final sentence promised exact selection after obtaining only the pump model or starting current while the calculator still listed three unknown startup loads. The semantic reviewer blocked it and the buyer received no answer.
+
+Root first considered lowering the 47-second repair threshold or adding a deterministic claim-removal fallback. The critic objected that the existing repair is a full writer plus second review and the remaining 43 seconds do not prove a safe lower boundary. Root accepted that timing argument and additionally rejected phrase matching because sufficiency is a semantic judgment. Both agreed the reviewer behaved correctly and must remain strict.
+
+The final shared position is to pass the exact full `missingStartingLoads` list in the required response clause and align the common writer/reviewer guidance: one question may be prioritized to keep the conversation natural, but it is only the next step; it cannot be called the only remaining fact or unlock exact/final selection while any other blocker remains. Focused tests pass 33/33, TypeScript passes, and the critic's final diff verdict is PASS.
