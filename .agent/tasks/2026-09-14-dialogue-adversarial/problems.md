@@ -39,3 +39,20 @@ The second post-deploy widget dialogue (`#2187`, session `96948942-ee02-400d-9ba
 The draft declared `combined_running_load=2.9` with attribute `totalRunningKw`, but bound it to three component evidence items whose attributes are `runningKw`. The calculator had already persisted the authoritative aggregate at `payload.profile.totalRunningKw=2.9`. Recomputing this value inside the validator would be unsafe because calculator semantics include counts, operation modes, simultaneous groups, scenarios and rounding.
 
 Smallest fix after root/critic dispute: for this narrowly defined calculator aggregate only, component IDs from one successful calculator request are remapped to the exact canonical `payload.profile.totalRunningKw` item when the fact value matches it exactly. Any wrong value, missing canonical item, mixed request, non-running component or product-scoped claim remains fail-closed. Calculator profile evidence is enumerated before loads so the canonical total survives the 80-item cap. Repair admission now requires more than 47 seconds: 30 seconds for the writer, 12 seconds for the second review and 5 seconds for persistence and other operations.
+
+## P7 — verified-memory projection lost durable evidence provenance
+
+PR #28 merged as `984cbf7eba8fd736848f79995df3cc10aaa8cc7f` and Railway deployment `050492ad-7e20-404e-add1-f014bffa4d06` reached SUCCESS at that exact SHA. Production dialogue `#2188` (session `355fccf1-14f5-493e-b5d2-5640416cca07`) proved the calculator correction: the first turn completed with a useful 2.9 kW preliminary selection. On the buyer's natural follow-up, a second useful draft was composed but the buyer saw only the recovery message and final error.
+
+The second turn loaded four A-iPower values from verified fact memory. `verifiedFactsResearchResult()` preserved their value and source URL but dropped the durable row ID and exact-evidence status. The writer cited `research_generator_facts`, while `toolResultEvidenceItems()` correctly refused to expose the projected facts as exact evidence. Review blocked two numeric facts; a third nonnumeric fuel fact revealed a separate gap because missing item bindings were enforced only for claims containing a number.
+
+Final root/critic resolution:
+
+- add `verified_product_facts.evidence_verified_exact NOT NULL DEFAULT false`; do not backfill legacy/SQL rows;
+- set the marker only in the current exact-validated runtime persistence path, reject new web/manual repository writes without it, and allow a later exact write to promote a legacy row;
+- retain legacy URLs as research candidates while preventing their values from becoming reusable facts;
+- project the durable row ID and exact marker into memory research, and use a stable row-backed evidence item ID;
+- fill an omitted item ID only for one exact source/product/canonical-attribute/normalized-value match;
+- require item binding and value compatibility for nonnumeric tool facts as well as numeric facts.
+
+The critic found and corrected one flaw in the root implementation: production memory results repeat the same row in `facts` and `coverage`, so a raw unique-count saw two candidates. The final binder removes only a proven coverage projection duplicate. A separate fresh exact fact remains an independent candidate and keeps the answer fail-closed. The root challenged that preference and the generic repository guard; after caller and ambiguity analysis, the critic's narrower duplicate rule and repository-boundary guard became the final shared position.

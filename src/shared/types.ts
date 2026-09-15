@@ -109,6 +109,7 @@ export interface VerifiedProductFact {
   sourceUrl?: string | null;
   sourceTitle?: string | null;
   evidence?: string | null;
+  evidenceVerifiedExact?: boolean;
   sourceTier?: 'official_page' | 'official_manual' | 'reliable_secondary' | null;
   sourceAuthority?: 'manufacturer' | 'secondary' | null;
   observedAt?: string | null;
@@ -135,6 +136,7 @@ export interface VerifiedProductFactInput {
   sourceUrl?: string | null;
   sourceTitle?: string | null;
   evidence?: string | null;
+  evidenceVerifiedExact?: boolean;
   sourceFingerprint?: string | null;
   sourceTier?: 'official_page' | 'official_manual' | 'reliable_secondary' | null;
   sourceAuthority?: 'manufacturer' | 'secondary' | null;

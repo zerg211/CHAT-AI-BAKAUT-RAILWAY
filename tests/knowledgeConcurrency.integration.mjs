@@ -8,7 +8,8 @@ const { ProductRepository } = await import('../src/db/repositories.ts');
 const repo = new ProductRepository(), key = randomUUID(), name = 'Concurrent ' + key;
 const fact = { productName: name, attribute: 'weight', value: '10 kg', sourceType: 'manual',
   sourceUrl: 'https://fixtures.bakaut.invalid/manual/' + key, sourceTitle: name, evidence: name + ': 10 kg',
-  sourceTier: 'official_manual', sourceAuthority: 'manufacturer', confidence: 'high', observedAt: new Date(Date.now() - 60000).toISOString() };
+  evidenceVerifiedExact: true, sourceTier: 'official_manual', sourceAuthority: 'manufacturer', confidence: 'high',
+  observedAt: new Date(Date.now() - 60000).toISOString() };
 const lock = await pool.connect();
 try {
   const first = await repo.upsertVerifiedProductFact(fact);

@@ -257,6 +257,7 @@ async function repairVerifiedProductFactsSchema(client: QueryableClient) {
       source_url text,
       source_title text,
       evidence text,
+      evidence_verified_exact boolean NOT NULL DEFAULT false,
       catalog_source_hash text,
       source_fingerprint text,
       source_tier text,
@@ -277,6 +278,7 @@ async function repairVerifiedProductFactsSchema(client: QueryableClient) {
       ADD COLUMN IF NOT EXISTS source_fingerprint text,
       ADD COLUMN IF NOT EXISTS source_tier text,
       ADD COLUMN IF NOT EXISTS source_authority text,
+      ADD COLUMN IF NOT EXISTS evidence_verified_exact boolean NOT NULL DEFAULT false,
       ADD COLUMN IF NOT EXISTS observed_at timestamptz NOT NULL DEFAULT now()
   `);
   await client.query(`DROP INDEX IF EXISTS verified_product_facts_unique_active_idx`);

@@ -10,7 +10,8 @@ const repo = new ProductRepository(), key = randomUUID();
 const name = `enrichment-${key}`;
 const fact = index => ({ productName: name, attribute: `attribute-${index}`, value: '70 kg', sourceType: 'manual',
   sourceUrl: `https://fixtures.bakaut.invalid/${key}`, sourceTitle: name, sourceTier: 'official_manual',
-  sourceAuthority: 'manufacturer', confidence: 'high', observedAt: new Date(Date.now()-60000).toISOString(), evidence: `Manual ${name}: 70 kg` });
+  sourceAuthority: 'manufacturer', confidence: 'high', observedAt: new Date(Date.now()-60000).toISOString(),
+  evidence: `Manual ${name}: 70 kg`, evidenceVerifiedExact: true });
 const jobs = [];
 const enqueue = async (suffix, facts) => {
   await repo.enqueueVerifiedProductFacts(`${key}-${suffix}`, facts);

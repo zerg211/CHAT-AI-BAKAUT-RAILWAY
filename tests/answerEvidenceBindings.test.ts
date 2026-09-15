@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import type { AnswerContract, ToolResult } from '../src/ai/agentManagerContracts.js';
-import { answerEvidenceItemsForModel, resolveAnswerEvidenceBindings } from '../src/ai/answerEvidenceBindings.js';
+import {
+  answerEvidenceItemsForModel,
+  bindUniqueMissingAnswerEvidenceItems,
+  resolveAnswerEvidenceBindings
+} from '../src/ai/answerEvidenceBindings.js';
 
 const research: ToolResult = {
   requestId: 'research', tool: 'web.researchProductFacts', status: 'ok', warnings: [],
@@ -157,7 +161,7 @@ describe('claim-level answer evidence bindings', () => {
 
   it('allows a source label but not a confirmed net value from not-confirmed coverage', () => {
     const base = { factKey: 'weight-label', sourceEventIds: ['research'], evidenceItemIds: ['research:coverage:0'],
-      productName: 'Fubag BS 8000', attribute: 'weight_net_kg', value: '93.5 kg' };
+      productName: 'Fubag BS 8000', attribute: 'weight_net_kg', value: 'Вес, кг 93.5' };
     expect(resolveAnswerEvidenceBindings({ answer: answer({ ...base, claimKind: 'source_label' }), toolResults: [research] }).issues).toEqual([]);
     expect(resolveAnswerEvidenceBindings({ answer: answer({ ...base, claimKind: 'confirmed_value' }), toolResults: [research] }).issues
       .map((issue) => issue.code)).toContain('unconfirmed_evidence_used_as_confirmed_value');
@@ -186,7 +190,7 @@ describe('claim-level answer evidence bindings', () => {
     const page: ToolResult = { requestId: 'page', tool: 'site.readFirstPartyPage', status: 'ok', warnings: [],
       payload: { title: 'Купить генератор выгодно', productIdentity: { title: 'Fubag BS 8000' }, text: 'Вес, кг 93.5' } };
     const base = { factKey: 'weight-label', sourceEventIds: ['page'], evidenceItemIds: ['page:page:text:0'],
-      productName: 'Fubag BS 8000', attribute: 'page_text', value: '93.5 kg' };
+      productName: 'Fubag BS 8000', attribute: 'page_text', value: 'Вес, кг 93.5' };
     expect(resolveAnswerEvidenceBindings({ answer: answer({ ...base, claimKind: 'confirmed_value' }), toolResults: [page] })
       .issues.map((issue) => issue.code)).toContain('unconfirmed_evidence_used_as_confirmed_value');
     expect(resolveAnswerEvidenceBindings({ answer: answer({ ...base, claimKind: 'source_label' }), toolResults: [page] })
@@ -197,7 +201,7 @@ describe('claim-level answer evidence bindings', () => {
     delete unverifiedGuidance.coverage[0]!.evidenceVerifiedExact;
     expect(resolveAnswerEvidenceBindings({
       answer: answer({ factKey: 'weight-label', sourceEventIds: ['research'], evidenceItemIds: ['research:coverage:0'],
-        productName: 'Fubag BS 8000', attribute: 'weight_net_kg', claimKind: 'source_label', value: '93.5 kg' }),
+        productName: 'Fubag BS 8000', attribute: 'weight_net_kg', claimKind: 'source_label', value: 'Вес, кг 93.5' }),
       toolResults: [unverifiedCoverage]
     }).issues.map((issue) => issue.code)).toContain('numeric_source_label_evidence_unverified');
   });
@@ -211,5 +215,108 @@ describe('claim-level answer evidence bindings', () => {
     expect(hints[0]?.id).toBe('research:fact:0');
     expect(hints).toHaveLength(5);
     expect(hints.every((item) => item.evidence.length <= 640 && String(item.value).length <= 320)).toBe(true);
+  });
+
+  it('restores stable evidence ids for uniquely matching exact verified-memory facts', () => {
+    const productName = 'Генератор бензиновый A-iPower A6500 (6,0 кВт) 20108';
+    const memoryResearch: ToolResult = {
+      requestId: 'research-memory', tool: 'web.researchProductFacts', status: 'ok', warnings: [], payload: {
+        usedWebSearch: false, searchDisposition: 'memory_hit',
+        facts: [
+          { verifiedFactId: 'power-id', productName, attribute: 'nominal_power_kw', value: '6000 Вт',
+            evidence: 'Номинальная мощность 6000 Вт', sourceType: 'web', evidenceVerifiedExact: true },
+          { verifiedFactId: 'phase-id', productName, attribute: 'phases', value: '1, 230 В / 50 Гц, ток 26,1 А, cosφ 1',
+            evidence: 'Число фаз 1; 230 В / 50 Гц; 26,1 А; cosφ 1', sourceType: 'web', evidenceVerifiedExact: true },
+          { verifiedFactId: 'fuel-id', productName, attribute: 'fuel_type', value: 'бензиновый',
+            evidence: 'Тип двигателя бензиновый', sourceType: 'web', evidenceVerifiedExact: true }
+        ],
+        answerGuidance: { coverage: [
+          { productName, attribute: 'nominal_power_kw', status: 'confirmed', value: '6000 Вт',
+            evidence: 'Номинальная мощность 6000 Вт', evidenceVerifiedExact: true },
+          { productName, attribute: 'phases', status: 'confirmed', value: '1, 230 В / 50 Гц, ток 26,1 А, cosφ 1',
+            evidence: 'Число фаз 1; 230 В / 50 Гц; 26,1 А; cosφ 1', evidenceVerifiedExact: true },
+          { productName, attribute: 'fuel_type', status: 'confirmed', value: 'бензиновый',
+            evidence: 'Тип двигателя бензиновый', evidenceVerifiedExact: true }
+        ] }
+      }
+    };
+    const draft: AnswerContract = {
+      answerText: 'A-iPower: 6 кВт, одна фаза, бензиновый.', questionsAsked: [], toolResultIds: ['research-memory'],
+      leadAction: 'none', riskFlags: [], factsUsed: [
+        { factKey: 'power', sourceEventIds: ['research-memory'], productName, attribute: 'nominal power',
+          claimKind: 'confirmed_value', value: '6 кВт' },
+        { factKey: 'phase', sourceEventIds: ['research-memory'], productName, attribute: 'phases',
+          claimKind: 'confirmed_value', value: '1, 230 В / 50 Гц, ток 26,1 А, cosφ 1' },
+        { factKey: 'fuel', sourceEventIds: ['research-memory'], productName, attribute: 'fuel_type',
+          claimKind: 'confirmed_value', value: 'бензиновый' }
+      ]
+    };
+    const bound = bindUniqueMissingAnswerEvidenceItems({ answer: draft, toolResults: [memoryResearch] });
+    expect(bound.factsUsed.map((fact) => fact.evidenceItemIds)).toEqual([
+      ['research-memory:verified_fact:power-id:nominal_power'],
+      ['research-memory:verified_fact:phase-id:phases'],
+      ['research-memory:verified_fact:fuel-id:fuel_type']
+    ]);
+    const resolution = resolveAnswerEvidenceBindings({ answer: bound, toolResults: [memoryResearch] });
+    expect(resolution.issues).toEqual([]);
+    expect(resolution.bindings.map((binding) => binding.evidenceItemId)).toEqual(
+      expect.arrayContaining(bound.factsUsed.flatMap((fact) => fact.evidenceItemIds ?? []))
+    );
+    expect(resolution.items.filter((item) => item.verifiedFactId).map((item) => item.verifiedFactId))
+      .toEqual(['power-id', 'phase-id', 'fuel-id']);
+  });
+
+  it('keeps legacy, ambiguous and mismatched memory facts fail-closed', () => {
+    const productName = 'A-iPower A6500';
+    const exactFact = { verifiedFactId: 'first', productName, attribute: 'fuel_type', value: 'бензиновый',
+      evidence: 'Тип двигателя бензиновый', sourceType: 'web', evidenceVerifiedExact: true };
+    const draft = answer({ factKey: 'fuel', sourceEventIds: ['research'], productName, attribute: 'fuel_type',
+      claimKind: 'confirmed_value', value: 'бензиновый' });
+
+    const legacy = structuredClone(research);
+    legacy.payload.facts = [{ ...exactFact, evidenceVerifiedExact: false }];
+    (legacy.payload.answerGuidance as { coverage: unknown[] }).coverage = [];
+    expect(bindUniqueMissingAnswerEvidenceItems({ answer: draft, toolResults: [legacy] }).factsUsed[0]?.evidenceItemIds)
+      .toBeUndefined();
+
+    const ambiguous = structuredClone(legacy);
+    ambiguous.payload.facts = [{ ...exactFact }, { ...exactFact, verifiedFactId: 'second' }];
+    expect(bindUniqueMissingAnswerEvidenceItems({ answer: draft, toolResults: [ambiguous] }).factsUsed[0]?.evidenceItemIds)
+      .toBeUndefined();
+
+    const freshCompeting = structuredClone(legacy);
+    freshCompeting.payload.facts = [{ ...exactFact }, {
+      ...exactFact, verifiedFactId: undefined, evidence: 'Свежий источник: тип двигателя бензиновый'
+    }];
+    expect(bindUniqueMissingAnswerEvidenceItems({ answer: draft, toolResults: [freshCompeting] })
+      .factsUsed[0]?.evidenceItemIds).toBeUndefined();
+
+    const wrongValue = structuredClone(legacy);
+    wrongValue.payload.facts = [{ ...exactFact, value: 'дизельный', evidence: 'Тип двигателя дизельный' }];
+    expect(bindUniqueMissingAnswerEvidenceItems({ answer: draft, toolResults: [wrongValue] }).factsUsed[0]?.evidenceItemIds)
+      .toBeUndefined();
+
+    const wrongProduct = structuredClone(legacy);
+    wrongProduct.payload.facts = [{ ...exactFact, productName: 'A-iPower A7500' }];
+    expect(bindUniqueMissingAnswerEvidenceItems({ answer: draft, toolResults: [wrongProduct] }).factsUsed[0]?.evidenceItemIds)
+      .toBeUndefined();
+  });
+
+  it('requires bindings and exact scalar compatibility for nonnumeric tool facts', () => {
+    const productName = 'A-iPower A6500';
+    const fuelResearch: ToolResult = { requestId: 'fuel-research', tool: 'web.researchProductFacts', status: 'ok', warnings: [],
+      payload: { facts: [{ verifiedFactId: 'fuel-id', productName, attribute: 'fuel_type', value: 'бензиновый',
+        evidence: 'Тип двигателя бензиновый', sourceType: 'web', evidenceVerifiedExact: true }],
+      answerGuidance: { coverage: [] } } };
+    const missing = answer({ factKey: 'fuel', sourceEventIds: ['fuel-research'], productName, attribute: 'fuel_type',
+      claimKind: 'confirmed_value', value: 'бензиновый' });
+    expect(resolveAnswerEvidenceBindings({ answer: missing, toolResults: [fuelResearch] }).issues.map((issue) => issue.code))
+      .toContain('fact_evidence_binding_missing');
+
+    const wrong = answer({ factKey: 'fuel', sourceEventIds: ['fuel-research'],
+      evidenceItemIds: ['fuel-research:verified_fact:fuel-id:fuel_type'], productName, attribute: 'fuel_type',
+      claimKind: 'confirmed_value', value: 'дизельный' });
+    expect(resolveAnswerEvidenceBindings({ answer: wrong, toolResults: [fuelResearch] }).issues.map((issue) => issue.code))
+      .toContain('fact_value_not_in_bound_evidence');
   });
 });

@@ -11,7 +11,7 @@ const oldTime = new Date(Date.now() - 60000).toISOString();
 const fact = { productName: name, attribute: 'Масса', value: '70 кг', sourceType: 'manual',
   sourceUrl: `https://fixtures.bakaut.invalid/${randomUUID()}`, sourceTitle: name,
   sourceTier: 'official_manual', sourceAuthority: 'manufacturer', confidence: 'high',
-  observedAt: oldTime, evidence: 'Manufacturer manual: mass 70 kg.' };
+  observedAt: oldTime, evidence: 'Manufacturer manual: mass 70 kg.', evidenceVerifiedExact: true };
 try {
   const strong = await repo.upsertVerifiedProductFact(fact);
   assert.ok(strong);

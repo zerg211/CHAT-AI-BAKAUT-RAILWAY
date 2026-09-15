@@ -29,6 +29,7 @@ export interface ProductComparisonResearchFact {
   sourceTier?: Exclude<ProductResearchSourceTier, 'catalog'>;
   sourceAuthority?: 'manufacturer' | 'secondary';
   evidenceVerifiedExact?: boolean;
+  verifiedFactId?: string;
   targetApplicability?: 'exact_model' | 'shared_instruction';
   scopeQuote?: string;
 }

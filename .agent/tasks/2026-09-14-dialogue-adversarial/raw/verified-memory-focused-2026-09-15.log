@@ -1,0 +1,8 @@
+
+ RUN  v4.1.5 C:/Projects/chatAI
+
+
+ Test Files  5 passed (5)
+      Tests  285 passed (285)
+   Start at  14:56:37
+   Duration  21.47s (transform 5.02s, setup 0ms, import 11.04s, tests 7.24s, environment 4ms)

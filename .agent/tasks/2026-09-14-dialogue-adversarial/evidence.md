@@ -54,6 +54,15 @@ Raw logs are stored in `raw/`. The first parallel timeout run and its clean sequ
 - Repair then started with 31.359 seconds, below the full writer/review/operation budget, and timed out. The new correction binds the canonical calculator total without duplicating calculator semantics and changes repair admission to `remaining > 47,000 ms`.
 - Focused verification of the new correction — PASS: 196/196 tests; TypeScript, production build and the no-new-regex guard also PASS. The critic independently repeated 196/196 tests, found no blocking defect and returned PASS. Publication and a fresh production dialogue remain pending at this checkpoint.
 
+## Third production checkpoint and durable-memory correction
+
+- PR #28 merged as `984cbf7eba8fd736848f79995df3cc10aaa8cc7f`; Railway deployment `050492ad-7e20-404e-add1-f014bffa4d06` reached SUCCESS at that exact SHA and both public health markers matched.
+- Production dialogue `#2188`, session `355fccf1-14f5-493e-b5d2-5640416cca07`, completed the initial buyer turn. The follow-up turn `81ecd066-ddec-495b-bc04-b855e3dc1a2d` failed as `agent_manager_recovery_failed / wall_time_budget_exceeded` after deterministic review rejected memory-projected A-iPower facts with no item IDs. The admin and database captures are `raw/production-dialogue-2026-09-15-failed3-admin.json` and `raw/production-dialogue-2026-09-15-failed3-turn-artifacts.json`.
+- The correction adds a non-backfilled durable exact-evidence marker, stable verified-row evidence IDs, fail-closed legacy URL reuse, exact unique auto-binding, and required value-compatible bindings for nonnumeric tool claims.
+- Root/critic dispute completed with one shared opinion. The critic corrected the real `facts` + `coverage` duplicate and retained ambiguity for a separate fresh fact. The repository mutation boundary rejects new unvalidated web/manual rows.
+- Fresh focused verification — PASS: 285/285 tests. Final direct root verification — PASS: 40/40. TypeScript, no-new-regex and production build PASS. The isolated generated dialogue-ledger suite passed 24/24. The full-suite run passed 1,509 tests, skipped one, and recorded the removed remote PDF fixture plus two resource timeouts; the two generated-sequence timeouts passed on the isolated 24/24 rerun. One obsolete binder assertion failed only because the critic updated its production-shaped fixture while that long run was already in progress; the finalized test passes in both the critic's and root's fresh runs.
+- Raw focused output is `raw/verified-memory-focused-2026-09-15.log`. Publication and a new clean-session production dialogue remain pending.
+
 ## Known scoped limits
 
 - The deterministic validator proves structured `factsUsed` bindings. Exhaustive extraction of every factual statement from free-form answer text remains under the semantic factual reviewer.

@@ -120,7 +120,10 @@ class FakeProducts {
     ];
   }
   async searchVerifiedProductFacts() {
-    return this.verifiedFacts;
+    return this.verifiedFacts.map((fact) => ({
+      ...fact,
+      evidenceVerifiedExact: fact.evidenceVerifiedExact ?? true
+    }));
   }
   async markVerifiedProductFactsUsed(ids: string[]) {
     this.usedVerifiedFactIds.push(...ids);
@@ -140,6 +143,7 @@ class FakeProducts {
       sourceUrl: input.sourceUrl ?? null,
       sourceTitle: input.sourceTitle ?? null,
       evidence: input.evidence ?? null,
+      evidenceVerifiedExact: input.evidenceVerifiedExact === true,
       sourceTier: input.sourceTier ?? null,
       sourceAuthority: input.sourceAuthority ?? null,
       observedAt: input.observedAt ?? now,
@@ -1468,12 +1472,11 @@ describe('AgentManager comparison research flow', () => {
       ...model(),
       async composeAnswer() {
         return {
-          answerText: 'Обе модели дают одинаковую номинальную мощность. SUMEC дешевле, поэтому без требования к инверторному выходу я бы не переплачивал; BISON имеет смысл выбирать именно ради инверторного типа.',
-          factsUsed: [{
-            factKey: 'catalog.comparison',
-            sourceEventIds: ['catalog:test'],
-            value: 'same nominal power; different price and generator type'
-          }],
+          answerText: 'Обе модели дают одинаковую номинальную мощность 5,5 кВт. Внешняя проверка шума не завершилась, поэтому по шуму их сейчас не ранжирую.',
+          factsUsed: [{ factKey: 'sumec.nominal_power', sourceEventIds: ['catalog:test'],
+            productName: 'SUMEC FIRMAN 6 kW', attribute: 'nominalPowerKw', claimKind: 'confirmed_value', value: 5.5 },
+          { factKey: 'bison.nominal_power', sourceEventIds: ['catalog:test'],
+            productName: 'BISON 6 kW', attribute: 'nominalPowerKw', claimKind: 'confirmed_value', value: 5.5 }],
           questionsAsked: [],
           toolResultIds: ['catalog:test', 'web:test'],
           leadAction: 'none',
@@ -1495,9 +1498,8 @@ describe('AgentManager comparison research flow', () => {
       userMessage: 'Compare SUMEC and BISON generators by power and noise.'
     });
 
-    expect(payload.answer).toContain('я бы не переплачивал');
-    expect(payload.answer).toContain('инверторного типа');
-    expect(payload.answer).not.toContain('внешняя проверка не завершилась');
+    expect(payload.answer).toContain('одинаковую номинальную мощность');
+    expect(payload.answer).toContain('по шуму их сейчас не ранжирую');
     expect(payload.metadata?.answerContract).toMatchObject({
       toolResultIds: ['catalog:test', 'web:test']
     });
@@ -1515,7 +1517,8 @@ describe('AgentManager comparison research flow', () => {
         confidence: 'high',
         evidence: 'external specification lists electric starter, ignition keys, and recoil starter',
         sourceUrl: 'https://example.test/firman-rd8910e',
-        sourceTitle: 'FIRMAN RD8910E specification'
+        sourceTitle: 'FIRMAN RD8910E specification',
+        evidenceVerifiedExact: true
       }],
       conflicts: [],
       summaryForAnswer: 'RD8910E starts with a key and also has manual recoil start.',
@@ -1580,7 +1583,11 @@ describe('AgentManager comparison research flow', () => {
           factsUsed: [{
             factKey: 'firman_rd8910e.start_method',
             sourceEventIds: ['web:exact-model'],
-            value: 'key electric start plus manual recoil'
+            evidenceItemIds: ['web:exact-model:fact:0'],
+            productName: 'FIRMAN RD8910E',
+            attribute: 'start method',
+            claimKind: 'confirmed_value',
+            value: 'electric start with ignition key; manual recoil starter also available'
           }],
           questionsAsked: [],
           toolResultIds: ['web:exact-model'],
@@ -4022,11 +4029,16 @@ describe('AgentManager comparison research flow', () => {
         expect(input.products.map((item) => item.id)).toEqual([tss.id, bison.id]);
         return {
           answerText: 'Обе модели дают 5 кВт. TSS дешевле; доплата за BISON дает инверторный тип. Для насоса и болгарки без переплаты предварительно выбрал бы TSS.',
-          factsUsed: [{
-            factKey: 'catalog.exact_comparison',
-            sourceEventIds: ['catalog:exact-comparison'],
-            value: 'two verified catalog products'
-          }],
+          factsUsed: [
+            { factKey: 'tss.nominal_power', sourceEventIds: ['catalog:exact-comparison'], productName: tss.name,
+              attribute: 'nominal_power_kw', claimKind: 'confirmed_value', value: 5 },
+            { factKey: 'bison.nominal_power', sourceEventIds: ['catalog:exact-comparison'], productName: bison.name,
+              attribute: 'nominal_power_kw', claimKind: 'confirmed_value', value: 5 },
+            { factKey: 'tss.price', sourceEventIds: ['catalog:exact-comparison'], productName: tss.name,
+              attribute: 'price', claimKind: 'confirmed_value', value: 49281 },
+            { factKey: 'bison.generator_type', sourceEventIds: ['catalog:exact-comparison'], productName: bison.name,
+              attribute: 'generator_type', claimKind: 'confirmed_value', value: 'inverter' }
+          ],
           questionsAsked: [],
           toolResultIds: ['catalog:exact-comparison'],
           selectedProductIds: [tss.id, bison.id],

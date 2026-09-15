@@ -4,7 +4,9 @@ import {
   matchingVerifiedFactsForRequest,
   reusableVerifiedFact,
   verifiedFactCoverageForRequest,
-  verifiedFactsCoverRequest
+  verifiedFactsCoverRequest,
+  verifiedFactsResearchResult,
+  reusableVerifiedFactSource
 } from '../src/ai/verifiedFactMemory.js';
 
 const now = new Date('2026-08-09T12:00:00.000Z');
@@ -21,6 +23,7 @@ function fact(input: Partial<VerifiedProductFact> & Pick<VerifiedProductFact, 'i
     sourceUrl: input.sourceUrl === undefined ? `https://manufacturer.example/${input.id}` : input.sourceUrl,
     sourceTitle: input.sourceTitle ?? 'Official specification',
     evidence: input.evidence ?? `Nominal power ${input.value}`,
+    evidenceVerifiedExact: input.evidenceVerifiedExact ?? true,
     confidence: input.confidence ?? 'high',
     status: input.status ?? 'active',
     firstSeenAt: input.firstSeenAt ?? now.toISOString(),
@@ -166,6 +169,24 @@ describe('verified fact memory safety', () => {
       facts: matching,
       comparisonAttributes: ['nominal power']
     })).toBe(true);
+  });
+
+  it('keeps a legacy source as a research lead without reusing its value as a fact', () => {
+    const legacy = fact({ id: 'legacy-source', value: '5.0 kW', evidenceVerifiedExact: false });
+    expect(reusableVerifiedFactSource(legacy, now)).toBe(true);
+    expect(reusableVerifiedFact(legacy, now)).toBe(false);
+    expect(matchingVerifiedFactsForRequest({
+      facts: [legacy], targetProductNames: ['TSS SGG 5000 EH'], comparisonAttributes: ['nominal power'], now
+    })).toEqual([]);
+  });
+
+  it('projects the durable fact id and exact-evidence marker into a memory research result', () => {
+    const stored = fact({ id: 'exact-power', value: '5.0 kW', evidenceVerifiedExact: true });
+    const research = verifiedFactsResearchResult([stored]);
+    expect(research.facts).toEqual([expect.objectContaining({
+      verifiedFactId: 'exact-power', evidenceVerifiedExact: true, value: '5.0 kW'
+    })]);
+    expect(research.answerGuidance.coverage).toEqual([expect.objectContaining({ evidenceVerifiedExact: true })]);
   });
 
   it('requires every requested exact product to have a conflict-free value before skipping research', () => {
