@@ -386,6 +386,8 @@ export async function validateAgentAnswer(model: AgentManagerModel,
           toolResults: input.toolResults,
           verifiedProductFacts: input.verifiedProductFacts,
           conflictingVerifiedProductFacts: input.conflictingVerifiedProductFacts,
+          ledgerState: input.ledgerState,
+          productEvidenceRoles: input.productEvidenceRoles,
           signal: input.signal,
           deadlineAtMs: budget?.snapshot().usage.deadlineAtMs ?? input.structuredDeadlineAtMs
         });

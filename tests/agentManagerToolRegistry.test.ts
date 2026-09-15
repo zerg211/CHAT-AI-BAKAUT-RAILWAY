@@ -6,6 +6,10 @@ import {
 } from '../src/ai/agentManagerToolRegistry.js';
 
 describe('agent manager strict tool registry', () => {
+  it('allows catalog search enough time for broad structured retrieval', () => {
+    expect(agentManagerToolRegistry['catalog.search'].timeoutMs).toBe(15_000);
+  });
+
   it('preserves bounded HTTP source candidates as untrusted leads without accepting arbitrary fields', () => {
     const result = { requestId: 'manual', tool: 'web.researchProductFacts' as const, status: 'ok' as const,
       warnings: [], payload: { sourceCandidates: [{ url: 'https://manufacturer.example/manual.pdf', title: 'Manual' }] } };

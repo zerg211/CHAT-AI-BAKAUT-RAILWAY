@@ -1,0 +1,2067 @@
+{
+  "answers": [
+    {
+      "answer_text": "Рабочая нагрузка у вас — 2,9 кВт: холодильник 0,3 кВт, насос 1,1 кВт и инструмент 1,5 кВт работают одновременно. Поэтому 3 кВт — только ориентир по уже работающей нагрузке, а не гарантированно достаточная мощность для запуска.\n\nКонкретные 2–3 модели сейчас не подтверждены, поэтому не буду выдавать случайные генераторы за подходящие. Для бензинового однофазного варианта нужно проверить не только номинал, но и способность пережить пуск холодильника, насоса и инструмента; особенно важен пуск насоса.\n\nСледующий вопрос: какое точное значение тока или пусковой мощности насоса указано на его шильдике?",
+      "contract": {
+        "factsUsed": [
+          {
+            "value": "бензин",
+            "factKey": "fuel_type",
+            "attribute": "fuel_type",
+            "claimKind": "confirmed_value",
+            "productName": null,
+            "sourceEventIds": [
+              "fact.confirmed:59446d4c80758a5e97e1d6d9493fe98f"
+            ],
+            "evidenceItemIds": []
+          },
+          {
+            "value": "single_phase",
+            "factKey": "phase",
+            "attribute": "phase",
+            "claimKind": "confirmed_value",
+            "productName": null,
+            "sourceEventIds": [
+              "fact.confirmed:8cff1a5c6c2551fff4c5bc055407e1b6"
+            ],
+            "evidenceItemIds": []
+          },
+          {
+            "value": 2.9,
+            "factKey": "total_running_load",
+            "attribute": "totalRunningKw",
+            "claimKind": "confirmed_value",
+            "productName": null,
+            "sourceEventIds": [
+              "calc_generator_load_1"
+            ],
+            "evidenceItemIds": [
+              "calc_generator_load_1:payload:profile:totalRunningKw"
+            ]
+          },
+          {
+            "value": 3,
+            "factKey": "running_only_nominal_floor",
+            "attribute": "runningOnlyNominalFloorKw",
+            "claimKind": "confirmed_value",
+            "productName": null,
+            "sourceEventIds": [
+              "calc_generator_load_1"
+            ],
+            "evidenceItemIds": [
+              "calc_generator_load_1:payload:profile:runningOnlyNominalFloorKw"
+            ]
+          },
+          {
+            "value": "refrigerator:холодильник",
+            "factKey": "refrigerator_starting_load_unknown",
+            "attribute": "missingStartingLoads",
+            "claimKind": "absence_or_unknown",
+            "productName": null,
+            "sourceEventIds": [
+              "calc_generator_load_1"
+            ],
+            "evidenceItemIds": [
+              "calc_generator_load_1:payload:profile:missingStartingLoads:0"
+            ]
+          },
+          {
+            "value": "pump:циркуляционный_насос",
+            "factKey": "pump_starting_load_unknown",
+            "attribute": "missingStartingLoads",
+            "claimKind": "absence_or_unknown",
+            "productName": null,
+            "sourceEventIds": [
+              "calc_generator_load_1"
+            ],
+            "evidenceItemIds": [
+              "calc_generator_load_1:payload:profile:missingStartingLoads:1"
+            ]
+          },
+          {
+            "value": "workshop_tool:инструмент",
+            "factKey": "tool_starting_load_unknown",
+            "attribute": "missingStartingLoads",
+            "claimKind": "absence_or_unknown",
+            "productName": null,
+            "sourceEventIds": [
+              "calc_generator_load_1"
+            ],
+            "evidenceItemIds": [
+              "calc_generator_load_1:payload:profile:missingStartingLoads:2"
+            ]
+          }
+        ],
+        "riskFlags": [
+          "generator_startup_loads_unconfirmed",
+          "catalog_candidates_not_confirmed"
+        ],
+        "answerText": "Рабочая нагрузка у вас — 2,9 кВт: холодильник 0,3 кВт, насос 1,1 кВт и инструмент 1,5 кВт работают одновременно. Поэтому 3 кВт — только ориентир по уже работающей нагрузке, а не гарантированно достаточная мощность для запуска.\n\nКонкретные 2–3 модели сейчас не подтверждены, поэтому не буду выдавать случайные генераторы за подходящие. Для бензинового однофазного варианта нужно проверить не только номинал, но и способность пережить пуск холодильника, насоса и инструмента; особенно важен пуск насоса.\n\nСледующий вопрос: какое точное значение тока или пусковой мощности насоса указано на его шильдике?",
+        "leadAction": "none",
+        "toolResultIds": [
+          "calc_generator_load_1",
+          "search_generators_1"
+        ],
+        "questionsAsked": [
+          {
+            "text": "Какое точное значение тока или пусковой мощности насоса указано на его шильдике?",
+            "reason": "Это самый значимый недостающий параметр для проверки запуска генератора; пуск холодильника и инструмента также пока не указан.",
+            "questionId": "pump_starting_power"
+          }
+        ],
+        "selectedProductIds": [],
+        "selectionRationale": null,
+        "selectionReadiness": {
+          "status": "needs_more_info",
+          "rationale": "Рабочая нагрузка рассчитана, но 3 кВт описывает только работающие нагрузки и не подтверждает достаточность для запуска. Подтверждённых карточек товаров в текущем результате нет.",
+          "missingFacts": [
+            "2–3 подтверждённые каталожные модели бензиновых однофазных генераторов",
+            "Номинальная и максимальная мощность выбранных моделей",
+            "Пусковая способность генераторов и совместимость с насосом",
+            "Пусковые нагрузки холодильника, насоса и инструмента"
+          ],
+          "productClass": "generator",
+          "canShowProductCards": false
+        }
+      },
+      "review": null,
+      "status": "draft",
+      "created_at": "2026-09-15T15:30:21.868Z"
+    },
+    {
+      "answer_text": "Рабочая нагрузка у вас — 2,9 кВт: холодильник 0,3 кВт, насос 1,1 кВт и инструмент 1,5 кВт работают одновременно. Поэтому 3 кВт — только ориентир по уже работающей нагрузке, а не гарантированно достаточная мощность для запуска.\n\nКонкретные 2–3 модели сейчас не подтверждены, поэтому не буду выдавать случайные генераторы за подходящие. Для бензинового однофазного варианта нужно проверить не только номинал, но и способность пережить пуск холодильника, насоса и инструмента; особенно важен пуск насоса.\n\nСледующий вопрос: какое точное значение тока или пусковой мощности насоса указано на его шильдике?",
+      "contract": {
+        "factsUsed": [
+          {
+            "value": "бензин",
+            "factKey": "fuel_type",
+            "attribute": "fuel_type",
+            "claimKind": "confirmed_value",
+            "productName": null,
+            "sourceEventIds": [
+              "fact.confirmed:59446d4c80758a5e97e1d6d9493fe98f"
+            ],
+            "evidenceItemIds": []
+          },
+          {
+            "value": "single_phase",
+            "factKey": "phase",
+            "attribute": "phase",
+            "claimKind": "confirmed_value",
+            "productName": null,
+            "sourceEventIds": [
+              "fact.confirmed:8cff1a5c6c2551fff4c5bc055407e1b6"
+            ],
+            "evidenceItemIds": []
+          },
+          {
+            "value": 2.9,
+            "factKey": "total_running_load",
+            "attribute": "totalRunningKw",
+            "claimKind": "confirmed_value",
+            "productName": null,
+            "sourceEventIds": [
+              "calc_generator_load_1"
+            ],
+            "evidenceItemIds": [
+              "calc_generator_load_1:payload:profile:totalRunningKw"
+            ]
+          },
+          {
+            "value": 3,
+            "factKey": "running_only_nominal_floor",
+            "attribute": "runningOnlyNominalFloorKw",
+            "claimKind": "confirmed_value",
+            "productName": null,
+            "sourceEventIds": [
+              "calc_generator_load_1"
+            ],
+            "evidenceItemIds": [
+              "calc_generator_load_1:payload:profile:runningOnlyNominalFloorKw"
+            ]
+          },
+          {
+            "value": "refrigerator:холодильник",
+            "factKey": "refrigerator_starting_load_unknown",
+            "attribute": "missingStartingLoads",
+            "claimKind": "absence_or_unknown",
+            "productName": null,
+            "sourceEventIds": [
+              "calc_generator_load_1"
+            ],
+            "evidenceItemIds": [
+              "calc_generator_load_1:payload:profile:missingStartingLoads:0"
+            ]
+          },
+          {
+            "value": "pump:циркуляционный_насос",
+            "factKey": "pump_starting_load_unknown",
+            "attribute": "missingStartingLoads",
+            "claimKind": "absence_or_unknown",
+            "productName": null,
+            "sourceEventIds": [
+              "calc_generator_load_1"
+            ],
+            "evidenceItemIds": [
+              "calc_generator_load_1:payload:profile:missingStartingLoads:1"
+            ]
+          },
+          {
+            "value": "workshop_tool:инструмент",
+            "factKey": "tool_starting_load_unknown",
+            "attribute": "missingStartingLoads",
+            "claimKind": "absence_or_unknown",
+            "productName": null,
+            "sourceEventIds": [
+              "calc_generator_load_1"
+            ],
+            "evidenceItemIds": [
+              "calc_generator_load_1:payload:profile:missingStartingLoads:2"
+            ]
+          }
+        ],
+        "riskFlags": [
+          "generator_startup_loads_unconfirmed",
+          "catalog_candidates_not_confirmed",
+          "selection_readiness_blocked_cards"
+        ],
+        "answerText": "Рабочая нагрузка у вас — 2,9 кВт: холодильник 0,3 кВт, насос 1,1 кВт и инструмент 1,5 кВт работают одновременно. Поэтому 3 кВт — только ориентир по уже работающей нагрузке, а не гарантированно достаточная мощность для запуска.\n\nКонкретные 2–3 модели сейчас не подтверждены, поэтому не буду выдавать случайные генераторы за подходящие. Для бензинового однофазного варианта нужно проверить не только номинал, но и способность пережить пуск холодильника, насоса и инструмента; особенно важен пуск насоса.\n\nСледующий вопрос: какое точное значение тока или пусковой мощности насоса указано на его шильдике?",
+        "leadAction": "none",
+        "toolResultIds": [
+          "calc_generator_load_1",
+          "search_generators_1"
+        ],
+        "questionsAsked": [
+          {
+            "text": "Какое точное значение тока или пусковой мощности насоса указано на его шильдике?",
+            "reason": "Это самый значимый недостающий параметр для проверки запуска генератора; пуск холодильника и инструмента также пока не указан.",
+            "questionId": "pump_starting_power"
+          }
+        ],
+        "selectedProductIds": [],
+        "selectionRationale": null,
+        "selectionReadiness": {
+          "status": "needs_more_info",
+          "rationale": "Рабочая нагрузка рассчитана, но 3 кВт описывает только работающие нагрузки и не подтверждает достаточность для запуска. Подтверждённых карточек товаров в текущем результате нет.",
+          "missingFacts": [
+            "2–3 подтверждённые каталожные модели бензиновых однофазных генераторов",
+            "Номинальная и максимальная мощность выбранных моделей",
+            "Пусковая способность генераторов и совместимость с насосом",
+            "Пусковые нагрузки холодильника, насоса и инструмента"
+          ],
+          "productClass": "generator",
+          "canShowProductCards": false
+        }
+      },
+      "review": {
+        "issues": [],
+        "verdict": "pass"
+      },
+      "status": "final",
+      "created_at": "2026-09-15T15:30:27.179Z"
+    }
+  ],
+  "tools": [
+    {
+      "tool_name": "calculator.generatorLoad",
+      "tool_request_id": "calc_generator_load_1",
+      "status": "ok",
+      "payload": {
+        "loads": [
+          {
+            "kind": "refrigerator",
+            "name": "холодильник",
+            "count": 1,
+            "source": "explicit_user",
+            "evidence": "холодильник 300 Вт",
+            "basisKind": "exact_power",
+            "runningKw": 0.3,
+            "basisSignals": [
+              "consumer_type_known",
+              "explicit_power",
+              "simultaneous_operation_known"
+            ],
+            "operationMode": "continuous",
+            "runningSource": "explicit_user",
+            "coRunningGroup": "all",
+            "startingSource": "not_provided",
+            "runningObservedKw": 0.3
+          },
+          {
+            "kind": "pump",
+            "name": "циркуляционный насос",
+            "count": 1,
+            "source": "explicit_user",
+            "evidence": "циркуляционный насос 1,1 кВт",
+            "basisKind": "exact_power",
+            "runningKw": 1.1,
+            "basisSignals": [
+              "consumer_type_known",
+              "consumer_function_known",
+              "voltage_or_phase_known",
+              "explicit_power"
+            ],
+            "operationMode": "continuous",
+            "runningSource": "explicit_user",
+            "coRunningGroup": "all",
+            "startingSource": "not_provided",
+            "runningObservedKw": 1.1
+          },
+          {
+            "kind": "workshop_tool",
+            "name": "инструмент",
+            "count": 1,
+            "source": "explicit_user",
+            "evidence": "инструмент около 1,5 кВт",
+            "basisKind": "exact_power",
+            "runningKw": 1.5,
+            "basisSignals": [
+              "consumer_type_known",
+              "explicit_power"
+            ],
+            "operationMode": "occasional",
+            "runningSource": "explicit_user",
+            "coRunningGroup": "tool_after_pump",
+            "startingSource": "not_provided",
+            "runningObservedKw": 1.5
+          }
+        ],
+        "profile": {
+          "items": [
+            {
+              "kind": "refrigerator",
+              "name": "холодильник",
+              "count": 1,
+              "source": "explicit_user",
+              "evidence": "холодильник 300 Вт",
+              "basisKind": "exact_power",
+              "runningKw": 0.3,
+              "basisSignals": [
+                "consumer_type_known",
+                "explicit_power",
+                "simultaneous_operation_known"
+              ],
+              "operationMode": "continuous",
+              "runningSource": "explicit_user",
+              "coRunningGroup": "all",
+              "startingSource": "not_provided",
+              "runningObservedKw": 0.3
+            },
+            {
+              "kind": "pump",
+              "name": "циркуляционный насос",
+              "count": 1,
+              "source": "explicit_user",
+              "evidence": "циркуляционный насос 1,1 кВт",
+              "basisKind": "exact_power",
+              "runningKw": 1.1,
+              "basisSignals": [
+                "consumer_type_known",
+                "consumer_function_known",
+                "voltage_or_phase_known",
+                "explicit_power"
+              ],
+              "operationMode": "continuous",
+              "runningSource": "explicit_user",
+              "coRunningGroup": "all",
+              "startingSource": "not_provided",
+              "runningObservedKw": 1.1
+            },
+            {
+              "kind": "workshop_tool",
+              "name": "инструмент",
+              "count": 1,
+              "source": "explicit_user",
+              "evidence": "инструмент около 1,5 кВт",
+              "basisKind": "exact_power",
+              "runningKw": 1.5,
+              "basisSignals": [
+                "consumer_type_known",
+                "explicit_power"
+              ],
+              "operationMode": "occasional",
+              "runningSource": "explicit_user",
+              "coRunningGroup": "tool_after_pump",
+              "startingSource": "not_provided",
+              "runningObservedKw": 1.5
+            }
+          ],
+          "scenarios": [
+            {
+              "id": "base",
+              "label": "base continuous load",
+              "itemKinds": [
+                "refrigerator:холодильник",
+                "pump:циркуляционный_насос",
+                "workshop_tool:инструмент"
+              ],
+              "calculation": "холодильник: 1 x 0.3 kW run / ? kW start; циркуляционный насос: 1 x 1.1 kW run / ? kW start; инструмент: 1 x 1.5 kW run / ? kW start",
+              "totalRunningKw": 2.9,
+              "missingStartingLoads": [
+                "refrigerator:холодильник",
+                "pump:циркуляционный_насос",
+                "workshop_tool:инструмент"
+              ],
+              "runningOnlyNominalFloorKw": 3
+            }
+          ],
+          "calculation": "холодильник: 1 x 0.3 kW run / ? kW start; циркуляционный насос: 1 x 1.1 kW run / ? kW start; инструмент: 1 x 1.5 kW run / ? kW start",
+          "totalRunningKw": 2.9,
+          "primaryScenarioId": "base",
+          "simultaneousRunning": true,
+          "missingStartingLoads": [
+            "refrigerator:холодильник",
+            "pump:циркуляционный_насос",
+            "workshop_tool:инструмент"
+          ],
+          "simultaneousStarting": false,
+          "runningOnlyNominalFloorKw": 3,
+          "simultaneousStartingKinds": []
+        },
+        "estimateBasis": "exact_or_user_provided"
+      },
+      "warnings": [
+        "generator_load_startup_unconfirmed",
+        "attempts:1",
+        "duration_ms:6"
+      ],
+      "error_code": null,
+      "created_at": "2026-09-15T15:29:54.964Z"
+    },
+    {
+      "tool_name": "catalog.search",
+      "tool_request_id": "search_generators_1",
+      "status": "timeout",
+      "payload": {
+        "error": {
+          "code": "23",
+          "name": "TimeoutError",
+          "message": "The operation was aborted due to timeout"
+        }
+      },
+      "warnings": [
+        "tool_execution_error",
+        "attempts:1",
+        "duration_ms:10003"
+      ],
+      "error_code": "23",
+      "created_at": "2026-09-15T15:30:04.979Z"
+    }
+  ],
+  "checkpoints": [
+    {
+      "checkpoint": "semantic_decision_proposed",
+      "status": "succeeded",
+      "payload": {
+        "intent": {
+          "grounding": {
+            "taskType": "product_selection",
+            "rationale": "Каталог нужен для предварительного подбора; неизвестный пуск насоса не позволяет окончательно подтвердить запуск.",
+            "webPurpose": "technical_specs",
+            "responseMode": "recommend",
+            "sourcePolicy": "catalog_required",
+            "buyerQuestion": "Подберите 2–3 варианта из каталога",
+            "webRequirement": "none",
+            "buyerRequestedWeb": false,
+            "requiredToolKinds": [
+              "calculator.generatorLoad",
+              "catalog.search"
+            ],
+            "catalogRequirement": "required",
+            "technicalAttributes": [
+              "nominal_power_kw",
+              "phase",
+              "fuel_type"
+            ]
+          },
+          "riskFlags": [],
+          "toolRequests": [
+            {
+              "id": "calc_generator_load_1",
+              "args": {
+                "loads": [
+                  {
+                    "kind": "refrigerator",
+                    "name": "холодильник",
+                    "count": 1,
+                    "source": "explicit_user",
+                    "evidence": "холодильник 300 Вт",
+                    "basisKind": "exact_power",
+                    "runningKw": 0.3,
+                    "basisSignals": [
+                      "consumer_type_known",
+                      "explicit_power",
+                      "simultaneous_operation_known"
+                    ],
+                    "operationMode": "continuous",
+                    "runningSource": "explicit_user",
+                    "coRunningGroup": "all",
+                    "startingSource": "not_provided"
+                  },
+                  {
+                    "kind": "circulation_pump",
+                    "name": "циркуляционный насос",
+                    "count": 1,
+                    "source": "explicit_user",
+                    "evidence": "циркуляционный насос 1,1 кВт",
+                    "basisKind": "exact_power",
+                    "runningKw": 1.1,
+                    "basisSignals": [
+                      "consumer_type_known",
+                      "consumer_function_known",
+                      "voltage_or_phase_known",
+                      "explicit_power"
+                    ],
+                    "operationMode": "continuous",
+                    "runningSource": "explicit_user",
+                    "coRunningGroup": "all",
+                    "startingSource": "not_provided"
+                  },
+                  {
+                    "kind": "workshop_tool",
+                    "name": "инструмент",
+                    "count": 1,
+                    "source": "explicit_user",
+                    "evidence": "инструмент около 1,5 кВт",
+                    "basisKind": "exact_power",
+                    "runningKw": 1.5,
+                    "basisSignals": [
+                      "consumer_type_known",
+                      "explicit_power"
+                    ],
+                    "operationMode": "occasional",
+                    "runningSource": "explicit_user",
+                    "coRunningGroup": "tool_after_pump",
+                    "startingSource": "not_provided"
+                  }
+                ],
+                "phase": "single_phase",
+                "query": "Расчёт нагрузки мастерской",
+                "powerSource": "fuel",
+                "estimateBasis": "exact_or_user_provided",
+                "productIntent": "предварительный подбор генератора для мастерской",
+                "semanticQuery": "холодильник 0.3 кВт, циркуляционный насос 1.1 кВт, инструмент 1.5 кВт",
+                "simultaneousRunning": true,
+                "simultaneousStarting": false,
+                "canonicalProductIntent": "generator",
+                "simultaneousStartingKinds": []
+              },
+              "tool": "calculator.generatorLoad",
+              "required": true,
+              "rationale": "Рассчитать минимальный номинал и отдельно учесть неизвестный пуск насоса.",
+              "coversRequirementIds": [
+                "generator_load_scenario"
+              ]
+            },
+            {
+              "id": "search_generators_1",
+              "args": {
+                "limit": 3,
+                "phase": "single_phase",
+                "query": "бензиновые однофазные генераторы для мастерской около 3 кВт",
+                "identifiers": [],
+                "powerSource": "fuel",
+                "productIntent": "подбор генератора для мастерской",
+                "semanticQuery": "бензиновый однофазный генератор 220 В для нагрузки около 2.9 кВт",
+                "comparisonAttributes": [
+                  "nominal_power_kw",
+                  "price_rub",
+                  "weight_kg"
+                ],
+                "canonicalProductIntent": "generator"
+              },
+              "tool": "catalog.search",
+              "required": true,
+              "rationale": "Найти 2–3 каталожных кандидата.",
+              "coversRequirementIds": [
+                "fuel_type",
+                "phase",
+                "generator_load_scenario"
+              ]
+            }
+          ],
+          "policyRuleIds": [
+            "core.help_first"
+          ],
+          "requiresTools": true,
+          "productMentions": [],
+          "selectionPolicy": {
+            "phase": "single_phase",
+            "maxCards": 3,
+            "rationale": "Показать предварительные варианты с минимальным достаточным номиналом; пуск насоса требует последующей проверки.",
+            "needAction": "open",
+            "powerSource": "fuel",
+            "requirements": [
+              {
+                "id": "fuel_type",
+                "kind": "fuel_type",
+                "role": "hard_constraint",
+                "unit": null,
+                "value": "бензин",
+                "evidence": "бензиновый генератор",
+                "relation": "must_have",
+                "strictness": "strict",
+                "verification": {
+                  "mode": "product_attribute"
+                }
+              },
+              {
+                "id": "phase",
+                "kind": "phase",
+                "role": "hard_constraint",
+                "unit": null,
+                "value": "single_phase",
+                "evidence": "Всё однофазное 220 В",
+                "relation": "must_have",
+                "strictness": "strict",
+                "verification": {
+                  "mode": "product_attribute"
+                }
+              },
+              {
+                "id": "generator_load_scenario",
+                "kind": "generator_load_scenario",
+                "role": "hard_constraint",
+                "unit": null,
+                "value": true,
+                "evidence": "одновременно холодильник 300 Вт, циркуляционный насос 1,1 кВт и инструмент около 1,5 кВт",
+                "relation": "must_have",
+                "strictness": "strict",
+                "verification": {
+                  "mode": "typed_tool",
+                  "tool": "calculator.generatorLoad",
+                  "bindAs": "nominal_power_min_kw",
+                  "verifier": "generator_load_profile",
+                  "toolRequestId": "calc_generator_load_1"
+                }
+              },
+              {
+                "id": "nominal_power_min_preliminary",
+                "kind": "nominal_power_min_preliminary",
+                "role": "preference",
+                "unit": null,
+                "value": true,
+                "evidence": "Подберите 2–3 варианта из каталога",
+                "relation": "preferred",
+                "strictness": "preferred",
+                "verification": {
+                  "mode": "product_attribute"
+                }
+              }
+            ],
+            "selectionGoal": "preliminary_fit",
+            "alternativePolicy": "same_class_only",
+            "rankingObjectives": [
+              {
+                "attribute": "nominal_power_kw",
+                "direction": "minimize",
+                "requirementId": "nominal_power_min_preliminary"
+              }
+            ],
+            "reusePreviousCards": false,
+            "targetProductClass": "бензиновый генератор",
+            "canonicalProductClass": "generator"
+          },
+          "nextStepRationale": "Рассчитать профиль и найти каталожные варианты.",
+          "userMessageSummary": "Предварительно подобрать 2–3 бензиновых однофазных генератора по профилю мастерской.",
+          "dialogueUnderstanding": "Рабочая нагрузка задана; пуск насоса неизвестен, поэтому итоговая пригодность предварительная.",
+          "mustNotAskQuestionIds": [],
+          "leadCaptureAuthorization": {
+            "purpose": null,
+            "evidence": null,
+            "authorized": false,
+            "handoffKind": "none",
+            "buyerQuestion": null,
+            "contactSource": "none",
+            "pendingDraftId": null,
+            "handoffOfferMessageId": null
+          },
+          "buyerRequestedTechnicalHandoff": null
+        },
+        "ledgerDelta": {
+          "events": [
+            {
+              "scope": "need",
+              "source": "llm_state_delta",
+              "status": "active",
+              "payload": {
+                "role": "hard_requirement",
+                "text": null,
+                "unit": null,
+                "notes": null,
+                "value": null,
+                "answer": null,
+                "needId": "need_generator_workshop_1",
+                "status": "open",
+                "factKey": null,
+                "ranking": null,
+                "summary": "Предварительный подбор бензинового однофазного генератора для мастерской",
+                "activate": true,
+                "relation": null,
+                "productId": null,
+                "valueText": null,
+                "confidence": 1,
+                "productIds": [],
+                "questionId": null,
+                "answerKnown": null,
+                "constraints": [
+                  "fuel_type: бензин",
+                  "phase: single_phase",
+                  "generator_load_scenario: {\"loads\":[{\"kind\":\"refrigerator\",\"name\":\"холодильник\",\"count\":1,\"runningKw\":0.3,\"startingKw\":null,\"runningApparentPower\":null,\"startingApparentPower\":null,\"source\":\"explicit_user\",\"runningSource\":\"explicit_user\",\"startingSource\":\"not_provided\",\"operationMode\":\"continuous\",\"coRunningGroup\":\"all\",\"evidence\":\"холодильник 300 Вт\",\"basisKind\":\"exact_power\",\"basisSignals\":[\"consumer_type_known\",\"explicit_power\",\"simultaneous_operation_known\"]},{\"kind\":\"circulation_pump\",\"name\":\"циркуляционный насос\",\"count\":1,\"runningKw\":1.1,\"startingKw\":null,\"runningApparentPower\":null,\"startingApparentPower\":null,\"source\":\"explicit_user\",\"runningSource\":\"explicit_user\",\"startingSource\":\"not_provided\",\"operationMode\":\"continuous\",\"coRunningGroup\":\"all\",\"evidence\":\"циркуляционный насос 1,1 кВт\",\"basisKind\":\"exact_power\",\"basisSignals\":[\"consumer_type_known\",\"consumer_function_known\",\"voltage_or_phase_known\",\"explicit_power\"]},{\"kind\":\"workshop_tool\",\"name\":\"инструмент\",\"count\":1,\"runningKw\":1.5,\"startingKw\":null,\"runningApparentPower\":null,\"startingApparentPower\":null,\"source\":\"explicit_user\",\"runningSource\":\"explicit_user\",\"startingSource\":\"not_provided\",\"operationMode\":\"occasional\",\"coRunningGroup\":\"tool_after_pump\",\"evidence\":\"инструмент около 1,5 кВт\",\"basisKind\":\"exact_power\",\"basisSignals\":[\"consumer_type_known\",\"explicit_power\"]}],\"simultaneousRunning\":true,\"simultaneousStarting\":false}",
+                  "nominal_power_min_preliminary: true"
+                ],
+                "productClass": "generator",
+                "openQuestions": [
+                  "Точный пусковой ток или мощность насоса для окончательной проверки запуска"
+                ],
+                "toolRequestId": null,
+                "sourceResultId": null,
+                "targetEventIds": [],
+                "negatesEventIds": [],
+                "closesQuestionIds": [],
+                "targetQuestionIds": [],
+                "rejectedProductIds": [],
+                "selectedProductIds": [],
+                "supersedesEventIds": [],
+                "selectionUpdateMode": "replace",
+                "constraintsUpdateMode": "merge",
+                "invalidatedProductIds": [],
+                "constraintFactBindings": [
+                  {
+                    "factKey": "fuel_type",
+                    "constraint": "fuel_type: бензин"
+                  },
+                  {
+                    "factKey": "phase",
+                    "constraint": "phase: single_phase"
+                  },
+                  {
+                    "factKey": "generator_load_scenario",
+                    "constraint": "generator_load_scenario: {\"loads\":[{\"kind\":\"refrigerator\",\"name\":\"холодильник\",\"count\":1,\"runningKw\":0.3,\"startingKw\":null,\"runningApparentPower\":null,\"startingApparentPower\":null,\"source\":\"explicit_user\",\"runningSource\":\"explicit_user\",\"startingSource\":\"not_provided\",\"operationMode\":\"continuous\",\"coRunningGroup\":\"all\",\"evidence\":\"холодильник 300 Вт\",\"basisKind\":\"exact_power\",\"basisSignals\":[\"consumer_type_known\",\"explicit_power\",\"simultaneous_operation_known\"]},{\"kind\":\"circulation_pump\",\"name\":\"циркуляционный насос\",\"count\":1,\"runningKw\":1.1,\"startingKw\":null,\"runningApparentPower\":null,\"startingApparentPower\":null,\"source\":\"explicit_user\",\"runningSource\":\"explicit_user\",\"startingSource\":\"not_provided\",\"operationMode\":\"continuous\",\"coRunningGroup\":\"all\",\"evidence\":\"циркуляционный насос 1,1 кВт\",\"basisKind\":\"exact_power\",\"basisSignals\":[\"consumer_type_known\",\"consumer_function_known\",\"voltage_or_phase_known\",\"explicit_power\"]},{\"kind\":\"workshop_tool\",\"name\":\"инструмент\",\"count\":1,\"runningKw\":1.5,\"startingKw\":null,\"runningApparentPower\":null,\"startingApparentPower\":null,\"source\":\"explicit_user\",\"runningSource\":\"explicit_user\",\"startingSource\":\"not_provided\",\"operationMode\":\"occasional\",\"coRunningGroup\":\"tool_after_pump\",\"evidence\":\"инструмент около 1,5 кВт\",\"basisKind\":\"exact_power\",\"basisSignals\":[\"consumer_type_known\",\"explicit_power\"]}],\"simultaneousRunning\":true,\"simultaneousStarting\":false}"
+                  },
+                  {
+                    "factKey": "nominal_power_min_preliminary",
+                    "constraint": "nominal_power_min_preliminary: true"
+                  }
+                ],
+                "openQuestionsUpdateMode": "merge",
+                "rejectedProductIdsUpdateMode": "merge"
+              },
+              "evidence": "Нужен бензиновый генератор для мастерской.",
+              "eventType": "need.opened"
+            },
+            {
+              "scope": "need",
+              "source": "llm_state_delta",
+              "status": "active",
+              "payload": {
+                "role": "hard_requirement",
+                "text": null,
+                "unit": null,
+                "notes": null,
+                "value": "бензин",
+                "answer": null,
+                "needId": "need_generator_workshop_1",
+                "status": null,
+                "factKey": "fuel_type",
+                "ranking": null,
+                "summary": null,
+                "activate": null,
+                "relation": "must_have",
+                "productId": null,
+                "valueText": "бензиновый",
+                "confidence": 1,
+                "productIds": [],
+                "questionId": null,
+                "answerKnown": null,
+                "constraints": [],
+                "productClass": "generator",
+                "openQuestions": [],
+                "toolRequestId": null,
+                "sourceResultId": null,
+                "targetEventIds": [],
+                "negatesEventIds": [],
+                "closesQuestionIds": [],
+                "targetQuestionIds": [],
+                "rejectedProductIds": [],
+                "selectedProductIds": [],
+                "supersedesEventIds": [],
+                "selectionUpdateMode": null,
+                "constraintsUpdateMode": null,
+                "invalidatedProductIds": [],
+                "openQuestionsUpdateMode": null,
+                "rejectedProductIdsUpdateMode": null
+              },
+              "evidence": "бензиновый генератор",
+              "eventType": "fact.confirmed"
+            },
+            {
+              "scope": "need",
+              "source": "llm_state_delta",
+              "status": "active",
+              "payload": {
+                "role": "hard_requirement",
+                "text": null,
+                "unit": null,
+                "notes": null,
+                "value": "single_phase",
+                "answer": null,
+                "needId": "need_generator_workshop_1",
+                "status": null,
+                "factKey": "phase",
+                "ranking": null,
+                "summary": null,
+                "activate": null,
+                "relation": "must_have",
+                "productId": null,
+                "valueText": "однофазное 220 В",
+                "confidence": 1,
+                "productIds": [],
+                "questionId": null,
+                "answerKnown": null,
+                "constraints": [],
+                "productClass": "generator",
+                "openQuestions": [],
+                "toolRequestId": null,
+                "sourceResultId": null,
+                "targetEventIds": [],
+                "negatesEventIds": [],
+                "closesQuestionIds": [],
+                "targetQuestionIds": [],
+                "rejectedProductIds": [],
+                "selectedProductIds": [],
+                "supersedesEventIds": [],
+                "selectionUpdateMode": null,
+                "constraintsUpdateMode": null,
+                "invalidatedProductIds": [],
+                "openQuestionsUpdateMode": null,
+                "rejectedProductIdsUpdateMode": null
+              },
+              "evidence": "Всё однофазное 220 В",
+              "eventType": "fact.confirmed"
+            },
+            {
+              "scope": "need",
+              "source": "llm_state_delta",
+              "status": "active",
+              "payload": {
+                "role": "hard_requirement",
+                "text": null,
+                "unit": null,
+                "notes": null,
+                "value": {
+                  "loads": [
+                    {
+                      "kind": "refrigerator",
+                      "name": "холодильник",
+                      "count": 1,
+                      "source": "explicit_user",
+                      "evidence": "холодильник 300 Вт",
+                      "basisKind": "exact_power",
+                      "runningKw": 0.3,
+                      "startingKw": null,
+                      "basisSignals": [
+                        "consumer_type_known",
+                        "explicit_power",
+                        "simultaneous_operation_known"
+                      ],
+                      "operationMode": "continuous",
+                      "runningSource": "explicit_user",
+                      "coRunningGroup": "all",
+                      "startingSource": "not_provided",
+                      "runningApparentPower": null,
+                      "startingApparentPower": null
+                    },
+                    {
+                      "kind": "circulation_pump",
+                      "name": "циркуляционный насос",
+                      "count": 1,
+                      "source": "explicit_user",
+                      "evidence": "циркуляционный насос 1,1 кВт",
+                      "basisKind": "exact_power",
+                      "runningKw": 1.1,
+                      "startingKw": null,
+                      "basisSignals": [
+                        "consumer_type_known",
+                        "consumer_function_known",
+                        "voltage_or_phase_known",
+                        "explicit_power"
+                      ],
+                      "operationMode": "continuous",
+                      "runningSource": "explicit_user",
+                      "coRunningGroup": "all",
+                      "startingSource": "not_provided",
+                      "runningApparentPower": null,
+                      "startingApparentPower": null
+                    },
+                    {
+                      "kind": "workshop_tool",
+                      "name": "инструмент",
+                      "count": 1,
+                      "source": "explicit_user",
+                      "evidence": "инструмент около 1,5 кВт",
+                      "basisKind": "exact_power",
+                      "runningKw": 1.5,
+                      "startingKw": null,
+                      "basisSignals": [
+                        "consumer_type_known",
+                        "explicit_power"
+                      ],
+                      "operationMode": "occasional",
+                      "runningSource": "explicit_user",
+                      "coRunningGroup": "tool_after_pump",
+                      "startingSource": "not_provided",
+                      "runningApparentPower": null,
+                      "startingApparentPower": null
+                    }
+                  ],
+                  "simultaneousRunning": true,
+                  "simultaneousStarting": false
+                },
+                "answer": null,
+                "needId": "need_generator_workshop_1",
+                "status": "open",
+                "factKey": "generator_load_scenario",
+                "ranking": null,
+                "summary": null,
+                "activate": null,
+                "relation": "must_have",
+                "productId": null,
+                "valueText": null,
+                "confidence": 0.95,
+                "productIds": [],
+                "questionId": null,
+                "answerKnown": null,
+                "constraints": [],
+                "productClass": "generator",
+                "openQuestions": [],
+                "toolRequestId": null,
+                "sourceResultId": null,
+                "targetEventIds": [],
+                "negatesEventIds": [],
+                "closesQuestionIds": [],
+                "targetQuestionIds": [],
+                "rejectedProductIds": [],
+                "selectedProductIds": [],
+                "supersedesEventIds": [],
+                "selectionUpdateMode": null,
+                "constraintsUpdateMode": null,
+                "invalidatedProductIds": [],
+                "openQuestionsUpdateMode": null,
+                "rejectedProductIdsUpdateMode": null
+              },
+              "evidence": "одновременно холодильник 300 Вт, циркуляционный насос 1,1 кВт и инструмент около 1,5 кВт; инструмент включаю после запуска насоса",
+              "eventType": "fact.confirmed"
+            },
+            {
+              "scope": "need",
+              "source": "llm_state_delta",
+              "status": "active",
+              "payload": {
+                "role": "preference",
+                "text": null,
+                "unit": null,
+                "notes": null,
+                "value": true,
+                "answer": null,
+                "needId": "need_generator_workshop_1",
+                "status": null,
+                "factKey": "nominal_power_min_preliminary",
+                "ranking": {
+                  "attribute": "nominal_power_kw",
+                  "direction": "minimize"
+                },
+                "summary": null,
+                "activate": null,
+                "relation": "preferred",
+                "productId": null,
+                "valueText": "минимально достаточный номинал по расчёту",
+                "confidence": 0.9,
+                "productIds": [],
+                "questionId": null,
+                "answerKnown": null,
+                "constraints": [],
+                "productClass": "generator",
+                "openQuestions": [],
+                "toolRequestId": null,
+                "sourceResultId": null,
+                "targetEventIds": [],
+                "negatesEventIds": [],
+                "closesQuestionIds": [],
+                "targetQuestionIds": [],
+                "rejectedProductIds": [],
+                "selectedProductIds": [],
+                "supersedesEventIds": [],
+                "selectionUpdateMode": null,
+                "constraintsUpdateMode": null,
+                "invalidatedProductIds": [],
+                "openQuestionsUpdateMode": null,
+                "rejectedProductIdsUpdateMode": null
+              },
+              "evidence": "Подберите 2–3 варианта из каталога",
+              "eventType": "fact.confirmed"
+            }
+          ],
+          "rationale": "Открыть предварительный подбор по заданному профилю нагрузки; неизвестный пуск насоса сохраняет ограничение окончательной пригодности."
+        }
+      },
+      "error_code": null,
+      "error_message": null,
+      "created_at": "2026-09-15T15:29:54.827Z",
+      "updated_at": "2026-09-15T15:29:54.827Z"
+    },
+    {
+      "checkpoint": "ledger_delta_proposed",
+      "status": "succeeded",
+      "payload": {
+        "events": [
+          {
+            "scope": "need",
+            "source": "llm_state_delta",
+            "status": "active",
+            "payload": {
+              "role": "hard_requirement",
+              "text": null,
+              "unit": null,
+              "notes": null,
+              "value": null,
+              "answer": null,
+              "needId": "need_generator_workshop_1",
+              "status": "open",
+              "factKey": null,
+              "ranking": null,
+              "summary": "Предварительный подбор бензинового однофазного генератора для мастерской",
+              "activate": true,
+              "relation": null,
+              "productId": null,
+              "valueText": null,
+              "confidence": 1,
+              "productIds": [],
+              "questionId": null,
+              "answerKnown": null,
+              "constraints": [
+                "fuel_type: бензин",
+                "phase: single_phase",
+                "generator_load_scenario: {\"loads\":[{\"kind\":\"refrigerator\",\"name\":\"холодильник\",\"count\":1,\"runningKw\":0.3,\"startingKw\":null,\"runningApparentPower\":null,\"startingApparentPower\":null,\"source\":\"explicit_user\",\"runningSource\":\"explicit_user\",\"startingSource\":\"not_provided\",\"operationMode\":\"continuous\",\"coRunningGroup\":\"all\",\"evidence\":\"холодильник 300 Вт\",\"basisKind\":\"exact_power\",\"basisSignals\":[\"consumer_type_known\",\"explicit_power\",\"simultaneous_operation_known\"]},{\"kind\":\"circulation_pump\",\"name\":\"циркуляционный насос\",\"count\":1,\"runningKw\":1.1,\"startingKw\":null,\"runningApparentPower\":null,\"startingApparentPower\":null,\"source\":\"explicit_user\",\"runningSource\":\"explicit_user\",\"startingSource\":\"not_provided\",\"operationMode\":\"continuous\",\"coRunningGroup\":\"all\",\"evidence\":\"циркуляционный насос 1,1 кВт\",\"basisKind\":\"exact_power\",\"basisSignals\":[\"consumer_type_known\",\"consumer_function_known\",\"voltage_or_phase_known\",\"explicit_power\"]},{\"kind\":\"workshop_tool\",\"name\":\"инструмент\",\"count\":1,\"runningKw\":1.5,\"startingKw\":null,\"runningApparentPower\":null,\"startingApparentPower\":null,\"source\":\"explicit_user\",\"runningSource\":\"explicit_user\",\"startingSource\":\"not_provided\",\"operationMode\":\"occasional\",\"coRunningGroup\":\"tool_after_pump\",\"evidence\":\"инструмент около 1,5 кВт\",\"basisKind\":\"exact_power\",\"basisSignals\":[\"consumer_type_known\",\"explicit_power\"]}],\"simultaneousRunning\":true,\"simultaneousStarting\":false}",
+                "nominal_power_min_preliminary: true"
+              ],
+              "productClass": "generator",
+              "openQuestions": [
+                "Точный пусковой ток или мощность насоса для окончательной проверки запуска"
+              ],
+              "toolRequestId": null,
+              "sourceResultId": null,
+              "targetEventIds": [],
+              "negatesEventIds": [],
+              "closesQuestionIds": [],
+              "targetQuestionIds": [],
+              "rejectedProductIds": [],
+              "selectedProductIds": [],
+              "supersedesEventIds": [],
+              "selectionUpdateMode": "replace",
+              "constraintsUpdateMode": "merge",
+              "invalidatedProductIds": [],
+              "constraintFactBindings": [
+                {
+                  "factKey": "fuel_type",
+                  "constraint": "fuel_type: бензин"
+                },
+                {
+                  "factKey": "phase",
+                  "constraint": "phase: single_phase"
+                },
+                {
+                  "factKey": "generator_load_scenario",
+                  "constraint": "generator_load_scenario: {\"loads\":[{\"kind\":\"refrigerator\",\"name\":\"холодильник\",\"count\":1,\"runningKw\":0.3,\"startingKw\":null,\"runningApparentPower\":null,\"startingApparentPower\":null,\"source\":\"explicit_user\",\"runningSource\":\"explicit_user\",\"startingSource\":\"not_provided\",\"operationMode\":\"continuous\",\"coRunningGroup\":\"all\",\"evidence\":\"холодильник 300 Вт\",\"basisKind\":\"exact_power\",\"basisSignals\":[\"consumer_type_known\",\"explicit_power\",\"simultaneous_operation_known\"]},{\"kind\":\"circulation_pump\",\"name\":\"циркуляционный насос\",\"count\":1,\"runningKw\":1.1,\"startingKw\":null,\"runningApparentPower\":null,\"startingApparentPower\":null,\"source\":\"explicit_user\",\"runningSource\":\"explicit_user\",\"startingSource\":\"not_provided\",\"operationMode\":\"continuous\",\"coRunningGroup\":\"all\",\"evidence\":\"циркуляционный насос 1,1 кВт\",\"basisKind\":\"exact_power\",\"basisSignals\":[\"consumer_type_known\",\"consumer_function_known\",\"voltage_or_phase_known\",\"explicit_power\"]},{\"kind\":\"workshop_tool\",\"name\":\"инструмент\",\"count\":1,\"runningKw\":1.5,\"startingKw\":null,\"runningApparentPower\":null,\"startingApparentPower\":null,\"source\":\"explicit_user\",\"runningSource\":\"explicit_user\",\"startingSource\":\"not_provided\",\"operationMode\":\"occasional\",\"coRunningGroup\":\"tool_after_pump\",\"evidence\":\"инструмент около 1,5 кВт\",\"basisKind\":\"exact_power\",\"basisSignals\":[\"consumer_type_known\",\"explicit_power\"]}],\"simultaneousRunning\":true,\"simultaneousStarting\":false}"
+                },
+                {
+                  "factKey": "nominal_power_min_preliminary",
+                  "constraint": "nominal_power_min_preliminary: true"
+                }
+              ],
+              "openQuestionsUpdateMode": "merge",
+              "rejectedProductIdsUpdateMode": "merge"
+            },
+            "evidence": "Нужен бензиновый генератор для мастерской.",
+            "eventType": "need.opened"
+          },
+          {
+            "scope": "need",
+            "source": "llm_state_delta",
+            "status": "active",
+            "payload": {
+              "role": "hard_requirement",
+              "text": null,
+              "unit": null,
+              "notes": null,
+              "value": "бензин",
+              "answer": null,
+              "needId": "need_generator_workshop_1",
+              "status": null,
+              "factKey": "fuel_type",
+              "ranking": null,
+              "summary": null,
+              "activate": null,
+              "relation": "must_have",
+              "productId": null,
+              "valueText": "бензиновый",
+              "confidence": 1,
+              "productIds": [],
+              "questionId": null,
+              "answerKnown": null,
+              "constraints": [],
+              "productClass": "generator",
+              "openQuestions": [],
+              "toolRequestId": null,
+              "sourceResultId": null,
+              "targetEventIds": [],
+              "negatesEventIds": [],
+              "closesQuestionIds": [],
+              "targetQuestionIds": [],
+              "rejectedProductIds": [],
+              "selectedProductIds": [],
+              "supersedesEventIds": [],
+              "selectionUpdateMode": null,
+              "constraintsUpdateMode": null,
+              "invalidatedProductIds": [],
+              "openQuestionsUpdateMode": null,
+              "rejectedProductIdsUpdateMode": null
+            },
+            "evidence": "бензиновый генератор",
+            "eventType": "fact.confirmed"
+          },
+          {
+            "scope": "need",
+            "source": "llm_state_delta",
+            "status": "active",
+            "payload": {
+              "role": "hard_requirement",
+              "text": null,
+              "unit": null,
+              "notes": null,
+              "value": "single_phase",
+              "answer": null,
+              "needId": "need_generator_workshop_1",
+              "status": null,
+              "factKey": "phase",
+              "ranking": null,
+              "summary": null,
+              "activate": null,
+              "relation": "must_have",
+              "productId": null,
+              "valueText": "однофазное 220 В",
+              "confidence": 1,
+              "productIds": [],
+              "questionId": null,
+              "answerKnown": null,
+              "constraints": [],
+              "productClass": "generator",
+              "openQuestions": [],
+              "toolRequestId": null,
+              "sourceResultId": null,
+              "targetEventIds": [],
+              "negatesEventIds": [],
+              "closesQuestionIds": [],
+              "targetQuestionIds": [],
+              "rejectedProductIds": [],
+              "selectedProductIds": [],
+              "supersedesEventIds": [],
+              "selectionUpdateMode": null,
+              "constraintsUpdateMode": null,
+              "invalidatedProductIds": [],
+              "openQuestionsUpdateMode": null,
+              "rejectedProductIdsUpdateMode": null
+            },
+            "evidence": "Всё однофазное 220 В",
+            "eventType": "fact.confirmed"
+          },
+          {
+            "scope": "need",
+            "source": "llm_state_delta",
+            "status": "active",
+            "payload": {
+              "role": "hard_requirement",
+              "text": null,
+              "unit": null,
+              "notes": null,
+              "value": {
+                "loads": [
+                  {
+                    "kind": "refrigerator",
+                    "name": "холодильник",
+                    "count": 1,
+                    "source": "explicit_user",
+                    "evidence": "холодильник 300 Вт",
+                    "basisKind": "exact_power",
+                    "runningKw": 0.3,
+                    "startingKw": null,
+                    "basisSignals": [
+                      "consumer_type_known",
+                      "explicit_power",
+                      "simultaneous_operation_known"
+                    ],
+                    "operationMode": "continuous",
+                    "runningSource": "explicit_user",
+                    "coRunningGroup": "all",
+                    "startingSource": "not_provided",
+                    "runningApparentPower": null,
+                    "startingApparentPower": null
+                  },
+                  {
+                    "kind": "circulation_pump",
+                    "name": "циркуляционный насос",
+                    "count": 1,
+                    "source": "explicit_user",
+                    "evidence": "циркуляционный насос 1,1 кВт",
+                    "basisKind": "exact_power",
+                    "runningKw": 1.1,
+                    "startingKw": null,
+                    "basisSignals": [
+                      "consumer_type_known",
+                      "consumer_function_known",
+                      "voltage_or_phase_known",
+                      "explicit_power"
+                    ],
+                    "operationMode": "continuous",
+                    "runningSource": "explicit_user",
+                    "coRunningGroup": "all",
+                    "startingSource": "not_provided",
+                    "runningApparentPower": null,
+                    "startingApparentPower": null
+                  },
+                  {
+                    "kind": "workshop_tool",
+                    "name": "инструмент",
+                    "count": 1,
+                    "source": "explicit_user",
+                    "evidence": "инструмент около 1,5 кВт",
+                    "basisKind": "exact_power",
+                    "runningKw": 1.5,
+                    "startingKw": null,
+                    "basisSignals": [
+                      "consumer_type_known",
+                      "explicit_power"
+                    ],
+                    "operationMode": "occasional",
+                    "runningSource": "explicit_user",
+                    "coRunningGroup": "tool_after_pump",
+                    "startingSource": "not_provided",
+                    "runningApparentPower": null,
+                    "startingApparentPower": null
+                  }
+                ],
+                "simultaneousRunning": true,
+                "simultaneousStarting": false
+              },
+              "answer": null,
+              "needId": "need_generator_workshop_1",
+              "status": "open",
+              "factKey": "generator_load_scenario",
+              "ranking": null,
+              "summary": null,
+              "activate": null,
+              "relation": "must_have",
+              "productId": null,
+              "valueText": null,
+              "confidence": 0.95,
+              "productIds": [],
+              "questionId": null,
+              "answerKnown": null,
+              "constraints": [],
+              "productClass": "generator",
+              "openQuestions": [],
+              "toolRequestId": null,
+              "sourceResultId": null,
+              "targetEventIds": [],
+              "negatesEventIds": [],
+              "closesQuestionIds": [],
+              "targetQuestionIds": [],
+              "rejectedProductIds": [],
+              "selectedProductIds": [],
+              "supersedesEventIds": [],
+              "selectionUpdateMode": null,
+              "constraintsUpdateMode": null,
+              "invalidatedProductIds": [],
+              "openQuestionsUpdateMode": null,
+              "rejectedProductIdsUpdateMode": null
+            },
+            "evidence": "одновременно холодильник 300 Вт, циркуляционный насос 1,1 кВт и инструмент около 1,5 кВт; инструмент включаю после запуска насоса",
+            "eventType": "fact.confirmed"
+          },
+          {
+            "scope": "need",
+            "source": "llm_state_delta",
+            "status": "active",
+            "payload": {
+              "role": "preference",
+              "text": null,
+              "unit": null,
+              "notes": null,
+              "value": true,
+              "answer": null,
+              "needId": "need_generator_workshop_1",
+              "status": null,
+              "factKey": "nominal_power_min_preliminary",
+              "ranking": {
+                "attribute": "nominal_power_kw",
+                "direction": "minimize"
+              },
+              "summary": null,
+              "activate": null,
+              "relation": "preferred",
+              "productId": null,
+              "valueText": "минимально достаточный номинал по расчёту",
+              "confidence": 0.9,
+              "productIds": [],
+              "questionId": null,
+              "answerKnown": null,
+              "constraints": [],
+              "productClass": "generator",
+              "openQuestions": [],
+              "toolRequestId": null,
+              "sourceResultId": null,
+              "targetEventIds": [],
+              "negatesEventIds": [],
+              "closesQuestionIds": [],
+              "targetQuestionIds": [],
+              "rejectedProductIds": [],
+              "selectedProductIds": [],
+              "supersedesEventIds": [],
+              "selectionUpdateMode": null,
+              "constraintsUpdateMode": null,
+              "invalidatedProductIds": [],
+              "openQuestionsUpdateMode": null,
+              "rejectedProductIdsUpdateMode": null
+            },
+            "evidence": "Подберите 2–3 варианта из каталога",
+            "eventType": "fact.confirmed"
+          }
+        ],
+        "rationale": "Открыть предварительный подбор по заданному профилю нагрузки; неизвестный пуск насоса сохраняет ограничение окончательной пригодности."
+      },
+      "error_code": null,
+      "error_message": null,
+      "created_at": "2026-09-15T15:29:54.838Z",
+      "updated_at": "2026-09-15T15:29:54.838Z"
+    },
+    {
+      "checkpoint": "intent_contract_proposed",
+      "status": "succeeded",
+      "payload": {
+        "grounding": {
+          "taskType": "product_selection",
+          "rationale": "Каталог нужен для предварительного подбора; неизвестный пуск насоса не позволяет окончательно подтвердить запуск.",
+          "webPurpose": "technical_specs",
+          "responseMode": "recommend",
+          "sourcePolicy": "catalog_required",
+          "buyerQuestion": "Подберите 2–3 варианта из каталога",
+          "webRequirement": "none",
+          "buyerRequestedWeb": false,
+          "requiredToolKinds": [
+            "calculator.generatorLoad",
+            "catalog.search"
+          ],
+          "catalogRequirement": "required",
+          "technicalAttributes": [
+            "nominal_power_kw",
+            "phase",
+            "fuel_type"
+          ]
+        },
+        "riskFlags": [],
+        "toolRequests": [
+          {
+            "id": "calc_generator_load_1",
+            "args": {
+              "loads": [
+                {
+                  "kind": "refrigerator",
+                  "name": "холодильник",
+                  "count": 1,
+                  "source": "explicit_user",
+                  "evidence": "холодильник 300 Вт",
+                  "basisKind": "exact_power",
+                  "runningKw": 0.3,
+                  "basisSignals": [
+                    "consumer_type_known",
+                    "explicit_power",
+                    "simultaneous_operation_known"
+                  ],
+                  "operationMode": "continuous",
+                  "runningSource": "explicit_user",
+                  "coRunningGroup": "all",
+                  "startingSource": "not_provided"
+                },
+                {
+                  "kind": "circulation_pump",
+                  "name": "циркуляционный насос",
+                  "count": 1,
+                  "source": "explicit_user",
+                  "evidence": "циркуляционный насос 1,1 кВт",
+                  "basisKind": "exact_power",
+                  "runningKw": 1.1,
+                  "basisSignals": [
+                    "consumer_type_known",
+                    "consumer_function_known",
+                    "voltage_or_phase_known",
+                    "explicit_power"
+                  ],
+                  "operationMode": "continuous",
+                  "runningSource": "explicit_user",
+                  "coRunningGroup": "all",
+                  "startingSource": "not_provided"
+                },
+                {
+                  "kind": "workshop_tool",
+                  "name": "инструмент",
+                  "count": 1,
+                  "source": "explicit_user",
+                  "evidence": "инструмент около 1,5 кВт",
+                  "basisKind": "exact_power",
+                  "runningKw": 1.5,
+                  "basisSignals": [
+                    "consumer_type_known",
+                    "explicit_power"
+                  ],
+                  "operationMode": "occasional",
+                  "runningSource": "explicit_user",
+                  "coRunningGroup": "tool_after_pump",
+                  "startingSource": "not_provided"
+                }
+              ],
+              "phase": "single_phase",
+              "query": "Расчёт нагрузки мастерской",
+              "powerSource": "fuel",
+              "estimateBasis": "exact_or_user_provided",
+              "productIntent": "предварительный подбор генератора для мастерской",
+              "semanticQuery": "холодильник 0.3 кВт, циркуляционный насос 1.1 кВт, инструмент 1.5 кВт",
+              "simultaneousRunning": true,
+              "simultaneousStarting": false,
+              "canonicalProductIntent": "generator",
+              "simultaneousStartingKinds": []
+            },
+            "tool": "calculator.generatorLoad",
+            "required": true,
+            "rationale": "Рассчитать минимальный номинал и отдельно учесть неизвестный пуск насоса.",
+            "coversRequirementIds": [
+              "generator_load_scenario"
+            ]
+          },
+          {
+            "id": "search_generators_1",
+            "args": {
+              "limit": 3,
+              "phase": "single_phase",
+              "query": "бензиновые однофазные генераторы для мастерской около 3 кВт",
+              "identifiers": [],
+              "powerSource": "fuel",
+              "productIntent": "подбор генератора для мастерской",
+              "semanticQuery": "бензиновый однофазный генератор 220 В для нагрузки около 2.9 кВт",
+              "comparisonAttributes": [
+                "nominal_power_kw",
+                "price_rub",
+                "weight_kg"
+              ],
+              "canonicalProductIntent": "generator"
+            },
+            "tool": "catalog.search",
+            "required": true,
+            "rationale": "Найти 2–3 каталожных кандидата.",
+            "coversRequirementIds": [
+              "fuel_type",
+              "phase",
+              "generator_load_scenario"
+            ]
+          }
+        ],
+        "policyRuleIds": [
+          "core.help_first"
+        ],
+        "requiresTools": true,
+        "productMentions": [],
+        "selectionPolicy": {
+          "phase": "single_phase",
+          "maxCards": 3,
+          "rationale": "Показать предварительные варианты с минимальным достаточным номиналом; пуск насоса требует последующей проверки.",
+          "needAction": "open",
+          "powerSource": "fuel",
+          "requirements": [
+            {
+              "id": "fuel_type",
+              "kind": "fuel_type",
+              "role": "hard_constraint",
+              "unit": null,
+              "value": "бензин",
+              "evidence": "бензиновый генератор",
+              "relation": "must_have",
+              "strictness": "strict",
+              "verification": {
+                "mode": "product_attribute"
+              }
+            },
+            {
+              "id": "phase",
+              "kind": "phase",
+              "role": "hard_constraint",
+              "unit": null,
+              "value": "single_phase",
+              "evidence": "Всё однофазное 220 В",
+              "relation": "must_have",
+              "strictness": "strict",
+              "verification": {
+                "mode": "product_attribute"
+              }
+            },
+            {
+              "id": "generator_load_scenario",
+              "kind": "generator_load_scenario",
+              "role": "hard_constraint",
+              "unit": null,
+              "value": true,
+              "evidence": "одновременно холодильник 300 Вт, циркуляционный насос 1,1 кВт и инструмент около 1,5 кВт",
+              "relation": "must_have",
+              "strictness": "strict",
+              "verification": {
+                "mode": "typed_tool",
+                "tool": "calculator.generatorLoad",
+                "bindAs": "nominal_power_min_kw",
+                "verifier": "generator_load_profile",
+                "toolRequestId": "calc_generator_load_1"
+              }
+            },
+            {
+              "id": "nominal_power_min_preliminary",
+              "kind": "nominal_power_min_preliminary",
+              "role": "preference",
+              "unit": null,
+              "value": true,
+              "evidence": "Подберите 2–3 варианта из каталога",
+              "relation": "preferred",
+              "strictness": "preferred",
+              "verification": {
+                "mode": "product_attribute"
+              }
+            }
+          ],
+          "selectionGoal": "preliminary_fit",
+          "alternativePolicy": "same_class_only",
+          "rankingObjectives": [
+            {
+              "attribute": "nominal_power_kw",
+              "direction": "minimize",
+              "requirementId": "nominal_power_min_preliminary"
+            }
+          ],
+          "reusePreviousCards": false,
+          "targetProductClass": "бензиновый генератор",
+          "canonicalProductClass": "generator"
+        },
+        "nextStepRationale": "Рассчитать профиль и найти каталожные варианты.",
+        "userMessageSummary": "Предварительно подобрать 2–3 бензиновых однофазных генератора по профилю мастерской.",
+        "dialogueUnderstanding": "Рабочая нагрузка задана; пуск насоса неизвестен, поэтому итоговая пригодность предварительная.",
+        "mustNotAskQuestionIds": [],
+        "leadCaptureAuthorization": {
+          "purpose": null,
+          "evidence": null,
+          "authorized": false,
+          "handoffKind": "none",
+          "buyerQuestion": null,
+          "contactSource": "none",
+          "pendingDraftId": null,
+          "handoffOfferMessageId": null
+        },
+        "buyerRequestedTechnicalHandoff": null
+      },
+      "error_code": null,
+      "error_message": null,
+      "created_at": "2026-09-15T15:29:54.844Z",
+      "updated_at": "2026-09-15T15:29:54.844Z"
+    },
+    {
+      "checkpoint": "ledger_delta_applied",
+      "status": "succeeded",
+      "payload": {
+        "eventIds": [
+          "need.opened:3edd777d50fd92149ccafb51735432a5",
+          "fact.confirmed:59446d4c80758a5e97e1d6d9493fe98f",
+          "fact.confirmed:8cff1a5c6c2551fff4c5bc055407e1b6",
+          "fact.confirmed:fe9941eb7f4f3b589599e34d14781c00",
+          "fact.confirmed:27ff7878294fac8d57c7a426dccfdbc2"
+        ]
+      },
+      "error_code": null,
+      "error_message": null,
+      "created_at": "2026-09-15T15:29:54.899Z",
+      "updated_at": "2026-09-15T15:29:54.899Z"
+    },
+    {
+      "checkpoint": "intent_contract_created",
+      "status": "succeeded",
+      "payload": {
+        "grounding": {
+          "taskType": "product_selection",
+          "rationale": "Каталог нужен для предварительного подбора; неизвестный пуск насоса не позволяет окончательно подтвердить запуск.",
+          "webPurpose": "technical_specs",
+          "responseMode": "recommend",
+          "sourcePolicy": "catalog_required",
+          "buyerQuestion": "Подберите 2–3 варианта из каталога",
+          "webRequirement": "none",
+          "buyerRequestedWeb": false,
+          "requiredToolKinds": [
+            "calculator.generatorLoad",
+            "catalog.search"
+          ],
+          "catalogRequirement": "required",
+          "technicalAttributes": [
+            "nominal_power_kw",
+            "phase",
+            "fuel_type"
+          ]
+        },
+        "riskFlags": [],
+        "toolRequests": [
+          {
+            "id": "calc_generator_load_1",
+            "args": {
+              "loads": [
+                {
+                  "kind": "refrigerator",
+                  "name": "холодильник",
+                  "count": 1,
+                  "source": "explicit_user",
+                  "evidence": "холодильник 300 Вт",
+                  "basisKind": "exact_power",
+                  "runningKw": 0.3,
+                  "basisSignals": [
+                    "consumer_type_known",
+                    "explicit_power",
+                    "simultaneous_operation_known"
+                  ],
+                  "operationMode": "continuous",
+                  "runningSource": "explicit_user",
+                  "coRunningGroup": "all",
+                  "startingSource": "not_provided"
+                },
+                {
+                  "kind": "circulation_pump",
+                  "name": "циркуляционный насос",
+                  "count": 1,
+                  "source": "explicit_user",
+                  "evidence": "циркуляционный насос 1,1 кВт",
+                  "basisKind": "exact_power",
+                  "runningKw": 1.1,
+                  "basisSignals": [
+                    "consumer_type_known",
+                    "consumer_function_known",
+                    "voltage_or_phase_known",
+                    "explicit_power"
+                  ],
+                  "operationMode": "continuous",
+                  "runningSource": "explicit_user",
+                  "coRunningGroup": "all",
+                  "startingSource": "not_provided"
+                },
+                {
+                  "kind": "workshop_tool",
+                  "name": "инструмент",
+                  "count": 1,
+                  "source": "explicit_user",
+                  "evidence": "инструмент около 1,5 кВт",
+                  "basisKind": "exact_power",
+                  "runningKw": 1.5,
+                  "basisSignals": [
+                    "consumer_type_known",
+                    "explicit_power"
+                  ],
+                  "operationMode": "occasional",
+                  "runningSource": "explicit_user",
+                  "coRunningGroup": "tool_after_pump",
+                  "startingSource": "not_provided"
+                }
+              ],
+              "phase": "single_phase",
+              "query": "Расчёт нагрузки мастерской",
+              "powerSource": "fuel",
+              "estimateBasis": "exact_or_user_provided",
+              "productIntent": "предварительный подбор генератора для мастерской",
+              "semanticQuery": "холодильник 0.3 кВт, циркуляционный насос 1.1 кВт, инструмент 1.5 кВт",
+              "simultaneousRunning": true,
+              "simultaneousStarting": false,
+              "canonicalProductIntent": "generator",
+              "simultaneousStartingKinds": []
+            },
+            "tool": "calculator.generatorLoad",
+            "required": true,
+            "rationale": "Рассчитать минимальный номинал и отдельно учесть неизвестный пуск насоса.",
+            "coversRequirementIds": [
+              "generator_load_scenario"
+            ]
+          },
+          {
+            "id": "search_generators_1",
+            "args": {
+              "limit": 3,
+              "phase": "single_phase",
+              "query": "бензиновые однофазные генераторы для мастерской около 3 кВт",
+              "identifiers": [],
+              "powerSource": "fuel",
+              "productIntent": "подбор генератора для мастерской",
+              "semanticQuery": "бензиновый однофазный генератор 220 В для нагрузки около 2.9 кВт",
+              "comparisonAttributes": [
+                "nominal_power_kw",
+                "price_rub",
+                "weight_kg"
+              ],
+              "canonicalProductIntent": "generator"
+            },
+            "tool": "catalog.search",
+            "required": true,
+            "rationale": "Найти 2–3 каталожных кандидата.",
+            "coversRequirementIds": [
+              "fuel_type",
+              "phase",
+              "generator_load_scenario"
+            ]
+          }
+        ],
+        "policyRuleIds": [
+          "core.help_first"
+        ],
+        "requiresTools": true,
+        "productMentions": [],
+        "selectionPolicy": {
+          "phase": "single_phase",
+          "maxCards": 3,
+          "rationale": "Показать предварительные варианты с минимальным достаточным номиналом; пуск насоса требует последующей проверки.",
+          "needAction": "open",
+          "powerSource": "fuel",
+          "requirements": [
+            {
+              "id": "fuel_type",
+              "kind": "fuel_type",
+              "role": "hard_constraint",
+              "unit": null,
+              "value": "бензин",
+              "evidence": "бензиновый генератор",
+              "relation": "must_have",
+              "strictness": "strict",
+              "verification": {
+                "mode": "product_attribute"
+              }
+            },
+            {
+              "id": "phase",
+              "kind": "phase",
+              "role": "hard_constraint",
+              "unit": null,
+              "value": "single_phase",
+              "evidence": "Всё однофазное 220 В",
+              "relation": "must_have",
+              "strictness": "strict",
+              "verification": {
+                "mode": "product_attribute"
+              }
+            },
+            {
+              "id": "generator_load_scenario",
+              "kind": "generator_load_scenario",
+              "role": "hard_constraint",
+              "unit": null,
+              "value": true,
+              "evidence": "одновременно холодильник 300 Вт, циркуляционный насос 1,1 кВт и инструмент около 1,5 кВт",
+              "relation": "must_have",
+              "strictness": "strict",
+              "verification": {
+                "mode": "typed_tool",
+                "tool": "calculator.generatorLoad",
+                "bindAs": "nominal_power_min_kw",
+                "verifier": "generator_load_profile",
+                "toolRequestId": "calc_generator_load_1"
+              }
+            },
+            {
+              "id": "nominal_power_min_preliminary",
+              "kind": "nominal_power_min_preliminary",
+              "role": "preference",
+              "unit": null,
+              "value": true,
+              "evidence": "Подберите 2–3 варианта из каталога",
+              "relation": "preferred",
+              "strictness": "preferred",
+              "verification": {
+                "mode": "product_attribute"
+              }
+            }
+          ],
+          "selectionGoal": "preliminary_fit",
+          "alternativePolicy": "same_class_only",
+          "rankingObjectives": [
+            {
+              "attribute": "nominal_power_kw",
+              "direction": "minimize",
+              "requirementId": "nominal_power_min_preliminary"
+            }
+          ],
+          "reusePreviousCards": false,
+          "targetProductClass": "бензиновый генератор",
+          "canonicalProductClass": "generator"
+        },
+        "nextStepRationale": "Рассчитать профиль и найти каталожные варианты.",
+        "userMessageSummary": "Предварительно подобрать 2–3 бензиновых однофазных генератора по профилю мастерской.",
+        "dialogueUnderstanding": "Рабочая нагрузка задана; пуск насоса неизвестен, поэтому итоговая пригодность предварительная.",
+        "mustNotAskQuestionIds": [],
+        "leadCaptureAuthorization": {
+          "purpose": null,
+          "evidence": null,
+          "authorized": false,
+          "handoffKind": "none",
+          "buyerQuestion": null,
+          "contactSource": "none",
+          "pendingDraftId": null,
+          "handoffOfferMessageId": null
+        },
+        "buyerRequestedTechnicalHandoff": null
+      },
+      "error_code": null,
+      "error_message": null,
+      "created_at": "2026-09-15T15:29:54.945Z",
+      "updated_at": "2026-09-15T15:29:54.945Z"
+    },
+    {
+      "checkpoint": "observation_decision_1",
+      "status": "succeeded",
+      "payload": {
+        "action": "continue",
+        "rationale": "Расчёт подтверждает рабочую нагрузку 2,9 кВт и предварительный минимальный номинал около 3 кВт, но пусковые нагрузки не подтверждены. Первый запрос каталога завершился таймаутом, поэтому варианты ещё не найдены. Выполняю уточнённый каталоговый поиск бензиновых однофазных моделей с номиналом от 3 кВт; найденные варианты останутся предварительными до проверки пуска насоса.",
+        "missingFacts": [
+          "2–3 подходящих модели из каталога",
+          "Номинальная и максимальная мощность, фаза и тип топлива найденных моделей",
+          "Пусковая способность генераторов и совместимость с насосом при неизвестном пусковом токе"
+        ],
+        "toolRequests": [
+          {
+            "id": "search_generators_retry_2",
+            "args": {
+              "limit": 3,
+              "notes": "Пусковой ток насоса неизвестен, поэтому не считать совместимость с пуском окончательно подтвержденной.",
+              "phase": "single_phase",
+              "query": "бензиновый генератор 220 В однофазный номинальная мощность от 3 кВт для мастерской",
+              "reason": "Повторный поиск после таймаута; нужны 2–3 каталожных кандидата для дальнейшей проверки.",
+              "identifiers": [],
+              "powerSource": "fuel",
+              "productIntent": "предварительный подбор генератора для мастерской с рабочей нагрузкой 2.9 кВт",
+              "semanticQuery": "бензиновый однофазный генератор 220 В, рабочая мощность не менее 3 кВт, для холодильника, насоса 1.1 кВт и инструмента 1.5 кВт",
+              "comparisonAttributes": [
+                "nominal_power_kw",
+                "maximum_power_kw",
+                "phase",
+                "fuel_type",
+                "weight_kg",
+                "price_rub"
+              ],
+              "canonicalProductIntent": "generator"
+            },
+            "tool": "catalog.search",
+            "required": true,
+            "rationale": "Уточнённый поиск по однофазным бензиновым моделям с предварительным порогом около 3 кВт после таймаута предыдущего запроса.",
+            "coversRequirementIds": [
+              "fuel_type",
+              "phase",
+              "generator_load_scenario",
+              "nominal_power_min_preliminary"
+            ]
+          }
+        ],
+        "candidateProductIds": []
+      },
+      "error_code": null,
+      "error_message": null,
+      "created_at": "2026-09-15T15:30:10.307Z",
+      "updated_at": "2026-09-15T15:30:10.307Z"
+    },
+    {
+      "checkpoint": "observation_stopped_1",
+      "status": "succeeded",
+      "payload": {
+        "rounds": 0,
+        "status": "stopped",
+        "rationale": "Расчёт подтверждает рабочую нагрузку 2,9 кВт и предварительный минимальный номинал около 3 кВт, но пусковые нагрузки не подтверждены. Первый запрос каталога завершился таймаутом, поэтому варианты ещё не найдены. Выполняю уточнённый каталоговый поиск бензиновых однофазных моделей с номиналом от 3 кВт; найденные варианты останутся предварительными до проверки пуска насоса.",
+        "stopReason": "continuation_budget_reserve",
+        "missingFacts": [
+          "2–3 подходящих модели из каталога",
+          "Номинальная и максимальная мощность, фаза и тип топлива найденных моделей",
+          "Пусковая способность генераторов и совместимость с насосом при неизвестном пусковом токе"
+        ],
+        "candidateProductIds": []
+      },
+      "error_code": null,
+      "error_message": null,
+      "created_at": "2026-09-15T15:30:10.325Z",
+      "updated_at": "2026-09-15T15:30:10.325Z"
+    },
+    {
+      "checkpoint": "tool_artifacts_saved",
+      "status": "succeeded",
+      "payload": {
+        "resultCount": 2
+      },
+      "error_code": null,
+      "error_message": null,
+      "created_at": "2026-09-15T15:30:10.336Z",
+      "updated_at": "2026-09-15T15:30:10.336Z"
+    },
+    {
+      "checkpoint": "answer_contract_created",
+      "status": "succeeded",
+      "payload": {
+        "factsUsed": [
+          {
+            "value": "бензин",
+            "factKey": "fuel_type",
+            "attribute": "fuel_type",
+            "claimKind": "confirmed_value",
+            "productName": null,
+            "sourceEventIds": [
+              "fact.confirmed:59446d4c80758a5e97e1d6d9493fe98f"
+            ],
+            "evidenceItemIds": []
+          },
+          {
+            "value": "single_phase",
+            "factKey": "phase",
+            "attribute": "phase",
+            "claimKind": "confirmed_value",
+            "productName": null,
+            "sourceEventIds": [
+              "fact.confirmed:8cff1a5c6c2551fff4c5bc055407e1b6"
+            ],
+            "evidenceItemIds": []
+          },
+          {
+            "value": 2.9,
+            "factKey": "total_running_load",
+            "attribute": "totalRunningKw",
+            "claimKind": "confirmed_value",
+            "productName": null,
+            "sourceEventIds": [
+              "calc_generator_load_1"
+            ],
+            "evidenceItemIds": [
+              "calc_generator_load_1:payload:profile:totalRunningKw"
+            ]
+          },
+          {
+            "value": 3,
+            "factKey": "running_only_nominal_floor",
+            "attribute": "runningOnlyNominalFloorKw",
+            "claimKind": "confirmed_value",
+            "productName": null,
+            "sourceEventIds": [
+              "calc_generator_load_1"
+            ],
+            "evidenceItemIds": [
+              "calc_generator_load_1:payload:profile:runningOnlyNominalFloorKw"
+            ]
+          },
+          {
+            "value": "refrigerator:холодильник",
+            "factKey": "refrigerator_starting_load_unknown",
+            "attribute": "missingStartingLoads",
+            "claimKind": "absence_or_unknown",
+            "productName": null,
+            "sourceEventIds": [
+              "calc_generator_load_1"
+            ],
+            "evidenceItemIds": [
+              "calc_generator_load_1:payload:profile:missingStartingLoads:0"
+            ]
+          },
+          {
+            "value": "pump:циркуляционный_насос",
+            "factKey": "pump_starting_load_unknown",
+            "attribute": "missingStartingLoads",
+            "claimKind": "absence_or_unknown",
+            "productName": null,
+            "sourceEventIds": [
+              "calc_generator_load_1"
+            ],
+            "evidenceItemIds": [
+              "calc_generator_load_1:payload:profile:missingStartingLoads:1"
+            ]
+          },
+          {
+            "value": "workshop_tool:инструмент",
+            "factKey": "tool_starting_load_unknown",
+            "attribute": "missingStartingLoads",
+            "claimKind": "absence_or_unknown",
+            "productName": null,
+            "sourceEventIds": [
+              "calc_generator_load_1"
+            ],
+            "evidenceItemIds": [
+              "calc_generator_load_1:payload:profile:missingStartingLoads:2"
+            ]
+          }
+        ],
+        "riskFlags": [
+          "generator_startup_loads_unconfirmed",
+          "catalog_candidates_not_confirmed"
+        ],
+        "answerText": "Рабочая нагрузка у вас — 2,9 кВт: холодильник 0,3 кВт, насос 1,1 кВт и инструмент 1,5 кВт работают одновременно. Поэтому 3 кВт — только ориентир по уже работающей нагрузке, а не гарантированно достаточная мощность для запуска.\n\nКонкретные 2–3 модели сейчас не подтверждены, поэтому не буду выдавать случайные генераторы за подходящие. Для бензинового однофазного варианта нужно проверить не только номинал, но и способность пережить пуск холодильника, насоса и инструмента; особенно важен пуск насоса.\n\nСледующий вопрос: какое точное значение тока или пусковой мощности насоса указано на его шильдике?",
+        "leadAction": "none",
+        "toolResultIds": [
+          "calc_generator_load_1",
+          "search_generators_1"
+        ],
+        "questionsAsked": [
+          {
+            "text": "Какое точное значение тока или пусковой мощности насоса указано на его шильдике?",
+            "reason": "Это самый значимый недостающий параметр для проверки запуска генератора; пуск холодильника и инструмента также пока не указан.",
+            "questionId": "pump_starting_power"
+          }
+        ],
+        "selectedProductIds": [],
+        "selectionRationale": null,
+        "selectionReadiness": {
+          "status": "needs_more_info",
+          "rationale": "Рабочая нагрузка рассчитана, но 3 кВт описывает только работающие нагрузки и не подтверждает достаточность для запуска. Подтверждённых карточек товаров в текущем результате нет.",
+          "missingFacts": [
+            "2–3 подтверждённые каталожные модели бензиновых однофазных генераторов",
+            "Номинальная и максимальная мощность выбранных моделей",
+            "Пусковая способность генераторов и совместимость с насосом",
+            "Пусковые нагрузки холодильника, насоса и инструмента"
+          ],
+          "productClass": "generator",
+          "canShowProductCards": false
+        }
+      },
+      "error_code": null,
+      "error_message": null,
+      "created_at": "2026-09-15T15:30:21.877Z",
+      "updated_at": "2026-09-15T15:30:21.877Z"
+    },
+    {
+      "checkpoint": "review_completed",
+      "status": "succeeded",
+      "payload": {
+        "issues": [],
+        "verdict": "pass"
+      },
+      "error_code": null,
+      "error_message": null,
+      "created_at": "2026-09-15T15:30:27.146Z",
+      "updated_at": "2026-09-15T15:30:27.146Z"
+    },
+    {
+      "checkpoint": "assistant_message_saved",
+      "status": "succeeded",
+      "payload": {
+        "recovered": false
+      },
+      "error_code": null,
+      "error_message": null,
+      "created_at": "2026-09-15T15:30:27.179Z",
+      "updated_at": "2026-09-15T15:30:27.179Z"
+    }
+  ]
+}

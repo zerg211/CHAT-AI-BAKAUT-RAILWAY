@@ -452,6 +452,110 @@ describe('AgentManager comparison research flow', () => {
     }));
   });
 
+  it('applies the primary selection contract when web recovers from a timed-out catalog search', async () => {
+    const pool = [
+      product('below-floor', 'Генератор бензиновый TEST 2.8 kW', {
+        'Nominal power': '2.8 kW', 'число фаз': 'однофазные', 'вид топлива': 'бензиновые'
+      }),
+      product('wrong-phase', 'Генератор бензиновый TEST 3.2 kW 380V', {
+        'Nominal power': '3.2 kW', 'число фаз': 'трехфазные', 'вид топлива': 'бензиновые'
+      }),
+      product('fit-3.4', 'Генератор бензиновый TEST 3.4 kW', {
+        'Nominal power': '3.4 kW', 'число фаз': 'однофазные', 'вид топлива': 'бензиновые'
+      }),
+      product('fit-4', 'Генератор бензиновый TEST 4 kW', {
+        'Nominal power': '4 kW', 'число фаз': 'однофазные', 'вид топлива': 'бензиновые'
+      }),
+      product('fit-6.6', 'Генератор бензиновый TEST 6.6 kW', {
+        'Nominal power': '6.6 kW', 'число фаз': 'однофазные', 'вид топлива': 'бензиновые'
+      })
+    ];
+    class RecoveryProducts extends FakeProducts {
+      queries: string[] = [];
+      override async searchProducts(query = '') {
+        this.queries.push(query);
+        if (query === 'initial catalog timeout') {
+          throw new DOMException('catalog deadline', 'TimeoutError');
+        }
+        return pool;
+      }
+    }
+    researchProductComparisonFacts.mockResolvedValue({
+      usedWebSearch: true, usedDocumentRead: false, searchDisposition: 'completed', sourcesExhausted: false,
+      facts: [], conflicts: [], warnings: [], summaryForAnswer: '',
+      answerGuidance: { directAnswer: '', completeness: 'partially_answered', coverage: [] }
+    });
+    const intent = AgentIntentContractSchema.parse({
+      userMessageSummary: 'recover a preliminary workshop generator selection',
+      dialogueUnderstanding: 'running load is 2.9 kW and phase/fuel are fixed',
+      nextStepRationale: 'recover catalog candidates before web research', requiresTools: true,
+      toolRequests: [{
+        id: 'calc-load', tool: 'calculator.generatorLoad', required: true,
+        args: { loads: [
+          { kind: 'refrigerator', name: 'холодильник', count: 1, source: 'explicit_user', evidence: '300 Вт',
+            basisKind: 'exact_power', basisSignals: ['explicit_power'], runningKw: 0.3, runningSource: 'explicit_user',
+            startingSource: 'not_provided', operationMode: 'continuous', coRunningGroup: 'all' },
+          { kind: 'pump', name: 'насос', count: 1, source: 'explicit_user', evidence: '1,1 кВт',
+            basisKind: 'exact_power', basisSignals: ['explicit_power'], runningKw: 1.1, runningSource: 'explicit_user',
+            startingSource: 'not_provided', operationMode: 'continuous', coRunningGroup: 'all' },
+          { kind: 'tool', name: 'инструмент', count: 1, source: 'explicit_user', evidence: '1,5 кВт',
+            basisKind: 'exact_power', basisSignals: ['explicit_power'], runningKw: 1.5, runningSource: 'explicit_user',
+            startingSource: 'not_provided', operationMode: 'occasional', coRunningGroup: 'after_pump' }
+        ], simultaneousRunning: true, simultaneousStarting: false, canonicalProductIntent: 'generator' },
+        rationale: 'calculate the running floor', coversRequirementIds: ['load']
+      }, {
+        id: 'catalog-timeout', tool: 'catalog.search', required: true,
+        args: { query: 'initial catalog timeout', canonicalProductIntent: 'generator', productIntent: 'generator', limit: 5 },
+        rationale: 'initial catalog lookup', coversRequirementIds: ['phase', 'fuel', 'load']
+      }, {
+        id: 'web-recovery', tool: 'web.researchProductFacts', required: true,
+        args: { query: 'verify generator startup capability', canonicalProductIntent: 'generator', productIntent: 'generator',
+          productNames: [], comparisonAttributes: ['starting_capability'] },
+        rationale: 'recover candidates and verify startup facts', coversRequirementIds: ['load']
+      }],
+      productMentions: [],
+      selectionPolicy: {
+        targetProductClass: 'generator', canonicalProductClass: 'generator', selectionGoal: 'preliminary_fit',
+        needAction: 'continue', alternativePolicy: 'same_class_only', reusePreviousCards: false, maxCards: 3,
+        powerSource: 'fuel', phase: 'single_phase', rationale: 'preliminary candidates above the running floor',
+        requirements: [
+          { id: 'phase', kind: 'phase', value: 'single_phase', role: 'hard_constraint', strictness: 'strict',
+            relation: 'must_have', unit: null, evidence: 'однофазное 220 В', verification: { mode: 'product_attribute' } },
+          { id: 'fuel', kind: 'fuel_type', value: 'бензин', role: 'hard_constraint', strictness: 'strict',
+            relation: 'must_have', unit: null, evidence: 'бензиновый генератор', verification: { mode: 'product_attribute' } },
+          { id: 'load', kind: 'generator_load_scenario', value: true, role: 'hard_constraint', strictness: 'strict',
+            relation: 'must_have', unit: null, evidence: '2.9 kW running load',
+            verification: { mode: 'typed_tool', toolRequestId: 'calc-load', tool: 'calculator.generatorLoad',
+              verifier: 'generator_load_profile', bindAs: 'nominal_power_min_kw' } }
+        ],
+        rankingObjectives: [],
+      },
+      grounding: { taskType: 'product_selection', sourcePolicy: 'web_required', webPurpose: 'technical_specs',
+        webRequirement: 'independent_required', catalogRequirement: 'required', responseMode: 'recommend',
+        requiredToolKinds: ['calculator.generatorLoad', 'catalog.search', 'web.researchProductFacts'],
+        technicalAttributes: ['starting_capability'], rationale: 'catalog and web are required' },
+      mustNotAskQuestionIds: [], riskFlags: []
+    });
+    const products = new RecoveryProducts();
+    const orchestrator = new AgentManagerOrchestrator(new FakeConversations() as never, products as never,
+      {} as never, withStrictToolFixtures(model()));
+    const executor = orchestrator as unknown as {
+      executeTools(input: Record<string, unknown>): Promise<{ toolResults: ToolResult[] }>;
+    };
+
+    const result = await executor.executeTools({
+      session: session(), turnId, executionOwner: 'web-catalog-recovery', userMessage: 'Покажите варианты.',
+      history: [], intent, toolRequests: intent.toolRequests, needState: emptyNeedState(), pendingLeadCaptureDraft: null,
+      persistedToolResults: new Map(), budget: new AgentManagerTurnBudget()
+    });
+
+    expect(result.toolResults.find((item) => item.requestId === 'catalog-timeout')?.status).toBe('timeout');
+    expect(researchProductComparisonFacts).toHaveBeenCalledWith(expect.objectContaining({
+      targetProductNames: [pool[2]!.name, pool[3]!.name, pool[4]!.name],
+      products: pool.slice(2).map((item) => expect.objectContaining({ id: item.id }))
+    }));
+  });
+
   it('researches public information without inheriting a prior product or searching the product catalog', async () => {
     const products = new FakeProducts();
     const search = vi.spyOn(products, 'searchProducts');

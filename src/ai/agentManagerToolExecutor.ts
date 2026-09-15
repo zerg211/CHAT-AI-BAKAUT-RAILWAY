@@ -1968,16 +1968,29 @@ async executeTools(input: {
               query: lookupQuery,
               limit: 4,
               signal: toolSignal,
+              deadlineAtMs: toolAttemptStartedAt + effectiveTimeoutMs,
               productIntent: resolvedToolProductIntent(request, input.intent),
               powerSource: resolvedToolPowerSource(request, input.intent),
               embeddingQuery: scopedQuery.semanticQuery,
-              budgetMax
+              budgetMax,
+              intent: toolRequestTargetsPrimarySelectionClass(request, input.intent)
+                ? input.intent
+                : undefined,
+              toolResults
             });
             currentWebCatalogLookupCompleted = true;
             found.products.forEach((product) => {
               productsById.set(product.id, product);
               webLookupProductIds.add(product.id);
             });
+            if (
+              !targetProductNames.length &&
+              !suppressedTargetProductNames.length &&
+              coerceVisibleCardIntent(request.args.canonicalProductIntent) !== 'unknown' &&
+              toolRequestTargetsPrimarySelectionClass(request, input.intent)
+            ) {
+              targetProductNames = found.products.slice(0, 4).map((product) => product.name);
+            }
           }
           const allSelectedProducts = scopedProductsForWeb();
           const exactTargetProducts = targetProductNames.length

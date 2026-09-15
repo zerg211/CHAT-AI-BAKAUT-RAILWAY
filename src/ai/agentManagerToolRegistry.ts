@@ -269,7 +269,7 @@ export const agentManagerToolRegistry = {
     resultPayloadSchema: catalogSearchResult,
     risk: 'safe_read',
     sideEffect: false,
-    timeoutMs: 10_000,
+    timeoutMs: 15_000,
     maxResultItems: 12,
     maxResultBytes: 180_000,
     maxAttempts: 2

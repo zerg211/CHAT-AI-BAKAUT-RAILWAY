@@ -241,6 +241,20 @@ describe('ProductRepository catalog freshness integration', () => {
     expect(sql).not.toContain('SELECT id, external_id, slug, source_url, name, brand, category, price, currency, image_url, description, specs');
   });
 
+  it('uses indexed full text for long catalog fields instead of substring-scanning descriptions and specs', async () => {
+    const query = vi.fn().mockResolvedValue({ rowCount: 0, rows: [] });
+    const repository = new ProductRepository({ query } as never);
+
+    await repository.searchProducts('бензиновый однофазный генератор', 200, { compact: true });
+
+    const sql = String(query.mock.calls[0]?.[0]);
+    expect(sql).toContain("search_tsv @@ websearch_to_tsquery('russian', $1)");
+    expect(sql).toContain("lower(coalesce(category, '')) LIKE");
+    expect(sql).toContain("lower(coalesce(source_url, '')) LIKE");
+    expect(sql).not.toContain("lower(coalesce(description, '')) LIKE");
+    expect(sql).not.toContain("lower(coalesce(specs::text, '')) LIKE");
+  });
+
   it('cancels an aborted product search on its leased pool client', async () => {
     let resolveQueryStarted!: () => void;
     const queryStarted = new Promise<void>((resolve) => {

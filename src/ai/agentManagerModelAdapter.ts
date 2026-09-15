@@ -52,6 +52,8 @@ export interface AgentManagerModel {
     toolResults: ToolResult[];
     verifiedProductFacts?: VerifiedProductFact[];
     conflictingVerifiedProductFacts?: VerifiedProductFact[];
+    ledgerState?: ReducedDialogueLedgerState;
+    productEvidenceRoles?: AnswerProductEvidenceRole[];
     signal?: AbortSignal;
     deadlineAtMs?: number;
   }): Promise<{
@@ -2386,6 +2388,8 @@ export class OpenAIAgentManagerModel implements AgentManagerModel {
     toolResults: ToolResult[];
     verifiedProductFacts?: VerifiedProductFact[];
     conflictingVerifiedProductFacts?: VerifiedProductFact[];
+    ledgerState?: ReducedDialogueLedgerState;
+    productEvidenceRoles?: AnswerProductEvidenceRole[];
     signal?: AbortSignal;
     deadlineAtMs?: number;
   }) {
@@ -2413,6 +2417,8 @@ export class OpenAIAgentManagerModel implements AgentManagerModel {
             'Отдельно проверь ownershipIssues: переложена ли доступная менеджеру проверка на покупателя. Для каждого нарушения верни claimId из claimReferences, reason с объяснением с учётом вопроса и наблюдений, managerAction — конкретную работу, которую должен выполнить менеджер имеющимися возможностями. Это самостоятельная ошибка качества даже при верных фактах. Не отмечай допустимые вопросы о личных условиях покупателя и физическом осмотре полученного товара. Без нарушения верни [].',
             untrustedEvidenceBoundary,
             'Также проверь factualIssues: противоречия между точными товарными утверждениями ответа и products/toolResults/verifiedProductFacts, перенос факта на другую модель, утрату отрицания или условий, выдачу неподтвержденного/конфликтного значения за установленный факт. verifiedProductFacts — актуальные сохраненные факты с источниками для точных моделей: учитывай исходные attribute/value, даже если вопрос использует другой термин. confirmed означает подтверждение конкретного value, включая отсутствие свойства; название атрибута, тип документа и упоминание слова не подтверждают наличие свойства. Не путай отрицание свойства другой модели с отрицанием свойства проверяемой модели.',
+            'ledger — подтвержденный контекст активного диалога до текущей реплики. Не объявляй прежнее условие покупателя неподтвержденным только потому, что оно отсутствует в userMessage текущего хода.',
+            'productEvidenceRoles — исчерпывающий список ролей текущего товарного scope: recommendation_candidate можно предлагать; comparison_reference_only служит только сравнительным доказательством. Товар без роли нельзя считать доступным кандидатом или использовать для претензии, что writer пропустил вариант. Пустой список означает пустой текущий eligible scope, но не отсутствие товаров во всём каталоге.',
             'В сравнениях и превосходной степени сохраняй точный показатель и доказанную область найденных результатов. catalog generatorLoadFit.ranking — авторитетный deterministic порядок только для scope=returned_eligible_candidates: используй его metric, referenceKw, orderedProductIds и готовые deltaAboveMinimumKw; не выводи скрытую точку сравнения из query/semanticQuery и не пересчитывай её по иному ориентиру. Глобальное «ближайший/лучший в каталоге» без полного каталожного scope остаётся factualIssue. Номинальная, максимальная, пусковая, активная и полная мощность — разные показатели: «наибольшая найденная номинальная мощность» допустима по номинальным значениям, а общее «самый мощный» без доказательства по единому показателю является factualIssue.',
             'Когда ответ сопоставляет измерительные значения из разных источников, отдельное подтверждение каждого числа не доказывает сопоставимость. Если наблюдения не подтверждают одинаковый тип показателя, стандарт, расстояние, нагрузку и существенные условия измерения, пометь как factualIssue вывод о разнице в реальной работе или практическом превосходстве. Допустимо раздельно назвать заявленные источниками числа и прямо сказать, что методики не подтверждены как сопоставимые.',
             'Определи роль каждого товарного обозначения по смыслу: предлагаемый к покупке товар, подтверждённая деталь/расходник, стандарт или характеристика, либо упоминание покупателя. Обозначение детали или стандарта не обязано быть названием отдельного товара каталога, но его применение и совместимость должны опираться на источники. Если ответ предлагает не подтверждённую каталогом модель как наш товар либо выдумывает совместимость, верни factualIssues с claimId и sourceResultId соответствующего каталожного наблюдения или проверенного факта. Само сочетание букв и цифр не является нарушением.',
@@ -2428,6 +2434,8 @@ export class OpenAIAgentManagerModel implements AgentManagerModel {
             claimReferences,
             technicalResearchStatus: technicalResearchStatus(input.toolResults, input.intent),
             technicalHandoffRequestedAndVerified: input.technicalHandoffRequestedAndVerified === true,
+            ledger: input.ledgerState ? compactLedger(input.ledgerState) : null,
+            productEvidenceRoles: input.productEvidenceRoles ?? [],
             products: input.products.map((product) => answerProductContext(product, input.toolResults)),
             verifiedProductFacts: compactVerifiedFactsForModel(input.verifiedProductFacts ?? []),
             conflictingVerifiedProductFacts: compactVerifiedFactsForModel(input.conflictingVerifiedProductFacts ?? []),

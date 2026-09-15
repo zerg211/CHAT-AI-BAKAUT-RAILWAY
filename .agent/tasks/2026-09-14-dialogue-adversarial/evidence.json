@@ -298,7 +298,27 @@
       "errorCode": "agent_manager_generation_failed",
       "cause": "reviewer inferred an unsupported query reference and made a false nominal-power distance comparison; catalog web targets followed non-load-ranked insertion order"
     },
-    "eighthCorrectiveBranch": "codex/generator-ranking-review"
+    "eighthCorrectiveBranch": "codex/generator-ranking-review",
+    "eighthCorrectivePr": 34,
+    "eighthCorrectiveMergedSha": "5c616d44172e4a5472fdc93b74dcc4d7fed00a3c",
+    "eighthCorrectiveRailway": {
+      "status": "SUCCESS",
+      "deploymentId": "738da570-1297-416a-a8e3-595ba5f439a8",
+      "codeSha": "5c616d44172e4a5472fdc93b74dcc4d7fed00a3c"
+    },
+    "ninthLiveDialogue": {
+      "status": "FAIL",
+      "conversationId": 2194,
+      "sessionId": "a94e8dc7-cc7f-4065-9c2e-679906e501ec",
+      "completedTurnId": "681a0b76-f09f-4693-a7d8-4b5bc7bb380c",
+      "failedTurnIds": [
+        "936fae1b-1237-4dbb-ba36-b3c2e73143f1",
+        "9b15ec93-ffc7-42c4-bc2c-e12373be8139"
+      ],
+      "errorCode": "agent_manager_generation_failed",
+      "cause": "catalog long-field substring scans exceeded the tool ceiling; recovery lost the primary selection contract and reviewer scope; named calculator facts had no consumer-scoped binding"
+    },
+    "ninthCorrectiveBranch": "codex/catalog-search-live-recovery"
   },
   "fifthCorrectiveChecks": {
     "focusedTests": {
@@ -414,5 +434,49 @@
       "status": "PASS",
       "testsPassed": 118
     }
+  },
+  "ninthCorrectiveChecks": {
+    "focusedTests": {
+      "status": "PASS",
+      "testsPassed": 354
+    },
+    "typecheck": {
+      "status": "PASS"
+    },
+    "build": {
+      "status": "PASS"
+    },
+    "noNewRegex": {
+      "status": "PASS",
+      "legacyBaseline": 203
+    },
+    "diffCheck": {
+      "status": "PASS"
+    },
+    "criticReview": {
+      "status": "PASS",
+      "independentTestsPassed": 134,
+      "initialVerdict": "FAIL",
+      "finalVerdict": "PASS"
+    },
+    "catalogLatencyProbe": {
+      "status": "PASS",
+      "formerInitialMs": 3336,
+      "formerExpansionMsRange": [7340, 14494],
+      "optimizedInitialMs": 728,
+      "optimizedExpansionMs": 873,
+      "searchTsvLongFieldCoverageRetained": true
+    },
+    "recoveryContract": {
+      "status": "PASS",
+      "primaryIntentAndCalculatorPassed": true,
+      "absoluteDeadlinePassed": true,
+      "filteredRankedTargetsOnly": true,
+      "nestedWebProductsRemoved": true,
+      "reviewerLedgerAndRolesExhaustive": true,
+      "calculatorConsumerBindingFailClosed": true
+    },
+    "publication": "PENDING",
+    "liveAcceptance": "PENDING"
   }
 }

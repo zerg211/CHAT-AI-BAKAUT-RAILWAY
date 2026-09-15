@@ -293,6 +293,74 @@ describe('claim-level answer evidence bindings', () => {
     );
   });
 
+  it('binds named generator-load consumers to their canonical calculator items', () => {
+    const load = structuredClone(productionGeneratorLoad);
+    const profile = (load.payload as { profile: { items: Array<Record<string, unknown>>; missingStartingLoads: string[] } }).profile;
+    profile.items[0]!.name = 'холодильник обычный компрессорный';
+    profile.items[2]!.name = 'угловая шлифмашина';
+    profile.missingStartingLoads = [
+      'refrigerator:холодильник_обычный_компрессорный',
+      'pump:циркуляционный_насос',
+      'handheld_tool:угловая_шлифмашина'
+    ];
+    const facts: AnswerContract['factsUsed'] = [
+      { factKey: 'refrigerator_running_power', sourceEventIds: [load.requestId],
+        evidenceItemIds: [`${load.requestId}:payload:profile:items:0:runningKw`],
+        productName: 'холодильник обычный компрессорный', attribute: 'runningKw', claimKind: 'confirmed_value', value: 0.3 },
+      { factKey: 'pump_running_power', sourceEventIds: [load.requestId],
+        evidenceItemIds: [`${load.requestId}:payload:profile:items:1:runningKw`],
+        productName: 'циркуляционный насос', attribute: 'runningKw', claimKind: 'confirmed_value', value: 1.1 },
+      { factKey: 'angle_grinder_running_power', sourceEventIds: [load.requestId],
+        evidenceItemIds: [`${load.requestId}:payload:profile:items:2:runningKw`],
+        productName: 'угловая шлифмашина', attribute: 'runningKw', claimKind: 'confirmed_value', value: 1.5 },
+      ...profile.missingStartingLoads.map((value, index) => ({
+        factKey: `missing_start_${index}`,
+        sourceEventIds: [load.requestId],
+        evidenceItemIds: [`${load.requestId}:payload:profile:missingStartingLoads:${index}`],
+        productName: value.slice(value.indexOf(':') + 1).replaceAll('_', ' '),
+        attribute: 'missingStartingLoads',
+        claimKind: 'absence_or_unknown' as const,
+        value
+      }))
+    ];
+
+    const result = resolveAnswerEvidenceBindings({
+      answer: { answerText: 'x', factsUsed: facts, questionsAsked: [], toolResultIds: [load.requestId],
+        leadAction: 'none', riskFlags: [] },
+      toolResults: [load]
+    });
+    expect(result.issues).toEqual([]);
+  });
+
+  it('keeps named calculator consumer bindings fail-closed across subjects and aggregates', () => {
+    const load = structuredClone(productionGeneratorLoad);
+    const profile = (load.payload as { profile: { items: Array<Record<string, unknown>>; missingStartingLoads: string[] } }).profile;
+    profile.items[2]!.runningKw = 1.1;
+    const cases: AnswerContract['factsUsed'][number][] = [
+      { factKey: 'wrong_consumer', sourceEventIds: [load.requestId],
+        evidenceItemIds: [`${load.requestId}:payload:profile:items:0:runningKw`], productName: 'циркуляционный насос',
+        attribute: 'runningKw', claimKind: 'confirmed_value', value: 0.3 },
+      { factKey: 'same_number_wrong_consumer', sourceEventIds: [load.requestId],
+        evidenceItemIds: [`${load.requestId}:payload:profile:items:2:runningKw`], productName: 'циркуляционный насос',
+        attribute: 'runningKw', claimKind: 'confirmed_value', value: 1.1 },
+      { factKey: 'named_aggregate', sourceEventIds: [load.requestId],
+        evidenceItemIds: [`${load.requestId}:payload:profile:totalRunningKw`], productName: 'циркуляционный насос',
+        attribute: 'totalRunningKw', claimKind: 'confirmed_value', value: 2.9 },
+      { factKey: 'wrong_missing_subject', sourceEventIds: [load.requestId],
+        evidenceItemIds: [`${load.requestId}:payload:profile:missingStartingLoads:0`], productName: 'угловая шлифмашина',
+        attribute: 'missingStartingLoads', claimKind: 'absence_or_unknown', value: 'refrigerator:холодильник' }
+    ];
+
+    for (const fact of cases) {
+      const result = resolveAnswerEvidenceBindings({
+        answer: { answerText: 'x', factsUsed: [fact], questionsAsked: [], toolResultIds: [load.requestId],
+          leadAction: 'none', riskFlags: [] },
+        toolResults: [load]
+      });
+      expect(result.issues.map((issue) => issue.code)).toContain('fact_evidence_product_mismatch');
+    }
+  });
+
   it('keeps calculator profile aliases fail-closed outside one exact matching item', () => {
     const ambiguous = structuredClone(productionGeneratorLoad);
     ambiguous.payload.profile = {

@@ -1,0 +1,16 @@
+Production read-only catalog latency probes, 2026-09-15 Europe/Moscow
+
+Deployed query shape before correction:
+- initial 200 candidates: approximately 3.336 seconds
+- 1,000-candidate expansion: 7.340 to 14.494 seconds
+- combined transferred payload observed: approximately 6.5 MB
+
+Corrected query shape against the same production database:
+- initial 200 candidates: approximately 0.728 seconds
+- 1,000-candidate expansion: approximately 0.873 seconds
+
+The corrected query retains search_tsv @@ websearch_to_tsquery coverage. The GIN-backed
+search_tsv includes name, brand, category, description and specs. Substring fallback is
+limited to name, category and source_url, removing duplicate full description/spec scans.
+
+These were read-only SQL probes. No production rows were mutated.
