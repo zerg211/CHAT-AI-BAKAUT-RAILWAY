@@ -13,7 +13,7 @@ import { extractContact } from './contactExtraction.js';
 import { budgetMaxFromNeedState, filterGeneratorProductsByLoadProfile, gateStrictSelectionRequirements, hasStructuredGeneratorRemoteStartPreference, productMeetsSupportedStrictAutoStartRequirement, productMeetsSupportedStrictRemoteStartRequirement, productMeetsSupportedStrictFuelRequirement, productMeetsSupportedStrictPriceVisibilityRequirement, productMeetsSupportedStrictVoltageRequirement, qualifiedNominalActivePowerKw, rankCatalogProductsByStructuredPreferences, structuredSelectionRankingObjectives, toolRequestProductIntent, toolRequestScopedQuery, uniqueStrings } from './agentManagerCardSelection.js';
 import { buildGeneratorLoadToolPayload, isGeneratorProductClass } from './agentManagerGeneratorLoad.js';
 import { agentManagerToolRegistry, toolResultByteLength, validateToolResultOutput } from './agentManagerToolRegistry.js';
-import { AgentManagerTurnBudget, AgentManagerTurnBudgetExceededError } from './agentManagerTurnBudget.js';
+import { AGENT_MANAGER_FINALIZATION_RESERVE_MS, AgentManagerTurnBudget, AgentManagerTurnBudgetExceededError } from './agentManagerTurnBudget.js';
 import { compactModelText, exactProductIdentity, modelTextTokens, normalizeModelText, textMatchesTargetName, tokenHasDigit, tokenHasLetter } from './modelTextMatching.js';
 import { matchingVerifiedFactsForRequest, reusableVerifiedFact, researchFactConfidenceNumber, researchFactMemoryCandidates, verifiedFactCoverageForRequest, verifiedFactsCoverRequest, verifiedFactsResearchResult } from './verifiedFactMemory.js';
 import { canonicalFactAttribute, verifiedFactValueKey } from './verifiedFactNormalization.js';
@@ -199,7 +199,7 @@ export function resolvedToolPowerSource(request: ToolRequest, intent: AgentInten
     : undefined;
 }
 
-export const WEB_ANSWER_RESERVE_MS = 30_000;
+export const WEB_ANSWER_RESERVE_MS = AGENT_MANAGER_FINALIZATION_RESERVE_MS;
 
 export const WEB_MIN_EXECUTION_MS = 6_000;
 
@@ -211,12 +211,14 @@ export function effectiveAgentToolTimeoutMs(input: {
   tool: ToolRequest['tool'];
   configuredTimeoutMs: number;
   remainingWallTimeMs: number;
+  downstreamReserveMs?: number;
 }) {
-  const reserveMs = input.tool === 'web.researchProductFacts'
+  const defaultReserveMs = input.tool === 'web.researchProductFacts'
     ? WEB_ANSWER_RESERVE_MS
     : input.tool === 'catalog.search' || input.tool === 'catalog.getProductDetails'
       ? CATALOG_ANSWER_RESERVE_MS
       : 0;
+  const reserveMs = Math.max(defaultReserveMs, input.downstreamReserveMs ?? 0);
   return Math.min(input.configuredTimeoutMs, Math.max(1, input.remainingWallTimeMs - reserveMs));
 }
 
@@ -1309,6 +1311,7 @@ async executeTools(input: {
     documentReadContext?: ProductResearchDocumentReadContext;
     catalogResearchCache?: Map<string, ProductComparisonResearchResult>;
     freshResearchResults?: ProductComparisonResearchResult[];
+    downstreamAnswerReserveMs?: number;
     budget: AgentManagerTurnBudget;
     signal?: AbortSignal;
   }) {
@@ -1557,7 +1560,8 @@ async executeTools(input: {
         effectiveTimeoutMs = Math.min(effectiveTimeoutMs, effectiveAgentToolTimeoutMs({
           tool: request.tool,
           configuredTimeoutMs: definition.timeoutMs,
-          remainingWallTimeMs: input.budget.remainingWallTimeMs()
+          remainingWallTimeMs: input.budget.remainingWallTimeMs(),
+          downstreamReserveMs: input.downstreamAnswerReserveMs
         }));
         timeoutSignal = AbortSignal.timeout(Math.max(1, effectiveTimeoutMs));
         toolSignal = input.signal

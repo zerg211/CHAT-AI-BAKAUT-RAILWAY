@@ -13,3 +13,21 @@ The fresh parallel run passed 1499 tests and timed out in three unrelated cases:
 The full repository suite was then rerun with one worker and passed 1502/1502 with one intentional skip. The repository release gate independently repeated the suite with serial files and also passed 1502/1502 with one skip.
 
 No product-code change was made for P2 because the failures were process contention against a fixed five-second test timeout, not a reproducible behavior defect.
+
+## P3 — production research turn spent the final-answer window
+
+The first post-deploy widget dialogue (`#2186`, session `76513e9c-98ed-4563-ab0c-885b00d7522d`) failed before any assistant message was committed. The buyer saw only `Не удалось завершить ответ. Текст вашего вопроса остался в чате.` The persisted turn ended as `agent_manager_generation_failed` with `Structured JSON request exceeded its deadline`.
+
+The trace shows a successful calculator and catalog search, then a 45.846-second web research call. Research finished with 48.834 seconds left; the optional observation cycle and one catalog detail read reduced that to 36.541 seconds. The writer was then limited by `deadlineForStage(45_000, 15_000)` to roughly 21 seconds and timed out. `WEB_ANSWER_RESERVE_MS=30_000` preserved less time than the actual writer plus semantic review contract requires, while the observation-cycle guard only stopped below 40 seconds.
+
+Required fix: reserve the complete writer-and-review window before admitting web research or another observation round. Under a short remaining budget, persist an honest partial research result and proceed to the writer with the catalog/calculator/verified evidence already collected. Do not add a query-specific fallback and do not mask the failed production dialogue.
+
+Smallest fix applied after root/critic review: one `AGENT_MANAGER_FINALIZATION_RESERVE_MS` now protects 45 seconds for composition, 15 seconds for semantic review and a 5-second checkpoint/evidence margin. Initial web research preserves that reserve. A continuation round needs a further fixed 10 seconds before admission, and every continuation read receives the same downstream reserve at execution time. FAST/NORMAL catalog work keeps its prior 8-second reserve until semantic observation expands the turn to RESEARCH. The critic rechecked the final diff and returned PASS; the focused suite passed 205/205.
+
+## P4 — removed external PDF fixture blocks one repository test
+
+`tests/firstPartyPdf.test.ts` currently requests `https://bakautprof.ru/documents/hours.pdf?branch=2`. A fresh independent HEAD request returned HTTP 404. The test first exceeded its five-second limit and, with a 15-second test timeout, completed with `result.ok=false`, consistent with the removed remote fixture. This test does not exercise the finalization-reserve change. It remains recorded as a failed external integration check rather than being weakened or silently skipped.
+
+## P5 — one long generated sequence exceeded the fixed test timeout under the release gate
+
+The release-gate serial suite timed out on seed 22 of `dialogueLedgerGeneratedSequences.test.ts`. An immediate isolated rerun of the complete file passed 24/24 in 48.94 seconds. No product-code change was made because the assertion and all generated sequences passed when isolated; the gate failure is preserved alongside the retry result.

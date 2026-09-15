@@ -1,5 +1,5 @@
 import { recordTurnTelemetry, runWithTurnStageEmitter, type AgentManagerStageEmitter } from './turnTelemetry.js';
-import {AgentManagerToolExecutor,groundedBuyerQuestion,blockedLeadReplayResult,isBlockedLeadReplayResult,durableLeadOutboxStatus,typedProductClassKey,productMentionRoleForTargetName,productNameAllowedAsExactTarget,targetProductNamesForRequest,suppressedContextTargetProductNamesForRequest,comparisonAttributesForRequest,comparisonAttributeBindingsForRequest,productLookupText,productMatchesTargetName,productMatchesExactTargetIdentity,resolvedToolProductIntent,toolRequestTargetsPrimarySelectionClass,productsMatchingToolRequestIntent,resolvedToolPowerSource,WEB_ANSWER_RESERVE_MS,WEB_MIN_EXECUTION_MS,CATALOG_ANSWER_RESERVE_MS,CURRENT_PRICE_VERIFICATION_TOP_K,effectiveAgentToolTimeoutMs,productsFromPersistedToolResult,maximumToolResultItemCount,assertToolResultBounds,productMeetsStructuredPowerSource,hardSelectionNumber,resolvedEligibilityStatusForStrictKinds,passesNativeConstraintOrResolvedProof,filterProductsByStructuredSelectionPolicy,catalogCandidatesSatisfyingConditionalWebRequest,allowCatalogOnlyResearchForWebRequest,SelectionCandidateTier,visibleSelectionTier,structuredCatalogExpansionQuery,targetBrandCandidates,productHasTargetBrand,compactCatalogProduct,catalogPresenceForTargets,nearbyCatalogProductsForTargets,productForResearchFact,researchFactProductName,exactCoverageProductNamesMatch,mergeVerifiedMemoryWithResearch,productNamesFromToolRequest} from './agentManagerToolExecutor.js';
+import {AgentManagerToolExecutor,groundedBuyerQuestion,blockedLeadReplayResult,isBlockedLeadReplayResult,durableLeadOutboxStatus,typedProductClassKey,productMentionRoleForTargetName,productNameAllowedAsExactTarget,targetProductNamesForRequest,suppressedContextTargetProductNamesForRequest,comparisonAttributesForRequest,comparisonAttributeBindingsForRequest,productLookupText,productMatchesTargetName,productMatchesExactTargetIdentity,resolvedToolProductIntent,toolRequestTargetsPrimarySelectionClass,productsMatchingToolRequestIntent,resolvedToolPowerSource,WEB_MIN_EXECUTION_MS,CURRENT_PRICE_VERIFICATION_TOP_K,effectiveAgentToolTimeoutMs,productsFromPersistedToolResult,maximumToolResultItemCount,assertToolResultBounds,productMeetsStructuredPowerSource,hardSelectionNumber,resolvedEligibilityStatusForStrictKinds,passesNativeConstraintOrResolvedProof,filterProductsByStructuredSelectionPolicy,catalogCandidatesSatisfyingConditionalWebRequest,allowCatalogOnlyResearchForWebRequest,SelectionCandidateTier,visibleSelectionTier,structuredCatalogExpansionQuery,targetBrandCandidates,productHasTargetBrand,compactCatalogProduct,catalogPresenceForTargets,nearbyCatalogProductsForTargets,productForResearchFact,researchFactProductName,exactCoverageProductNamesMatch,mergeVerifiedMemoryWithResearch,productNamesFromToolRequest} from './agentManagerToolExecutor.js';
 export {productMatchesExactTargetIdentity,productsMatchingToolRequestIntent,effectiveAgentToolTimeoutMs,filterProductsByStructuredSelectionPolicy,catalogCandidatesSatisfyingConditionalWebRequest,allowCatalogOnlyResearchForWebRequest} from './agentManagerToolExecutor.js';
 import {validateAgentAnswer,AgentManagerReviewInput,selectedCardsContradictReadiness,generatorSelectionOversizeIssue,requestStringArray,productMentionMatchesName,productNameContainsExactComparisonMention,toolRequestEvidenceText,productClassFromIntentMention,canonicalProductClassFromIntent,coerceVisibleCardIntent,generatorLoadRequirementKw,normalizedTextIncludesAny,presentCatalogPresenceLine,presentCatalogPresenceRelevant,nonFactBearingToolResultIds,uniqueReviewIssues,factSourceIdsFromNonFactBearingTools,webResearchTargetsCurrentIntent,answerStatesExactCatalogAbsence,researchGuidanceSemanticallySatisfied,expectedResearchGuidanceText} from './agentManagerReleaseValidator.js';
 export type {AgentManagerReviewInput} from './agentManagerReleaseValidator.js';
@@ -38,7 +38,7 @@ import { assessVisibleCardReadiness, budgetMaxFromNeedState, filterGeneratorProd
 import { buildGeneratorLoadToolPayload, hasUnconfirmedGeneratorLoadBasisResult, isGeneratorProductClass } from './agentManagerGeneratorLoad.js';
 import { buildSalesManagerPolicyTrace, SALES_MANAGER_POLICY_PACK_HASH, SALES_MANAGER_POLICY_PACK_VERSION } from './salesManagerBehaviorPolicy.js';
 import { agentManagerToolRegistry, toolResultByteLength, validateToolRequest, validateToolResultOutput } from './agentManagerToolRegistry.js';
-import { AgentManagerTurnBudget, AgentManagerTurnBudgetExceededError, DEFAULT_AGENT_MANAGER_TURN_LIMITS, agentManagerTurnLimitsForProfile, runWithAgentManagerTurnBudget, selectAgentManagerBudgetProfile } from './agentManagerTurnBudget.js';
+import { AGENT_MANAGER_FINALIZATION_RESERVE_MS, AgentManagerTurnBudget, AgentManagerTurnBudgetExceededError, DEFAULT_AGENT_MANAGER_TURN_LIMITS, agentManagerTurnLimitsForProfile, runWithAgentManagerTurnBudget, selectAgentManagerBudgetProfile } from './agentManagerTurnBudget.js';
 import { agentIntentRequiresCatalogEvidence, evaluateAgentManagerPolicyGate } from './agentManagerPolicyGate.js';
 import { guardCustomerOutput } from './agentManagerOutputGuard.js';
 import { buildDecisionArtifact } from './decisionArtifact.js';
@@ -1185,6 +1185,9 @@ class AnswerValidationBlockedError extends Error {
 const TURN_COMMIT_RESERVE_MS = 5_000;
 const SEMANTIC_DECISION_ATTEMPT_TIMEOUT_MS = 45_000;
 const SEMANTIC_DECISION_DOWNSTREAM_RESERVE_MS = 45_000;
+const OBSERVATION_MIN_EXECUTION_MS = 10_000;
+const OBSERVATION_DEFAULT_DOWNSTREAM_RESERVE_MS = 30_000;
+const ANSWER_REPAIR_MIN_REMAINING_MS = 30_000;
 
 
 function parseSavedChatResponsePayload(value: unknown): ChatResponsePayload | null {
@@ -2921,6 +2924,9 @@ private async persistVerifiedResearchFacts(input: {
       return read;
     };
     let continuation: ContinuationOutcome | undefined;
+    const observationDownstreamReserveMs = () => turnBudget.profile === 'RESEARCH'
+      ? AGENT_MANAGER_FINALIZATION_RESERVE_MS
+      : OBSERVATION_DEFAULT_DOWNSTREAM_RESERVE_MS;
     const knownEvidence = await verifiedEvidenceFor(products);
     const knownFactShortPath = toolResults.length > 0 && toolResults.every(result => result.status === 'ok') &&
       knownTechnicalAnswerReady({ intent, products, facts: knownEvidence.facts, conflicts: knownEvidence.conflicts, toolResults });
@@ -2971,7 +2977,8 @@ private async persistVerifiedResearchFacts(input: {
         const { facts: verifiedProductFacts, conflicts: conflictingVerifiedProductFacts } = await verifiedEvidenceFor(observationProducts);
         let decision: ContinuationDecision;
         try {
-          if (!savedObservation && turnBudget.remainingWallTimeMs() < 40_000) {
+          if (!savedObservation && turnBudget.remainingWallTimeMs() <
+            observationDownstreamReserveMs() + OBSERVATION_MIN_EXECUTION_MS) {
             await stop('answer_time_reserve');
             break;
           }
@@ -2985,7 +2992,7 @@ private async persistVerifiedResearchFacts(input: {
               intent, products: observationProducts, toolResults, verifiedProductFacts, conflictingVerifiedProductFacts,
               pendingLeadCaptureDraft: pendingLeadDraftContext,
               round, remainingBudget: turnBudget.snapshot(),
-              structuredDeadlineAtMs: turnBudget.deadlineForStage(20_000, 30_000),
+              structuredDeadlineAtMs: turnBudget.deadlineForStage(20_000, observationDownstreamReserveMs()),
               signal: input.signal
             }));
           }
@@ -2993,7 +3000,8 @@ private async persistVerifiedResearchFacts(input: {
             unreadFirstPartyUrls: unreadFirstPartyUrls(userMessage, toolResults) });
           if (issues.length && !savedObservation && !observationRepairUsed &&
             decision.toolRequests.every(request => continuationReadTools.has(request.tool)) &&
-            turnBudget.remainingWallTimeMs() >= 40_000) {
+            turnBudget.remainingWallTimeMs() >=
+              observationDownstreamReserveMs() + OBSERVATION_MIN_EXECUTION_MS) {
             observationRepairUsed = true;
             await this.conversations.upsertTurnCheckpoint({
               sessionId: input.sessionId, turnId: input.turnId, executionOwner: input.executionOwner,
@@ -3008,7 +3016,7 @@ private async persistVerifiedResearchFacts(input: {
               pendingLeadCaptureDraft: pendingLeadDraftContext,
               round, remainingBudget: turnBudget.snapshot(),
               validationFeedback: { issues, rejectedDecision: decision },
-              structuredDeadlineAtMs: turnBudget.deadlineForStage(20_000, 30_000),
+              structuredDeadlineAtMs: turnBudget.deadlineForStage(20_000, observationDownstreamReserveMs()),
               signal: input.signal
             }));
             issues = continuationValidationIssues({ decision, intent, products: observationProducts,
@@ -3085,6 +3093,7 @@ private async persistVerifiedResearchFacts(input: {
           documentReadContext,
           catalogResearchCache,
           freshResearchResults,
+          downstreamAnswerReserveMs: AGENT_MANAGER_FINALIZATION_RESERVE_MS,
           budget: turnBudget, signal: input.signal
         }));
         continuation = { status: 'stopped', rounds: round, rationale: decision.rationale,
@@ -3225,7 +3234,7 @@ private async persistVerifiedResearchFacts(input: {
     const savedAnswer = legacyIntentUpgraded
       ? { found: false as const, payload: undefined }
       : succeededCheckpoint(persistedExecution.checkpoints, 'answer_contract_created');
-    if (turnBudget.remainingWallTimeMs() < WEB_ANSWER_RESERVE_MS) {
+    if (turnBudget.remainingWallTimeMs() < AGENT_MANAGER_FINALIZATION_RESERVE_MS) {
       turnBudget.applySemanticProfile('RESEARCH','finalization_reserve_after_reads');
     }
     let answer: AnswerContract;
@@ -3322,7 +3331,7 @@ private async persistVerifiedResearchFacts(input: {
       if (review.verdict === 'block' && review.issues.length > 0 &&
         review.issues.every((issue) => issue.code === 'customer_output_research_process_disclosure') &&
         !input.signal?.aborted && turnBudget.remainingWallTimeMs() > 0 &&
-        turnBudget.remainingWallTimeMs() < WEB_ANSWER_RESERVE_MS) {
+        turnBudget.remainingWallTimeMs() < ANSWER_REPAIR_MIN_REMAINING_MS) {
         await this.trace(input.sessionId, input.turnId, 'recovery', 'editorial_repair_deferred_budget', {
           issueCodes: review.issues.map((issue) => issue.code), remainingTurnMs: turnBudget.remainingWallTimeMs()
         });
@@ -3334,7 +3343,7 @@ private async persistVerifiedResearchFacts(input: {
         const issueCodes = review.issues.map((issue) => issue.code);
         const repairable = review.issues.every((issue) => issue.code !== 'requires_adjudication');
         if (repairable) turnBudget.applySemanticProfile('RESEARCH','validated_review_requires_repair');
-        const canAffordRepair = turnBudget.remainingWallTimeMs() > 30_000;
+        const canAffordRepair = turnBudget.remainingWallTimeMs() > ANSWER_REPAIR_MIN_REMAINING_MS;
         if (repairable && canAffordRepair) {
           try {
           await this.trace(input.sessionId, input.turnId, 'recovery', 'answer_review_repair_started', {
@@ -3931,6 +3940,7 @@ private async executeTools(input: {
     documentReadContext?: ProductResearchDocumentReadContext;
     catalogResearchCache?: Map<string, ProductComparisonResearchResult>;
     freshResearchResults?: ProductComparisonResearchResult[];
+    downstreamAnswerReserveMs?: number;
     budget: AgentManagerTurnBudget;
     signal?: AbortSignal;
   }) {

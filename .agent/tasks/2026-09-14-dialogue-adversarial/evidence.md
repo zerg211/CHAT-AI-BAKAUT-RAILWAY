@@ -23,7 +23,7 @@ Branch: `codex/dialogue-adversarial-correctness`
 | AC7 | PASS | Admin detail renders turn status/error/build, current readiness, task outcome, unresolved facts, required-tool/research diagnostics and warnings. |
 | AC8 | PASS | Contact panel follows the latest valid assistant `leadRequested`; sending/error placeholders cannot create or revoke authorization. |
 | AC9 | PASS | All local proof below passed without a local OpenAI call. |
-| AC10 | PENDING | GitHub merge, Railway marker and the new adaptive production-widget dialogue follow after this pre-publication proof. |
+| AC10 | IN PROGRESS | PR #26 and Railway deployment passed. The first production dialogue #2186 exposed a finalization deadline defect; the corrective branch is verified locally and awaits merge, deployment and a fresh clean-session dialogue. |
 
 ## Fresh verification
 
@@ -38,9 +38,18 @@ Commands and results:
 
 Raw logs are stored in `raw/`. The first parallel timeout run and its clean sequential recovery are described in `problems.md` rather than being omitted.
 
+## Production checkpoint and corrective verification
+
+- PR #26 merged as `22d519e581e87e5a06f80d73b046138695600dc8`; Railway deployment `67a170b4-833c-46dc-9bbb-05adace182b4` reached SUCCESS at that exact SHA and the public health marker matched.
+- The first clean production-widget dialogue was conversation `#2186`, session `76513e9c-98ed-4563-ab0c-885b00d7522d`. It produced no assistant message; the buyer saw `Не удалось завершить ответ. Текст вашего вопроса остался в чате.` The redacted admin capture is `raw/production-dialogue-2026-09-15-failed-admin.json`.
+- Trace cause: calculator and catalog completed; web research consumed 45.846 seconds; optional observation/read work left about 36.5 seconds, so the writer received about 21 seconds before the hard 15-second review reserve and timed out.
+- Corrective focused verification — PASS: 205/205 tests. TypeScript, no-new-regex guard and production build also PASS. The independent critic's final review is PASS.
+- Fresh full suite — 1501 tests PASS, one intentional skip, two failures. The chat-route timeout passed on focused retry. The remaining PDF integration test uses a live URL that now returns HTTP 404. The release gate passed oracle, mutation, regex, configured dependency audit, TypeScript and build, but honestly remained BLOCKED by its full-suite phase because of that external PDF fixture and one generated-sequence timeout; the complete generated-sequence file then passed 24/24 in isolation. See `problems.md` P4-P5.
+
 ## Known scoped limits
 
 - The deterministic validator proves structured `factsUsed` bindings. Exhaustive extraction of every factual statement from free-form answer text remains under the semantic factual reviewer.
 - Raw first-party page evidence is intentionally bounded to 20 addressable chunks; continuation remains responsible for later page sections.
 - Exact retry effort/goal lineage needs a new LLM-declared relation contract and was deliberately excluded from this patch. The observed empty-retry trigger is handled by fail-soft external reads, and every turn is now visible in admin.
 - The current dependency audit reports one moderate `csv-parse` advisory whose available update is breaking. The configured release boundary is high severity, so it does not invalidate this task's gate.
+- The repository's live PDF test depends on a removed `bakautprof.ru/documents/hours.pdf` fixture and cannot currently prove production PDF parsing until that fixture or a stable equivalent is restored.

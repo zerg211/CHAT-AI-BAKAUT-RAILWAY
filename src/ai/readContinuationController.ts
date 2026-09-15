@@ -1,5 +1,8 @@
 import type {AgentIntentContract,ToolResult} from './agentManagerContracts.js';
 import {CONTINUATION_MAX_ROUNDS,continuationReadTools,type ContinuationDecision} from './agentManagerContinuation.js';
+import {AGENT_MANAGER_FINALIZATION_RESERVE_MS} from './agentManagerTurnBudget.js';
+
+const CONTINUATION_MIN_EXECUTION_MS=10_000;
 
 export function admitReadContinuation(input:{
   intent:AgentIntentContract; decision:ContinuationDecision; results:ToolResult[]; round:number;
@@ -19,7 +22,7 @@ export function admitReadContinuation(input:{
     else if(!input.allReadsAlreadyPersisted && (
       input.completedToolCalls+decision.toolRequests.length>input.maxToolCalls ||
       input.completedWebCalls+decision.toolRequests.filter(request=>request.tool==='web.researchProductFacts').length>input.maxWebCalls ||
-      input.remainingMs<36_000))stopReason='continuation_budget_reserve';
+      input.remainingMs<=AGENT_MANAGER_FINALIZATION_RESERVE_MS+CONTINUATION_MIN_EXECUTION_MS))stopReason='continuation_budget_reserve';
   }
   return {state:{...state,stopReason},action:stopReason?'stop' as const:decision.action==='continue'?'execute' as const:decision.action,
     stopReason};

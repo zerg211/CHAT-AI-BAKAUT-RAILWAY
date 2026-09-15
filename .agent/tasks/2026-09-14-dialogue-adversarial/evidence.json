@@ -2,7 +2,7 @@
   "taskId": "2026-09-14-dialogue-adversarial",
   "baselineSha": "4a8edb186ad7086fb2a302782993ff3713141116",
   "branch": "codex/dialogue-adversarial-correctness",
-  "verdict": "PRE_PUBLICATION_PASS",
+  "verdict": "CORRECTIVE_PRE_PUBLICATION_IN_PROGRESS",
   "acceptance": {
     "AC1": "PASS",
     "AC2": "PASS",
@@ -13,7 +13,7 @@
     "AC7": "PASS",
     "AC8": "PASS",
     "AC9": "PASS",
-    "AC10": "PENDING"
+    "AC10": "IN_PROGRESS"
   },
   "checks": {
     "typecheck": { "status": "PASS" },
@@ -43,10 +43,37 @@
     "failedAssertions": 0,
     "sequentialRetry": { "status": "PASS", "testsPassed": 20 }
   },
+  "correctiveChecks": {
+    "focusedTests": { "status": "PASS", "testsPassed": 205 },
+    "typecheck": { "status": "PASS" },
+    "noNewRegex": { "status": "PASS", "legacyBaseline": 203 },
+    "build": { "status": "PASS" },
+    "criticReview": { "status": "PASS" },
+    "fullSuite": {
+      "status": "FAIL_EXTERNAL_AND_TIMEOUT",
+      "testsPassed": 1501,
+      "testsFailed": 2,
+      "testsSkipped": 1,
+      "failed": ["firstPartyPdf live fixture HTTP 404", "dialogue ledger generated seed 22 timeout"]
+    },
+    "isolatedDialogueLedgerRetry": { "status": "PASS", "testsPassed": 24 },
+    "releaseGate": { "status": "BLOCKED_FULL_SUITE", "otherPhases": "PASS" }
+  },
   "production": {
-    "githubPr": null,
-    "mergedSha": null,
-    "railway": "PENDING",
-    "liveDialogue": "PENDING"
+    "githubPr": 26,
+    "mergedSha": "22d519e581e87e5a06f80d73b046138695600dc8",
+    "railway": {
+      "status": "SUCCESS",
+      "deploymentId": "67a170b4-833c-46dc-9bbb-05adace182b4",
+      "codeSha": "22d519e581e87e5a06f80d73b046138695600dc8"
+    },
+    "liveDialogue": {
+      "status": "FAIL",
+      "conversationId": 2186,
+      "sessionId": "76513e9c-98ed-4563-ab0c-885b00d7522d",
+      "errorCode": "agent_manager_generation_failed",
+      "cause": "final answer structured deadline exhausted after research and optional continuation"
+    },
+    "correctiveBranch": "codex/live-turn-finalization-reserve"
   }
 }
