@@ -3171,12 +3171,21 @@ async searchCatalogProducts(input: {
     }
     warnings.push(...structuredEvidence.warnings);
     throwIfSearchExpired();
+    // During a preliminary generator selection, missing catalog attributes are
+    // an explicit uncertainty, not evidence that a much larger confirmed model
+    // is a better fit. Reapply the deterministic load order after the evidence
+    // partition so nearby candidates remain in the shortlist for web checking.
+    // Final-fit selection keeps the confirmed-before-unconfirmed partition.
+    const selectionOrderedProducts = defaultLoadOrderReferenceKw !== undefined &&
+      input.intent?.selectionPolicy?.selectionGoal === 'preliminary_fit'
+      ? applyDefaultLoadOrder(structuredEvidence.products)
+      : structuredEvidence.products;
     const preferenceRankedProducts = input.intent
       ? rankCatalogProductsByStructuredPreferences({
-          products: structuredEvidence.products,
+          products: selectionOrderedProducts,
           intent: input.intent
         })
-      : structuredEvidence.products;
+      : selectionOrderedProducts;
     throwIfSearchExpired();
     let products = preferenceRankedProducts.slice(0, limit);
     const hydrateProductsById = this.products.getProductsByIds;

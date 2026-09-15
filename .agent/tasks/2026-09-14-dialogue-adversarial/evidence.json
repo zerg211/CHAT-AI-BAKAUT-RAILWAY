@@ -438,7 +438,7 @@
   "ninthCorrectiveChecks": {
     "focusedTests": {
       "status": "PASS",
-      "testsPassed": 354
+      "testsPassed": 373
     },
     "typecheck": {
       "status": "PASS"
@@ -457,7 +457,8 @@
       "status": "PASS",
       "independentTestsPassed": 134,
       "initialVerdict": "FAIL",
-      "finalVerdict": "PASS"
+      "finalVerdict": "PASS",
+      "postFeedbackTestsPassed": 83
     },
     "catalogLatencyProbe": {
       "status": "PASS",
@@ -475,6 +476,19 @@
       "nestedWebProductsRemoved": true,
       "reviewerLedgerAndRolesExhaustive": true,
       "calculatorConsumerBindingFailClosed": true
+    },
+    "preliminaryLoadOrderAfterEvidencePartition": {
+      "status": "PASS",
+      "closerUnknownCandidatesRetained": true,
+      "productionShapedTopKw": [4, 5, 6],
+      "oversized12KwDidNotDisplaceCloserCandidates": true,
+      "finalFitConfirmedFirstRetained": true
+    },
+    "githubRun34993996621": {
+      "status": "FAIL_STALE_TEST_FIXED",
+      "failedTest": "agentExactCatalogRetrieval absolute deadline",
+      "cause": "fixture crossed the former 10-second timeout instead of the actual scheduled 15-second timeout",
+      "correction": "advance Date.now by scheduledTimeoutMs plus one"
     },
     "publication": "PENDING",
     "liveAcceptance": "PENDING"
