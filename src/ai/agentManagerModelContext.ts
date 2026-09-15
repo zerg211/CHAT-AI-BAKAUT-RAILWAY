@@ -1,4 +1,3 @@
-import { isDeepStrictEqual } from 'node:util';
 import type { Product, VerifiedProductFact } from '../shared/types.js';
 import type { ToolResult } from './agentManagerContracts.js';
 
@@ -17,24 +16,24 @@ export function compactToolResultsForModel(
   products: Product[]
 ): ToolResult[] {
   const allowedProductIds = new Set(products.map((product) => product.id));
-  const productsById = new Map(products.map((product) => [product.id, product]));
   return toolResults.map((result) => {
     const payload = result.payload && typeof result.payload === 'object' && !Array.isArray(result.payload)
       ? result.payload as Record<string, unknown>
       : {};
     if (result.tool === 'web.researchProductFacts' && Array.isArray(payload.products)) {
-      const sharedProductIds: string[] = [];
-      const remainingProducts = payload.products.filter((product: unknown) => {
-        if (!product || typeof product !== 'object' || !('id' in product) || typeof product.id !== 'string') return true;
-        if (!isDeepStrictEqual(product, productsById.get(product.id))) return true;
-        sharedProductIds.push(product.id);
-        return false;
-      });
-      if (!sharedProductIds.length) return result;
-      const { products: _sharedProducts, ...rest } = payload;
+      const nestedProductIds = payload.products.flatMap((product: unknown) =>
+        product && typeof product === 'object' && 'id' in product && typeof product.id === 'string'
+          ? [product.id]
+          : []
+      );
+      const { products: _nestedProducts, ...rest } = payload;
       return { ...result, payload: { ...rest,
-        productIds: [...new Set([...(Array.isArray(payload.productIds) ? payload.productIds : []), ...sharedProductIds])],
-        ...(remainingProducts.length ? { products: remainingProducts } : {})
+        productIds: [...new Set([
+          ...(Array.isArray(payload.productIds)
+            ? payload.productIds.filter((id): id is string => typeof id === 'string')
+            : []),
+          ...nestedProductIds
+        ])]
       } };
     }
     if (!catalogTools.has(result.tool)) return result;

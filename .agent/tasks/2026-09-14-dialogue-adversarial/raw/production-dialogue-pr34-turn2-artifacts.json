@@ -1,0 +1,2120 @@
+{
+  "answers": [
+    {
+      "answer_text": "Покажу предварительный расчёт, но конкретные 2–3 модели сейчас честно назвать не могу: в доступных данных нет подтверждённых карточек генераторов, поэтому не буду придумывать названия и характеристики.\n\nПо уже работающим нагрузкам получается 2,9 кВт: холодильник — 0,3 кВт, насос — 1,1 кВт, шлифмашина — 1,5 кВт. Расчётный нижний ориентир по этой сумме — 3 кВт, то есть всего около 0,1 кВт сверх текущей нагрузки. Это не запас по запуску: пуск холодильника, насоса и шлифмашины пока не подтверждён, поэтому 3 кВт нельзя считать гарантированно достаточными.\n\nДля вашей схемы предварительно нужно смотреть бензиновый однофазный генератор с номиналом выше 3 кВт, но без карточек нельзя честно сравнить модели и назвать фактический запас каждой. Когда будет доступен шильдик насоса, его пусковые данные нужно будет сопоставить с возможностями конкретного генератора; отдельно останутся пуск холодильника и шлифмашины.",
+      "contract": {
+        "factsUsed": [
+          {
+            "value": "single_phase",
+            "factKey": "phase",
+            "attribute": "phase",
+            "claimKind": "confirmed_value",
+            "productName": null,
+            "sourceEventIds": [
+              "fact.confirmed:8cff1a5c6c2551fff4c5bc055407e1b6"
+            ],
+            "evidenceItemIds": []
+          },
+          {
+            "value": "бензин",
+            "factKey": "fuel_type",
+            "attribute": "fuel_type",
+            "claimKind": "confirmed_value",
+            "productName": null,
+            "sourceEventIds": [
+              "fact.confirmed:59446d4c80758a5e97e1d6d9493fe98f"
+            ],
+            "evidenceItemIds": []
+          },
+          {
+            "value": 0.3,
+            "factKey": "refrigerator_running_kw",
+            "attribute": "runningKw",
+            "claimKind": "confirmed_value",
+            "productName": "холодильник обычный компрессорный",
+            "sourceEventIds": [
+              "calc_generator_load_1"
+            ],
+            "evidenceItemIds": [
+              "calc_generator_load_1:payload:profile:items:0:runningKw"
+            ]
+          },
+          {
+            "value": 1.1,
+            "factKey": "pump_running_kw",
+            "attribute": "runningKw",
+            "claimKind": "confirmed_value",
+            "productName": "циркуляционный насос",
+            "sourceEventIds": [
+              "calc_generator_load_1"
+            ],
+            "evidenceItemIds": [
+              "calc_generator_load_1:payload:profile:items:1:runningKw"
+            ]
+          },
+          {
+            "value": 1.5,
+            "factKey": "angle_grinder_running_kw",
+            "attribute": "runningKw",
+            "claimKind": "confirmed_value",
+            "productName": "угловая шлифмашина",
+            "sourceEventIds": [
+              "calc_generator_load_1"
+            ],
+            "evidenceItemIds": [
+              "calc_generator_load_1:payload:profile:items:2:runningKw"
+            ]
+          },
+          {
+            "value": 2.9,
+            "factKey": "total_running_load",
+            "attribute": "totalRunningKw",
+            "claimKind": "confirmed_value",
+            "productName": null,
+            "sourceEventIds": [
+              "calc_generator_load_1"
+            ],
+            "evidenceItemIds": [
+              "calc_generator_load_1:payload:profile:totalRunningKw"
+            ]
+          },
+          {
+            "value": 3,
+            "factKey": "running_only_nominal_floor",
+            "attribute": "runningOnlyNominalFloorKw",
+            "claimKind": "confirmed_value",
+            "productName": null,
+            "sourceEventIds": [
+              "calc_generator_load_1"
+            ],
+            "evidenceItemIds": [
+              "calc_generator_load_1:payload:profile:runningOnlyNominalFloorKw"
+            ]
+          },
+          {
+            "value": "refrigerator:холодильник_обычный_компрессорный",
+            "factKey": "refrigerator_start_unknown",
+            "attribute": "missingStartingLoads",
+            "claimKind": "absence_or_unknown",
+            "productName": "холодильник обычный компрессорный",
+            "sourceEventIds": [
+              "calc_generator_load_1"
+            ],
+            "evidenceItemIds": [
+              "calc_generator_load_1:payload:profile:missingStartingLoads:0"
+            ]
+          },
+          {
+            "value": "pump:циркуляционный_насос",
+            "factKey": "pump_start_unknown",
+            "attribute": "missingStartingLoads",
+            "claimKind": "absence_or_unknown",
+            "productName": "циркуляционный насос",
+            "sourceEventIds": [
+              "calc_generator_load_1"
+            ],
+            "evidenceItemIds": [
+              "calc_generator_load_1:payload:profile:missingStartingLoads:1"
+            ]
+          },
+          {
+            "value": "handheld_tool:угловая_шлифмашина",
+            "factKey": "angle_grinder_start_unknown",
+            "attribute": "missingStartingLoads",
+            "claimKind": "absence_or_unknown",
+            "productName": "угловая шлифмашина",
+            "sourceEventIds": [
+              "calc_generator_load_1"
+            ],
+            "evidenceItemIds": [
+              "calc_generator_load_1:payload:profile:missingStartingLoads:2"
+            ]
+          }
+        ],
+        "riskFlags": [
+          "catalog_candidates_not_available",
+          "startup_loads_unconfirmed",
+          "3_kw_is_running_only_floor_not_final_sizing"
+        ],
+        "answerText": "Покажу предварительный расчёт, но конкретные 2–3 модели сейчас честно назвать не могу: в доступных данных нет подтверждённых карточек генераторов, поэтому не буду придумывать названия и характеристики.\n\nПо уже работающим нагрузкам получается 2,9 кВт: холодильник — 0,3 кВт, насос — 1,1 кВт, шлифмашина — 1,5 кВт. Расчётный нижний ориентир по этой сумме — 3 кВт, то есть всего около 0,1 кВт сверх текущей нагрузки. Это не запас по запуску: пуск холодильника, насоса и шлифмашины пока не подтверждён, поэтому 3 кВт нельзя считать гарантированно достаточными.\n\nДля вашей схемы предварительно нужно смотреть бензиновый однофазный генератор с номиналом выше 3 кВт, но без карточек нельзя честно сравнить модели и назвать фактический запас каждой. Когда будет доступен шильдик насоса, его пусковые данные нужно будет сопоставить с возможностями конкретного генератора; отдельно останутся пуск холодильника и шлифмашины.",
+        "leadAction": "none",
+        "toolResultIds": [
+          "calc_generator_load_1"
+        ],
+        "questionsAsked": [],
+        "selectedProductIds": [],
+        "selectionRationale": null,
+        "selectionReadiness": {
+          "status": "needs_more_info",
+          "rationale": "Карточки нельзя показать без конкретных товарных данных. Рабочая нагрузка и ориентир 3 кВт подтверждены, но пусковые нагрузки неизвестны, поэтому окончательная достаточность генератора не установлена.",
+          "missingFacts": [
+            "подтверждённые карточки 2–3 бензиновых однофазных генераторов из каталога",
+            "пусковая нагрузка обычного компрессорного холодильника",
+            "пусковая нагрузка циркуляционного насоса",
+            "пусковая нагрузка угловой шлифмашины"
+          ],
+          "productClass": "generator",
+          "canShowProductCards": false
+        }
+      },
+      "review": null,
+      "status": "draft",
+      "created_at": "2026-09-15T15:32:31.189Z"
+    },
+    {
+      "answer_text": "Предварительный ориентир такой: одновременно работающая нагрузка — 2,9 кВт, а расчётный нижний порог по уже работающим потребителям — 3 кВт. Это не достаточная мощность для гарантированного запуска: пуск холодильника, насоса и угловой шлифмашины пока неизвестен.\n\nПоэтому запас можно считать только относительно рабочего порога 3 кВт: у генератора с номиналом X запас над этой нагрузкой был бы X − 3 кВт. Но без пусковых данных это ещё не подтверждает, что генератор выдержит запуск. Для вашей схемы инструмент включается после насоса, однако пуск насоса всё равно остаётся решающим неопределённым параметром.\n\nКонкретные 2–3 модели сейчас не назову: подтверждённых карточек генераторов в доступных данных нет, а выдавать случайные модели за предварительно подходящие было бы неправильно. Известны требования к будущим вариантам: бензин, одна фаза 220 В и номинал не ниже ориентировочных 3 кВт; окончательная пригодность пока не подтверждена из-за неизвестного пуска холодильника, насоса и шлифмашины.",
+      "contract": {
+        "factsUsed": [
+          {
+            "value": "single_phase",
+            "factKey": "phase",
+            "attribute": "phase",
+            "claimKind": "confirmed_value",
+            "productName": null,
+            "sourceEventIds": [
+              "fact.confirmed:8cff1a5c6c2551fff4c5bc055407e1b6"
+            ],
+            "evidenceItemIds": []
+          },
+          {
+            "value": "бензин",
+            "factKey": "fuel_type",
+            "attribute": "fuel_type",
+            "claimKind": "confirmed_value",
+            "productName": null,
+            "sourceEventIds": [
+              "fact.confirmed:59446d4c80758a5e97e1d6d9493fe98f"
+            ],
+            "evidenceItemIds": []
+          },
+          {
+            "value": 0.3,
+            "factKey": "refrigerator_running_kw",
+            "attribute": "runningKw",
+            "claimKind": "confirmed_value",
+            "productName": null,
+            "sourceEventIds": [
+              "calc_generator_load_1"
+            ],
+            "evidenceItemIds": [
+              "calc_generator_load_1:payload:profile:items:0:runningKw"
+            ]
+          },
+          {
+            "value": 1.1,
+            "factKey": "pump_running_kw",
+            "attribute": "runningKw",
+            "claimKind": "confirmed_value",
+            "productName": null,
+            "sourceEventIds": [
+              "calc_generator_load_1"
+            ],
+            "evidenceItemIds": [
+              "calc_generator_load_1:payload:profile:items:1:runningKw"
+            ]
+          },
+          {
+            "value": 1.5,
+            "factKey": "angle_grinder_running_kw",
+            "attribute": "runningKw",
+            "claimKind": "confirmed_value",
+            "productName": null,
+            "sourceEventIds": [
+              "calc_generator_load_1"
+            ],
+            "evidenceItemIds": [
+              "calc_generator_load_1:payload:profile:items:2:runningKw"
+            ]
+          },
+          {
+            "value": 2.9,
+            "factKey": "total_running_kw",
+            "attribute": "totalRunningKw",
+            "claimKind": "confirmed_value",
+            "productName": null,
+            "sourceEventIds": [
+              "calc_generator_load_1"
+            ],
+            "evidenceItemIds": [
+              "calc_generator_load_1:payload:profile:totalRunningKw"
+            ]
+          },
+          {
+            "value": 3,
+            "factKey": "running_only_nominal_floor_kw",
+            "attribute": "runningOnlyNominalFloorKw",
+            "claimKind": "confirmed_value",
+            "productName": null,
+            "sourceEventIds": [
+              "calc_generator_load_1"
+            ],
+            "evidenceItemIds": [
+              "calc_generator_load_1:payload:profile:runningOnlyNominalFloorKw"
+            ]
+          },
+          {
+            "value": "refrigerator:холодильник_обычный_компрессорный",
+            "factKey": "refrigerator_start_unknown",
+            "attribute": "missingStartingLoads",
+            "claimKind": "absence_or_unknown",
+            "productName": null,
+            "sourceEventIds": [
+              "calc_generator_load_1"
+            ],
+            "evidenceItemIds": [
+              "calc_generator_load_1:payload:profile:missingStartingLoads:0"
+            ]
+          },
+          {
+            "value": "pump:циркуляционный_насос",
+            "factKey": "pump_start_unknown",
+            "attribute": "missingStartingLoads",
+            "claimKind": "absence_or_unknown",
+            "productName": null,
+            "sourceEventIds": [
+              "calc_generator_load_1"
+            ],
+            "evidenceItemIds": [
+              "calc_generator_load_1:payload:profile:missingStartingLoads:1"
+            ]
+          },
+          {
+            "value": "handheld_tool:угловая_шлифмашина",
+            "factKey": "angle_grinder_start_unknown",
+            "attribute": "missingStartingLoads",
+            "claimKind": "absence_or_unknown",
+            "productName": null,
+            "sourceEventIds": [
+              "calc_generator_load_1"
+            ],
+            "evidenceItemIds": [
+              "calc_generator_load_1:payload:profile:missingStartingLoads:2"
+            ]
+          },
+          {
+            "value": true,
+            "factKey": "simultaneous_running",
+            "attribute": "simultaneousRunning",
+            "claimKind": "confirmed_value",
+            "productName": null,
+            "sourceEventIds": [
+              "calc_generator_load_1"
+            ],
+            "evidenceItemIds": [
+              "calc_generator_load_1:payload:profile:simultaneousRunning"
+            ]
+          },
+          {
+            "value": false,
+            "factKey": "simultaneous_starting",
+            "attribute": "simultaneousStarting",
+            "claimKind": "confirmed_value",
+            "productName": null,
+            "sourceEventIds": [
+              "calc_generator_load_1"
+            ],
+            "evidenceItemIds": [
+              "calc_generator_load_1:payload:profile:simultaneousStarting"
+            ]
+          }
+        ],
+        "riskFlags": [
+          "starting_loads_unconfirmed",
+          "generator_cards_not_confirmed"
+        ],
+        "answerText": "Предварительный ориентир такой: одновременно работающая нагрузка — 2,9 кВт, а расчётный нижний порог по уже работающим потребителям — 3 кВт. Это не достаточная мощность для гарантированного запуска: пуск холодильника, насоса и угловой шлифмашины пока неизвестен.\n\nПоэтому запас можно считать только относительно рабочего порога 3 кВт: у генератора с номиналом X запас над этой нагрузкой был бы X − 3 кВт. Но без пусковых данных это ещё не подтверждает, что генератор выдержит запуск. Для вашей схемы инструмент включается после насоса, однако пуск насоса всё равно остаётся решающим неопределённым параметром.\n\nКонкретные 2–3 модели сейчас не назову: подтверждённых карточек генераторов в доступных данных нет, а выдавать случайные модели за предварительно подходящие было бы неправильно. Известны требования к будущим вариантам: бензин, одна фаза 220 В и номинал не ниже ориентировочных 3 кВт; окончательная пригодность пока не подтверждена из-за неизвестного пуска холодильника, насоса и шлифмашины.",
+        "leadAction": "none",
+        "toolResultIds": [
+          "calc_generator_load_1",
+          "search_generators_1",
+          "research_pump_start_1"
+        ],
+        "questionsAsked": [],
+        "selectedProductIds": [],
+        "selectionRationale": null,
+        "selectionReadiness": {
+          "status": "needs_more_info",
+          "rationale": "Рабочая нагрузка и требования по фазе и топливу известны, но точный подбор невозможен без пусковых данных; подтверждённых карточек товаров для предварительного показа сейчас нет.",
+          "missingFacts": [
+            "Пусковая нагрузка холодильника не подтверждена",
+            "Пусковая нагрузка циркуляционного насоса не подтверждена",
+            "Пусковая нагрузка угловой шлифмашины не подтверждена",
+            "Конкретные карточки генераторов не подтверждены"
+          ],
+          "productClass": "generator",
+          "canShowProductCards": false
+        }
+      },
+      "review": {
+        "issues": [
+          {
+            "code": "research_guidance_uncertainty_mismatch",
+            "message": "Grounded factual review rejected the claim \"Конкретные 2–3 модели сейчас не назову: подтверждённых карточек генераторов в доступных данных нет, а выдавать случайные модели за предварительно подходящие было бы неправильно. Известны требования к будущим вариантам: бензин, одна фаза 220 В и номинал не ниже ориентировочных 3 кВт; окончательная пригодность пока не подтверждена из-за неизвестного пуска холодильника, насоса и шлифмашины.\" using search_generators_1: Фраза о том, что подтверждённых карточек генераторов в доступных данных нет, сформулирована слишком категорично: поиск завершился тайм-аутом, а технический статус указывает, что источники не исчерпаны. Кроме того, требования «бензин» и «одна фаза 220 В» не следуют из сообщения покупателя или подтверждённых фактов.",
+            "evidence": "Конкретные 2–3 модели сейчас не назову: подтверждённых карточек генераторов в доступных данных нет, а выдавать случайные модели за предварительно подходящие было бы неправильно. Известны требования к будущим вариантам: бензин, одна фаза 220 В и номинал не ниже ориентировочных 3 кВт; окончательная пригодность пока не подтверждена из-за неизвестного пуска холодильника, насоса и шлифмашины.",
+            "severity": "high"
+          }
+        ],
+        "verdict": "block"
+      },
+      "status": "rejected",
+      "created_at": "2026-09-15T15:33:02.476Z"
+    }
+  ],
+  "tools": [
+    {
+      "tool_name": "calculator.generatorLoad",
+      "tool_request_id": "calc_generator_load_1",
+      "status": "ok",
+      "payload": {
+        "loads": [
+          {
+            "kind": "refrigerator",
+            "name": "холодильник обычный компрессорный",
+            "count": 1,
+            "source": "explicit_user",
+            "evidence": "холодильник обычный компрессорный",
+            "basisKind": "specific_type_or_function",
+            "runningKw": 0.3,
+            "basisSignals": [
+              "consumer_type_known",
+              "consumer_function_known",
+              "explicit_power",
+              "simultaneous_operation_known"
+            ],
+            "operationMode": "continuous",
+            "runningSource": "explicit_user",
+            "coRunningGroup": "all",
+            "startingSource": "not_provided",
+            "runningObservedKw": 0.3
+          },
+          {
+            "kind": "pump",
+            "name": "циркуляционный насос",
+            "count": 1,
+            "source": "explicit_user",
+            "evidence": "циркуляционный насос 1,1 кВт",
+            "basisKind": "exact_power",
+            "runningKw": 1.1,
+            "basisSignals": [
+              "consumer_type_known",
+              "consumer_function_known",
+              "voltage_or_phase_known",
+              "explicit_power"
+            ],
+            "operationMode": "continuous",
+            "runningSource": "explicit_user",
+            "coRunningGroup": "all",
+            "startingSource": "not_provided",
+            "runningObservedKw": 1.1
+          },
+          {
+            "kind": "handheld_tool",
+            "name": "угловая шлифмашина",
+            "count": 1,
+            "source": "explicit_user",
+            "evidence": "угловая шлифмашина 1,5 кВт",
+            "basisKind": "exact_power",
+            "runningKw": 1.5,
+            "basisSignals": [
+              "consumer_type_known",
+              "explicit_power"
+            ],
+            "operationMode": "occasional",
+            "runningSource": "explicit_user",
+            "coRunningGroup": "tool_after_pump",
+            "startingSource": "not_provided",
+            "runningObservedKw": 1.5
+          }
+        ],
+        "profile": {
+          "items": [
+            {
+              "kind": "refrigerator",
+              "name": "холодильник обычный компрессорный",
+              "count": 1,
+              "source": "explicit_user",
+              "evidence": "холодильник обычный компрессорный",
+              "basisKind": "specific_type_or_function",
+              "runningKw": 0.3,
+              "basisSignals": [
+                "consumer_type_known",
+                "consumer_function_known",
+                "explicit_power",
+                "simultaneous_operation_known"
+              ],
+              "operationMode": "continuous",
+              "runningSource": "explicit_user",
+              "coRunningGroup": "all",
+              "startingSource": "not_provided",
+              "runningObservedKw": 0.3
+            },
+            {
+              "kind": "pump",
+              "name": "циркуляционный насос",
+              "count": 1,
+              "source": "explicit_user",
+              "evidence": "циркуляционный насос 1,1 кВт",
+              "basisKind": "exact_power",
+              "runningKw": 1.1,
+              "basisSignals": [
+                "consumer_type_known",
+                "consumer_function_known",
+                "voltage_or_phase_known",
+                "explicit_power"
+              ],
+              "operationMode": "continuous",
+              "runningSource": "explicit_user",
+              "coRunningGroup": "all",
+              "startingSource": "not_provided",
+              "runningObservedKw": 1.1
+            },
+            {
+              "kind": "handheld_tool",
+              "name": "угловая шлифмашина",
+              "count": 1,
+              "source": "explicit_user",
+              "evidence": "угловая шлифмашина 1,5 кВт",
+              "basisKind": "exact_power",
+              "runningKw": 1.5,
+              "basisSignals": [
+                "consumer_type_known",
+                "explicit_power"
+              ],
+              "operationMode": "occasional",
+              "runningSource": "explicit_user",
+              "coRunningGroup": "tool_after_pump",
+              "startingSource": "not_provided",
+              "runningObservedKw": 1.5
+            }
+          ],
+          "scenarios": [
+            {
+              "id": "base",
+              "label": "base continuous load",
+              "itemKinds": [
+                "refrigerator:холодильник_обычный_компрессорный",
+                "pump:циркуляционный_насос",
+                "handheld_tool:угловая_шлифмашина"
+              ],
+              "calculation": "холодильник обычный компрессорный: 1 x 0.3 kW run / ? kW start; циркуляционный насос: 1 x 1.1 kW run / ? kW start; угловая шлифмашина: 1 x 1.5 kW run / ? kW start",
+              "totalRunningKw": 2.9,
+              "missingStartingLoads": [
+                "refrigerator:холодильник_обычный_компрессорный",
+                "pump:циркуляционный_насос",
+                "handheld_tool:угловая_шлифмашина"
+              ],
+              "runningOnlyNominalFloorKw": 3
+            }
+          ],
+          "calculation": "холодильник обычный компрессорный: 1 x 0.3 kW run / ? kW start; циркуляционный насос: 1 x 1.1 kW run / ? kW start; угловая шлифмашина: 1 x 1.5 kW run / ? kW start",
+          "totalRunningKw": 2.9,
+          "primaryScenarioId": "base",
+          "simultaneousRunning": true,
+          "missingStartingLoads": [
+            "refrigerator:холодильник_обычный_компрессорный",
+            "pump:циркуляционный_насос",
+            "handheld_tool:угловая_шлифмашина"
+          ],
+          "simultaneousStarting": false,
+          "runningOnlyNominalFloorKw": 3,
+          "simultaneousStartingKinds": []
+        },
+        "estimateBasis": "exact_or_user_provided"
+      },
+      "warnings": [
+        "generator_load_startup_unconfirmed",
+        "attempts:1",
+        "duration_ms:5"
+      ],
+      "error_code": null,
+      "created_at": "2026-09-15T15:31:56.156Z"
+    },
+    {
+      "tool_name": "catalog.search",
+      "tool_request_id": "search_generators_1",
+      "status": "timeout",
+      "payload": {
+        "error": {
+          "code": "23",
+          "name": "TimeoutError",
+          "message": "Catalog search deadline exceeded."
+        }
+      },
+      "warnings": [
+        "tool_execution_error",
+        "attempts:1",
+        "duration_ms:20187"
+      ],
+      "error_code": "23",
+      "created_at": "2026-09-15T15:32:16.351Z"
+    },
+    {
+      "tool_name": "web.researchProductFacts",
+      "tool_request_id": "research_pump_start_1",
+      "status": "ok",
+      "payload": {
+        "facts": [],
+        "products": [],
+        "warnings": [
+          "web_research_skipped_insufficient_budget"
+        ],
+        "conflicts": [],
+        "researchScope": "public_information",
+        "usedWebSearch": false,
+        "answerGuidance": {
+          "coverage": [],
+          "completeness": "not_answered",
+          "directAnswer": ""
+        },
+        "sourceAttempts": [
+          {
+            "tier": "official_page",
+            "outcome": "skipped_budget"
+          },
+          {
+            "tier": "official_manual",
+            "outcome": "skipped_budget"
+          },
+          {
+            "tier": "reliable_secondary",
+            "outcome": "skipped_budget"
+          }
+        ],
+        "catalogPresence": [],
+        "researchOutcome": "partial",
+        "sourcesExhausted": false,
+        "summaryForAnswer": "",
+        "unconfirmedFacts": [],
+        "searchDisposition": "skipped_budget",
+        "targetProductNames": [],
+        "comparisonAttributes": [
+          "starting_capability",
+          "starting_power",
+          "motor_starting_current"
+        ],
+        "nearbyCatalogProducts": [],
+        "suppressedTargetProductNames": []
+      },
+      "warnings": [
+        "web_research_skipped_insufficient_budget",
+        "attempts:1",
+        "duration_ms:21"
+      ],
+      "error_code": null,
+      "created_at": "2026-09-15T15:32:16.381Z"
+    }
+  ],
+  "checkpoints": [
+    {
+      "checkpoint": "semantic_decision_proposed",
+      "status": "succeeded",
+      "payload": {
+        "intent": {
+          "grounding": {
+            "taskType": "product_selection",
+            "rationale": "Покупатель просит предварительные каталожные варианты; рабочая нагрузка известна, но пуск насоса не подтверждён, поэтому требуется каталог и внешняя проверка решающего пробела.",
+            "webPurpose": "technical_specs",
+            "responseMode": "recommend",
+            "sourcePolicy": "web_required",
+            "buyerQuestion": null,
+            "webRequirement": "conditional_on_catalog_gap",
+            "buyerRequestedWeb": false,
+            "requiredToolKinds": [
+              "calculator.generatorLoad",
+              "catalog.search",
+              "web.researchProductFacts"
+            ],
+            "catalogRequirement": "required",
+            "technicalAttributes": [
+              "nominal_power_kw",
+              "maximum_power_kw",
+              "starting_capability",
+              "starting_power",
+              "motor_starting_current"
+            ]
+          },
+          "riskFlags": [],
+          "toolRequests": [
+            {
+              "id": "calc_generator_load_1",
+              "args": {
+                "loads": [
+                  {
+                    "kind": "refrigerator",
+                    "name": "холодильник обычный компрессорный",
+                    "count": 1,
+                    "source": "explicit_user",
+                    "evidence": "холодильник обычный компрессорный",
+                    "basisKind": "specific_type_or_function",
+                    "runningKw": 0.3,
+                    "basisSignals": [
+                      "consumer_type_known",
+                      "consumer_function_known",
+                      "explicit_power",
+                      "simultaneous_operation_known"
+                    ],
+                    "operationMode": "continuous",
+                    "runningSource": "explicit_user",
+                    "coRunningGroup": "all",
+                    "startingSource": "not_provided"
+                  },
+                  {
+                    "kind": "circulation_pump",
+                    "name": "циркуляционный насос",
+                    "count": 1,
+                    "source": "explicit_user",
+                    "evidence": "циркуляционный насос 1,1 кВт",
+                    "basisKind": "exact_power",
+                    "runningKw": 1.1,
+                    "basisSignals": [
+                      "consumer_type_known",
+                      "consumer_function_known",
+                      "voltage_or_phase_known",
+                      "explicit_power"
+                    ],
+                    "operationMode": "continuous",
+                    "runningSource": "explicit_user",
+                    "coRunningGroup": "all",
+                    "startingSource": "not_provided"
+                  },
+                  {
+                    "kind": "angle_grinder",
+                    "name": "угловая шлифмашина",
+                    "count": 1,
+                    "source": "explicit_user",
+                    "evidence": "угловая шлифмашина 1,5 кВт",
+                    "basisKind": "exact_power",
+                    "runningKw": 1.5,
+                    "basisSignals": [
+                      "consumer_type_known",
+                      "explicit_power"
+                    ],
+                    "operationMode": "occasional",
+                    "runningSource": "explicit_user",
+                    "coRunningGroup": "tool_after_pump",
+                    "startingSource": "not_provided"
+                  }
+                ],
+                "phase": "single_phase",
+                "query": "Предварительный расчёт нагрузки мастерской",
+                "powerSource": "fuel",
+                "estimateBasis": "exact_or_user_provided",
+                "productIntent": "предварительный подбор генератора для мастерской",
+                "semanticQuery": "генератор для холодильника 0,3 кВт, циркуляционного насоса 1,1 кВт и угловой шлифмашины 1,5 кВт",
+                "simultaneousRunning": true,
+                "simultaneousStarting": false,
+                "canonicalProductIntent": "generator",
+                "simultaneousStartingKinds": []
+              },
+              "tool": "calculator.generatorLoad",
+              "required": true,
+              "rationale": "Пересчитать рабочую нагрузку и предварительный минимум.",
+              "coversRequirementIds": [
+                "need_generator_workshop_1::generator_load_scenario"
+              ]
+            },
+            {
+              "id": "search_generators_1",
+              "args": {
+                "limit": 3,
+                "phase": "single_phase",
+                "query": "Бензиновые однофазные генераторы для предварительной нагрузки около 2,9 кВт",
+                "identifiers": [],
+                "powerSource": "fuel",
+                "productIntent": "предварительный подбор бензинового генератора",
+                "semanticQuery": "генератор бензиновый однофазный для мастерской",
+                "comparisonAttributes": [
+                  "nominal_power_kw",
+                  "maximum_power_kw",
+                  "price_rub",
+                  "weight_kg"
+                ],
+                "canonicalProductIntent": "generator"
+              },
+              "tool": "catalog.search",
+              "required": true,
+              "rationale": "Найти 2–3 кандидата в каталоге.",
+              "coversRequirementIds": [
+                "need_generator_workshop_1::phase",
+                "need_generator_workshop_1::fuel_type"
+              ]
+            },
+            {
+              "id": "research_pump_start_1",
+              "args": {
+                "limit": 5,
+                "phase": "single_phase",
+                "query": "Как оценить пусковую нагрузку обычного компрессорного холодильника и циркуляционного насоса 1,1 кВт при подборе бензинового генератора; нужны типовые диапазоны и ограничения оценки",
+                "powerSource": "fuel",
+                "productNames": [],
+                "productIntent": "проверка решающей пусковой нагрузки для предварительного подбора генератора",
+                "researchScope": "public_information",
+                "semanticQuery": "пусковая нагрузка циркуляционного насоса 1,1 кВт и компрессорного холодильника",
+                "comparisonAttributes": [
+                  "starting_capability",
+                  "starting_power",
+                  "motor_starting_current"
+                ],
+                "canonicalProductIntent": "generator",
+                "comparisonAttributeBindings": []
+              },
+              "tool": "web.researchProductFacts",
+              "required": true,
+              "rationale": "Проверить внешний источник по неизвестному пуску; результат останется ориентировочным без шильдика.",
+              "coversRequirementIds": [
+                "need_generator_workshop_1::generator_load_scenario"
+              ]
+            }
+          ],
+          "policyRuleIds": [
+            "core.help_first",
+            "grounding.search_before_specialist",
+            "cards.explain_compromise",
+            "cheap.preliminary_not_final"
+          ],
+          "requiresTools": true,
+          "productMentions": [
+            {
+              "name": "угловая шлифмашина",
+              "role": "context_load_device",
+              "evidence": "угловая шлифмашина 1,5 кВт",
+              "productClass": "электроинструмент",
+              "sourceMessageId": null
+            },
+            {
+              "name": "холодильник обычный компрессорный",
+              "role": "context_load_device",
+              "evidence": "холодильник обычный компрессорный",
+              "productClass": "бытовой холодильник",
+              "sourceMessageId": null
+            }
+          ],
+          "selectionPolicy": {
+            "phase": "single_phase",
+            "maxCards": 3,
+            "rationale": "Показать минимально достаточные по предварительному расчёту варианты с отдельным объяснением запаса и неизвестного пуска насоса.",
+            "needAction": "continue",
+            "powerSource": "fuel",
+            "requirements": [
+              {
+                "id": "need_generator_workshop_1::phase",
+                "kind": "phase",
+                "role": "hard_constraint",
+                "unit": null,
+                "value": "single_phase",
+                "evidence": "Всё однофазное 220 В",
+                "relation": "must_have",
+                "strictness": "strict",
+                "verification": {
+                  "mode": "product_attribute"
+                }
+              },
+              {
+                "id": "need_generator_workshop_1::fuel_type",
+                "kind": "fuel_type",
+                "role": "hard_constraint",
+                "unit": null,
+                "value": "бензин",
+                "evidence": "бензиновый генератор",
+                "relation": "must_have",
+                "strictness": "strict",
+                "verification": {
+                  "mode": "product_attribute"
+                }
+              },
+              {
+                "id": "need_generator_workshop_1::generator_load_scenario",
+                "kind": "generator_load_scenario",
+                "role": "hard_constraint",
+                "unit": null,
+                "value": true,
+                "evidence": "Инструмент — угловая шлифмашина 1,5 кВт, холодильник обычный компрессорный.",
+                "relation": "must_have",
+                "strictness": "strict",
+                "verification": {
+                  "mode": "typed_tool",
+                  "tool": "calculator.generatorLoad",
+                  "bindAs": "nominal_power_min_kw",
+                  "verifier": "generator_load_profile",
+                  "toolRequestId": "calc_generator_load_1"
+                }
+              },
+              {
+                "id": "need_generator_workshop_1::nominal_power_min_preliminary",
+                "kind": "nominal_power_min_preliminary",
+                "role": "preference",
+                "unit": null,
+                "value": true,
+                "evidence": "Подберите 2–3 варианта из каталога",
+                "relation": "preferred",
+                "strictness": "preferred",
+                "verification": {
+                  "mode": "product_attribute"
+                }
+              }
+            ],
+            "selectionGoal": "preliminary_fit",
+            "alternativePolicy": "same_class_only",
+            "rankingObjectives": [
+              {
+                "attribute": "nominal_power_kw",
+                "direction": "minimize",
+                "requirementId": "need_generator_workshop_1::nominal_power_min_preliminary"
+              }
+            ],
+            "reusePreviousCards": false,
+            "targetProductClass": "бензиновый генератор",
+            "canonicalProductClass": "generator"
+          },
+          "nextStepRationale": "Пересчитать профиль, найти каталоговые варианты и проверить решающий пусковой пробел внешним источником.",
+          "userMessageSummary": "Предварительно подобрать 2–3 бензиновых однофазных генератора и показать запас мощности.",
+          "dialogueUnderstanding": "Рабочая нагрузка около 2,9 кВт; пуск насоса неизвестен, поэтому пригодность предварительная.",
+          "mustNotAskQuestionIds": [
+            "pump_starting_power"
+          ],
+          "leadCaptureAuthorization": {
+            "purpose": null,
+            "evidence": null,
+            "authorized": false,
+            "handoffKind": "none",
+            "buyerQuestion": null,
+            "contactSource": "none",
+            "pendingDraftId": null,
+            "handoffOfferMessageId": null
+          },
+          "buyerRequestedTechnicalHandoff": null
+        },
+        "ledgerDelta": {
+          "events": [
+            {
+              "scope": "question",
+              "source": "llm_state_delta",
+              "status": "active",
+              "payload": {
+                "role": null,
+                "text": "Какое точное значение тока или пусковой мощности насоса указано на его шильдике?",
+                "unit": null,
+                "notes": null,
+                "value": null,
+                "answer": "Шильдик насоса сейчас недоступен.",
+                "needId": "need_generator_workshop_1",
+                "status": "closed",
+                "factKey": null,
+                "ranking": null,
+                "summary": null,
+                "activate": null,
+                "relation": null,
+                "productId": null,
+                "valueText": null,
+                "confidence": null,
+                "productIds": [],
+                "questionId": "pump_starting_power",
+                "answerKnown": false,
+                "constraints": [],
+                "productClass": "generator",
+                "openQuestions": [],
+                "toolRequestId": null,
+                "sourceResultId": null,
+                "targetEventIds": [],
+                "negatesEventIds": [],
+                "closesQuestionIds": [
+                  "pump_starting_power"
+                ],
+                "targetQuestionIds": [],
+                "rejectedProductIds": [],
+                "selectedProductIds": [],
+                "supersedesEventIds": [],
+                "selectionUpdateMode": null,
+                "constraintsUpdateMode": null,
+                "invalidatedProductIds": [],
+                "openQuestionsUpdateMode": null,
+                "rejectedProductIdsUpdateMode": null
+              },
+              "evidence": "Шильдик насоса сейчас недоступен.",
+              "eventType": "question.answered"
+            },
+            {
+              "scope": "need",
+              "source": "llm_state_delta",
+              "status": "active",
+              "payload": {
+                "role": null,
+                "text": null,
+                "unit": null,
+                "notes": null,
+                "value": null,
+                "answer": null,
+                "needId": "need_generator_workshop_1",
+                "status": "open",
+                "factKey": null,
+                "ranking": null,
+                "summary": "Предварительный подбор бензинового однофазного генератора для мастерской",
+                "activate": true,
+                "relation": null,
+                "productId": null,
+                "valueText": null,
+                "confidence": null,
+                "productIds": [],
+                "questionId": null,
+                "answerKnown": null,
+                "constraints": [],
+                "productClass": "generator",
+                "openQuestions": [],
+                "toolRequestId": null,
+                "sourceResultId": null,
+                "targetEventIds": [],
+                "negatesEventIds": [],
+                "closesQuestionIds": [],
+                "targetQuestionIds": [],
+                "rejectedProductIds": [],
+                "selectedProductIds": [],
+                "supersedesEventIds": [],
+                "selectionUpdateMode": "preserve",
+                "constraintsUpdateMode": "merge",
+                "invalidatedProductIds": [],
+                "openQuestionsUpdateMode": "replace",
+                "rejectedProductIdsUpdateMode": "merge"
+              },
+              "evidence": "Шильдик насоса сейчас недоступен.",
+              "eventType": "need.updated"
+            },
+            {
+              "scope": "need",
+              "source": "llm_state_delta",
+              "status": "active",
+              "payload": {
+                "needId": "need_generator_workshop_1",
+                "constraintFactBindings": [
+                  {
+                    "factKey": "generator_load_scenario",
+                    "constraint": "generator_load_scenario: {\"loads\":[{\"kind\":\"refrigerator\",\"name\":\"холодильник\",\"count\":1,\"source\":\"explicit_user\",\"evidence\":\"холодильник 300 Вт\",\"basisKind\":\"exact_power\",\"runningKw\":0.3,\"startingKw\":null,\"basisSignals\":[\"consumer_type_known\",\"explicit_power\",\"simultaneous_operation_known\"],\"operationMode\":\"continuous\",\"runningSource\":\"explicit_user\",\"coRunningGroup\":\"all\",\"startingSource\":\"not_provided\",\"runningApparentPower\":null,\"startingApparentPower\":null},{\"kind\":\"circulation_pump\",\"name\":\"циркуляционный насос\",\"count\":1,\"source\":\"explicit_user\",\"evidence\":\"циркуляционный насос 1,1 кВт\",\"basisKind\":\"exact_power\",\"runningKw\":1.1,\"startingKw\":null,\"basisSignals\":[\"consumer_type_known\",\"consumer_function_known\",\"voltage_or_phase_known\",\"explicit_power\"],\"operationMode\":\"continuous\",\"runningSource\":\"explicit_user\",\"coRunningGroup\":\"all\",\"startingSource\":\"not_provided\",\"runningApparentPower\":null,\"startingApparentPower\":null},{\"kind\":\"workshop_tool\",\"name\":\"инструмент\",\"count\":1,\"source\":\"explicit_user\",\"evidence\":\"инструмент около 1,5 кВт\",\"basisKind\":\"exact_power\",\"runningKw\":1.5,\"startingKw\":null,\"basisSignals\":[\"consumer_type_known\",\"explicit_power\"],\"operationMode\":\"occasional\",\"runningSource\":\"explicit_user\",\"coRunningGroup\":\"tool_after_pump\",\"startingSource\":\"not_provided\",\"runningApparentPower\":null,\"startingApparentPower\":null}],\"simultaneousRunning\":true,\"simultaneousStarting\":false}"
+                  }
+                ]
+              },
+              "evidence": "Инструмент — угловая шлифмашина 1,5 кВт, холодильник обычный компрессорный.",
+              "eventType": "need.updated"
+            },
+            {
+              "scope": "need",
+              "source": "llm_state_delta",
+              "status": "active",
+              "payload": {
+                "role": "hard_requirement",
+                "unit": null,
+                "value": {
+                  "loads": [
+                    {
+                      "kind": "refrigerator",
+                      "name": "холодильник обычный компрессорный",
+                      "count": 1,
+                      "source": "explicit_user",
+                      "evidence": "холодильник обычный компрессорный",
+                      "basisKind": "specific_type_or_function",
+                      "runningKw": 0.3,
+                      "startingKw": null,
+                      "basisSignals": [
+                        "consumer_type_known",
+                        "consumer_function_known",
+                        "explicit_power",
+                        "simultaneous_operation_known"
+                      ],
+                      "operationMode": "continuous",
+                      "runningSource": "explicit_user",
+                      "coRunningGroup": "all",
+                      "startingSource": "not_provided",
+                      "runningApparentPower": null,
+                      "startingApparentPower": null
+                    },
+                    {
+                      "kind": "circulation_pump",
+                      "name": "циркуляционный насос",
+                      "count": 1,
+                      "source": "explicit_user",
+                      "evidence": "циркуляционный насос 1,1 кВт",
+                      "basisKind": "exact_power",
+                      "runningKw": 1.1,
+                      "startingKw": null,
+                      "basisSignals": [
+                        "consumer_type_known",
+                        "consumer_function_known",
+                        "voltage_or_phase_known",
+                        "explicit_power"
+                      ],
+                      "operationMode": "continuous",
+                      "runningSource": "explicit_user",
+                      "coRunningGroup": "all",
+                      "startingSource": "not_provided",
+                      "runningApparentPower": null,
+                      "startingApparentPower": null
+                    },
+                    {
+                      "kind": "angle_grinder",
+                      "name": "угловая шлифмашина",
+                      "count": 1,
+                      "source": "explicit_user",
+                      "evidence": "угловая шлифмашина 1,5 кВт",
+                      "basisKind": "exact_power",
+                      "runningKw": 1.5,
+                      "startingKw": null,
+                      "basisSignals": [
+                        "consumer_type_known",
+                        "explicit_power"
+                      ],
+                      "operationMode": "occasional",
+                      "runningSource": "explicit_user",
+                      "coRunningGroup": "tool_after_pump",
+                      "startingSource": "not_provided",
+                      "runningApparentPower": null,
+                      "startingApparentPower": null
+                    }
+                  ],
+                  "simultaneousRunning": true,
+                  "simultaneousStarting": false
+                },
+                "needId": "need_generator_workshop_1",
+                "factKey": "generator_load_scenario",
+                "ranking": null,
+                "relation": "must_have",
+                "confidence": 1,
+                "productClass": "generator"
+              },
+              "evidence": "Инструмент — угловая шлифмашина 1,5 кВт, холодильник обычный компрессорный.",
+              "eventType": "fact.confirmed"
+            }
+          ],
+          "rationale": "Уточнён профиль нагрузки; сохраняю предварительный подбор без гарантии запуска."
+        }
+      },
+      "error_code": null,
+      "error_message": null,
+      "created_at": "2026-09-15T15:31:56.043Z",
+      "updated_at": "2026-09-15T15:31:56.043Z"
+    },
+    {
+      "checkpoint": "ledger_delta_proposed",
+      "status": "succeeded",
+      "payload": {
+        "events": [
+          {
+            "scope": "question",
+            "source": "llm_state_delta",
+            "status": "active",
+            "payload": {
+              "role": null,
+              "text": "Какое точное значение тока или пусковой мощности насоса указано на его шильдике?",
+              "unit": null,
+              "notes": null,
+              "value": null,
+              "answer": "Шильдик насоса сейчас недоступен.",
+              "needId": "need_generator_workshop_1",
+              "status": "closed",
+              "factKey": null,
+              "ranking": null,
+              "summary": null,
+              "activate": null,
+              "relation": null,
+              "productId": null,
+              "valueText": null,
+              "confidence": null,
+              "productIds": [],
+              "questionId": "pump_starting_power",
+              "answerKnown": false,
+              "constraints": [],
+              "productClass": "generator",
+              "openQuestions": [],
+              "toolRequestId": null,
+              "sourceResultId": null,
+              "targetEventIds": [],
+              "negatesEventIds": [],
+              "closesQuestionIds": [
+                "pump_starting_power"
+              ],
+              "targetQuestionIds": [],
+              "rejectedProductIds": [],
+              "selectedProductIds": [],
+              "supersedesEventIds": [],
+              "selectionUpdateMode": null,
+              "constraintsUpdateMode": null,
+              "invalidatedProductIds": [],
+              "openQuestionsUpdateMode": null,
+              "rejectedProductIdsUpdateMode": null
+            },
+            "evidence": "Шильдик насоса сейчас недоступен.",
+            "eventType": "question.answered"
+          },
+          {
+            "scope": "need",
+            "source": "llm_state_delta",
+            "status": "active",
+            "payload": {
+              "role": null,
+              "text": null,
+              "unit": null,
+              "notes": null,
+              "value": null,
+              "answer": null,
+              "needId": "need_generator_workshop_1",
+              "status": "open",
+              "factKey": null,
+              "ranking": null,
+              "summary": "Предварительный подбор бензинового однофазного генератора для мастерской",
+              "activate": true,
+              "relation": null,
+              "productId": null,
+              "valueText": null,
+              "confidence": null,
+              "productIds": [],
+              "questionId": null,
+              "answerKnown": null,
+              "constraints": [],
+              "productClass": "generator",
+              "openQuestions": [],
+              "toolRequestId": null,
+              "sourceResultId": null,
+              "targetEventIds": [],
+              "negatesEventIds": [],
+              "closesQuestionIds": [],
+              "targetQuestionIds": [],
+              "rejectedProductIds": [],
+              "selectedProductIds": [],
+              "supersedesEventIds": [],
+              "selectionUpdateMode": "preserve",
+              "constraintsUpdateMode": "merge",
+              "invalidatedProductIds": [],
+              "openQuestionsUpdateMode": "replace",
+              "rejectedProductIdsUpdateMode": "merge"
+            },
+            "evidence": "Шильдик насоса сейчас недоступен.",
+            "eventType": "need.updated"
+          },
+          {
+            "scope": "need",
+            "source": "llm_state_delta",
+            "status": "active",
+            "payload": {
+              "needId": "need_generator_workshop_1",
+              "constraintFactBindings": [
+                {
+                  "factKey": "generator_load_scenario",
+                  "constraint": "generator_load_scenario: {\"loads\":[{\"kind\":\"refrigerator\",\"name\":\"холодильник\",\"count\":1,\"source\":\"explicit_user\",\"evidence\":\"холодильник 300 Вт\",\"basisKind\":\"exact_power\",\"runningKw\":0.3,\"startingKw\":null,\"basisSignals\":[\"consumer_type_known\",\"explicit_power\",\"simultaneous_operation_known\"],\"operationMode\":\"continuous\",\"runningSource\":\"explicit_user\",\"coRunningGroup\":\"all\",\"startingSource\":\"not_provided\",\"runningApparentPower\":null,\"startingApparentPower\":null},{\"kind\":\"circulation_pump\",\"name\":\"циркуляционный насос\",\"count\":1,\"source\":\"explicit_user\",\"evidence\":\"циркуляционный насос 1,1 кВт\",\"basisKind\":\"exact_power\",\"runningKw\":1.1,\"startingKw\":null,\"basisSignals\":[\"consumer_type_known\",\"consumer_function_known\",\"voltage_or_phase_known\",\"explicit_power\"],\"operationMode\":\"continuous\",\"runningSource\":\"explicit_user\",\"coRunningGroup\":\"all\",\"startingSource\":\"not_provided\",\"runningApparentPower\":null,\"startingApparentPower\":null},{\"kind\":\"workshop_tool\",\"name\":\"инструмент\",\"count\":1,\"source\":\"explicit_user\",\"evidence\":\"инструмент около 1,5 кВт\",\"basisKind\":\"exact_power\",\"runningKw\":1.5,\"startingKw\":null,\"basisSignals\":[\"consumer_type_known\",\"explicit_power\"],\"operationMode\":\"occasional\",\"runningSource\":\"explicit_user\",\"coRunningGroup\":\"tool_after_pump\",\"startingSource\":\"not_provided\",\"runningApparentPower\":null,\"startingApparentPower\":null}],\"simultaneousRunning\":true,\"simultaneousStarting\":false}"
+                }
+              ]
+            },
+            "evidence": "Инструмент — угловая шлифмашина 1,5 кВт, холодильник обычный компрессорный.",
+            "eventType": "need.updated"
+          },
+          {
+            "scope": "need",
+            "source": "llm_state_delta",
+            "status": "active",
+            "payload": {
+              "role": "hard_requirement",
+              "unit": null,
+              "value": {
+                "loads": [
+                  {
+                    "kind": "refrigerator",
+                    "name": "холодильник обычный компрессорный",
+                    "count": 1,
+                    "source": "explicit_user",
+                    "evidence": "холодильник обычный компрессорный",
+                    "basisKind": "specific_type_or_function",
+                    "runningKw": 0.3,
+                    "startingKw": null,
+                    "basisSignals": [
+                      "consumer_type_known",
+                      "consumer_function_known",
+                      "explicit_power",
+                      "simultaneous_operation_known"
+                    ],
+                    "operationMode": "continuous",
+                    "runningSource": "explicit_user",
+                    "coRunningGroup": "all",
+                    "startingSource": "not_provided",
+                    "runningApparentPower": null,
+                    "startingApparentPower": null
+                  },
+                  {
+                    "kind": "circulation_pump",
+                    "name": "циркуляционный насос",
+                    "count": 1,
+                    "source": "explicit_user",
+                    "evidence": "циркуляционный насос 1,1 кВт",
+                    "basisKind": "exact_power",
+                    "runningKw": 1.1,
+                    "startingKw": null,
+                    "basisSignals": [
+                      "consumer_type_known",
+                      "consumer_function_known",
+                      "voltage_or_phase_known",
+                      "explicit_power"
+                    ],
+                    "operationMode": "continuous",
+                    "runningSource": "explicit_user",
+                    "coRunningGroup": "all",
+                    "startingSource": "not_provided",
+                    "runningApparentPower": null,
+                    "startingApparentPower": null
+                  },
+                  {
+                    "kind": "angle_grinder",
+                    "name": "угловая шлифмашина",
+                    "count": 1,
+                    "source": "explicit_user",
+                    "evidence": "угловая шлифмашина 1,5 кВт",
+                    "basisKind": "exact_power",
+                    "runningKw": 1.5,
+                    "startingKw": null,
+                    "basisSignals": [
+                      "consumer_type_known",
+                      "explicit_power"
+                    ],
+                    "operationMode": "occasional",
+                    "runningSource": "explicit_user",
+                    "coRunningGroup": "tool_after_pump",
+                    "startingSource": "not_provided",
+                    "runningApparentPower": null,
+                    "startingApparentPower": null
+                  }
+                ],
+                "simultaneousRunning": true,
+                "simultaneousStarting": false
+              },
+              "needId": "need_generator_workshop_1",
+              "factKey": "generator_load_scenario",
+              "ranking": null,
+              "relation": "must_have",
+              "confidence": 1,
+              "productClass": "generator"
+            },
+            "evidence": "Инструмент — угловая шлифмашина 1,5 кВт, холодильник обычный компрессорный.",
+            "eventType": "fact.confirmed"
+          }
+        ],
+        "rationale": "Уточнён профиль нагрузки; сохраняю предварительный подбор без гарантии запуска."
+      },
+      "error_code": null,
+      "error_message": null,
+      "created_at": "2026-09-15T15:31:56.055Z",
+      "updated_at": "2026-09-15T15:31:56.055Z"
+    },
+    {
+      "checkpoint": "intent_contract_proposed",
+      "status": "succeeded",
+      "payload": {
+        "grounding": {
+          "taskType": "product_selection",
+          "rationale": "Покупатель просит предварительные каталожные варианты; рабочая нагрузка известна, но пуск насоса не подтверждён, поэтому требуется каталог и внешняя проверка решающего пробела.",
+          "webPurpose": "technical_specs",
+          "responseMode": "recommend",
+          "sourcePolicy": "web_required",
+          "buyerQuestion": null,
+          "webRequirement": "conditional_on_catalog_gap",
+          "buyerRequestedWeb": false,
+          "requiredToolKinds": [
+            "calculator.generatorLoad",
+            "catalog.search",
+            "web.researchProductFacts"
+          ],
+          "catalogRequirement": "required",
+          "technicalAttributes": [
+            "nominal_power_kw",
+            "maximum_power_kw",
+            "starting_capability",
+            "starting_power",
+            "motor_starting_current"
+          ]
+        },
+        "riskFlags": [],
+        "toolRequests": [
+          {
+            "id": "calc_generator_load_1",
+            "args": {
+              "loads": [
+                {
+                  "kind": "refrigerator",
+                  "name": "холодильник обычный компрессорный",
+                  "count": 1,
+                  "source": "explicit_user",
+                  "evidence": "холодильник обычный компрессорный",
+                  "basisKind": "specific_type_or_function",
+                  "runningKw": 0.3,
+                  "basisSignals": [
+                    "consumer_type_known",
+                    "consumer_function_known",
+                    "explicit_power",
+                    "simultaneous_operation_known"
+                  ],
+                  "operationMode": "continuous",
+                  "runningSource": "explicit_user",
+                  "coRunningGroup": "all",
+                  "startingSource": "not_provided"
+                },
+                {
+                  "kind": "circulation_pump",
+                  "name": "циркуляционный насос",
+                  "count": 1,
+                  "source": "explicit_user",
+                  "evidence": "циркуляционный насос 1,1 кВт",
+                  "basisKind": "exact_power",
+                  "runningKw": 1.1,
+                  "basisSignals": [
+                    "consumer_type_known",
+                    "consumer_function_known",
+                    "voltage_or_phase_known",
+                    "explicit_power"
+                  ],
+                  "operationMode": "continuous",
+                  "runningSource": "explicit_user",
+                  "coRunningGroup": "all",
+                  "startingSource": "not_provided"
+                },
+                {
+                  "kind": "angle_grinder",
+                  "name": "угловая шлифмашина",
+                  "count": 1,
+                  "source": "explicit_user",
+                  "evidence": "угловая шлифмашина 1,5 кВт",
+                  "basisKind": "exact_power",
+                  "runningKw": 1.5,
+                  "basisSignals": [
+                    "consumer_type_known",
+                    "explicit_power"
+                  ],
+                  "operationMode": "occasional",
+                  "runningSource": "explicit_user",
+                  "coRunningGroup": "tool_after_pump",
+                  "startingSource": "not_provided"
+                }
+              ],
+              "phase": "single_phase",
+              "query": "Предварительный расчёт нагрузки мастерской",
+              "powerSource": "fuel",
+              "estimateBasis": "exact_or_user_provided",
+              "productIntent": "предварительный подбор генератора для мастерской",
+              "semanticQuery": "генератор для холодильника 0,3 кВт, циркуляционного насоса 1,1 кВт и угловой шлифмашины 1,5 кВт",
+              "simultaneousRunning": true,
+              "simultaneousStarting": false,
+              "canonicalProductIntent": "generator",
+              "simultaneousStartingKinds": []
+            },
+            "tool": "calculator.generatorLoad",
+            "required": true,
+            "rationale": "Пересчитать рабочую нагрузку и предварительный минимум.",
+            "coversRequirementIds": [
+              "need_generator_workshop_1::generator_load_scenario"
+            ]
+          },
+          {
+            "id": "search_generators_1",
+            "args": {
+              "limit": 3,
+              "phase": "single_phase",
+              "query": "Бензиновые однофазные генераторы для предварительной нагрузки около 2,9 кВт",
+              "identifiers": [],
+              "powerSource": "fuel",
+              "productIntent": "предварительный подбор бензинового генератора",
+              "semanticQuery": "генератор бензиновый однофазный для мастерской",
+              "comparisonAttributes": [
+                "nominal_power_kw",
+                "maximum_power_kw",
+                "price_rub",
+                "weight_kg"
+              ],
+              "canonicalProductIntent": "generator"
+            },
+            "tool": "catalog.search",
+            "required": true,
+            "rationale": "Найти 2–3 кандидата в каталоге.",
+            "coversRequirementIds": [
+              "need_generator_workshop_1::phase",
+              "need_generator_workshop_1::fuel_type"
+            ]
+          },
+          {
+            "id": "research_pump_start_1",
+            "args": {
+              "limit": 5,
+              "phase": "single_phase",
+              "query": "Как оценить пусковую нагрузку обычного компрессорного холодильника и циркуляционного насоса 1,1 кВт при подборе бензинового генератора; нужны типовые диапазоны и ограничения оценки",
+              "powerSource": "fuel",
+              "productNames": [],
+              "productIntent": "проверка решающей пусковой нагрузки для предварительного подбора генератора",
+              "researchScope": "public_information",
+              "semanticQuery": "пусковая нагрузка циркуляционного насоса 1,1 кВт и компрессорного холодильника",
+              "comparisonAttributes": [
+                "starting_capability",
+                "starting_power",
+                "motor_starting_current"
+              ],
+              "canonicalProductIntent": "generator",
+              "comparisonAttributeBindings": []
+            },
+            "tool": "web.researchProductFacts",
+            "required": true,
+            "rationale": "Проверить внешний источник по неизвестному пуску; результат останется ориентировочным без шильдика.",
+            "coversRequirementIds": [
+              "need_generator_workshop_1::generator_load_scenario"
+            ]
+          }
+        ],
+        "policyRuleIds": [
+          "core.help_first",
+          "grounding.search_before_specialist",
+          "cards.explain_compromise",
+          "cheap.preliminary_not_final"
+        ],
+        "requiresTools": true,
+        "productMentions": [
+          {
+            "name": "угловая шлифмашина",
+            "role": "context_load_device",
+            "evidence": "угловая шлифмашина 1,5 кВт",
+            "productClass": "электроинструмент",
+            "sourceMessageId": null
+          },
+          {
+            "name": "холодильник обычный компрессорный",
+            "role": "context_load_device",
+            "evidence": "холодильник обычный компрессорный",
+            "productClass": "бытовой холодильник",
+            "sourceMessageId": null
+          }
+        ],
+        "selectionPolicy": {
+          "phase": "single_phase",
+          "maxCards": 3,
+          "rationale": "Показать минимально достаточные по предварительному расчёту варианты с отдельным объяснением запаса и неизвестного пуска насоса.",
+          "needAction": "continue",
+          "powerSource": "fuel",
+          "requirements": [
+            {
+              "id": "need_generator_workshop_1::phase",
+              "kind": "phase",
+              "role": "hard_constraint",
+              "unit": null,
+              "value": "single_phase",
+              "evidence": "Всё однофазное 220 В",
+              "relation": "must_have",
+              "strictness": "strict",
+              "verification": {
+                "mode": "product_attribute"
+              }
+            },
+            {
+              "id": "need_generator_workshop_1::fuel_type",
+              "kind": "fuel_type",
+              "role": "hard_constraint",
+              "unit": null,
+              "value": "бензин",
+              "evidence": "бензиновый генератор",
+              "relation": "must_have",
+              "strictness": "strict",
+              "verification": {
+                "mode": "product_attribute"
+              }
+            },
+            {
+              "id": "need_generator_workshop_1::generator_load_scenario",
+              "kind": "generator_load_scenario",
+              "role": "hard_constraint",
+              "unit": null,
+              "value": true,
+              "evidence": "Инструмент — угловая шлифмашина 1,5 кВт, холодильник обычный компрессорный.",
+              "relation": "must_have",
+              "strictness": "strict",
+              "verification": {
+                "mode": "typed_tool",
+                "tool": "calculator.generatorLoad",
+                "bindAs": "nominal_power_min_kw",
+                "verifier": "generator_load_profile",
+                "toolRequestId": "calc_generator_load_1"
+              }
+            },
+            {
+              "id": "need_generator_workshop_1::nominal_power_min_preliminary",
+              "kind": "nominal_power_min_preliminary",
+              "role": "preference",
+              "unit": null,
+              "value": true,
+              "evidence": "Подберите 2–3 варианта из каталога",
+              "relation": "preferred",
+              "strictness": "preferred",
+              "verification": {
+                "mode": "product_attribute"
+              }
+            }
+          ],
+          "selectionGoal": "preliminary_fit",
+          "alternativePolicy": "same_class_only",
+          "rankingObjectives": [
+            {
+              "attribute": "nominal_power_kw",
+              "direction": "minimize",
+              "requirementId": "need_generator_workshop_1::nominal_power_min_preliminary"
+            }
+          ],
+          "reusePreviousCards": false,
+          "targetProductClass": "бензиновый генератор",
+          "canonicalProductClass": "generator"
+        },
+        "nextStepRationale": "Пересчитать профиль, найти каталоговые варианты и проверить решающий пусковой пробел внешним источником.",
+        "userMessageSummary": "Предварительно подобрать 2–3 бензиновых однофазных генератора и показать запас мощности.",
+        "dialogueUnderstanding": "Рабочая нагрузка около 2,9 кВт; пуск насоса неизвестен, поэтому пригодность предварительная.",
+        "mustNotAskQuestionIds": [
+          "pump_starting_power"
+        ],
+        "leadCaptureAuthorization": {
+          "purpose": null,
+          "evidence": null,
+          "authorized": false,
+          "handoffKind": "none",
+          "buyerQuestion": null,
+          "contactSource": "none",
+          "pendingDraftId": null,
+          "handoffOfferMessageId": null
+        },
+        "buyerRequestedTechnicalHandoff": null
+      },
+      "error_code": null,
+      "error_message": null,
+      "created_at": "2026-09-15T15:31:56.059Z",
+      "updated_at": "2026-09-15T15:31:56.059Z"
+    },
+    {
+      "checkpoint": "ledger_delta_applied",
+      "status": "succeeded",
+      "payload": {
+        "eventIds": [
+          "question.answered:1cae9ccb937938ffb1febb53972a0f07",
+          "need.updated:f7ebe7e50b9514004e706f915f1cf27d",
+          "need.updated:7b0ee887dd506d26f73a5fbf6c70fe41",
+          "fact.confirmed:b65e7534aecaa536b72056e3fadc7dcd"
+        ]
+      },
+      "error_code": null,
+      "error_message": null,
+      "created_at": "2026-09-15T15:31:56.096Z",
+      "updated_at": "2026-09-15T15:31:56.096Z"
+    },
+    {
+      "checkpoint": "intent_contract_created",
+      "status": "succeeded",
+      "payload": {
+        "grounding": {
+          "taskType": "product_selection",
+          "rationale": "Покупатель просит предварительные каталожные варианты; рабочая нагрузка известна, но пуск насоса не подтверждён, поэтому требуется каталог и внешняя проверка решающего пробела.",
+          "webPurpose": "technical_specs",
+          "responseMode": "recommend",
+          "sourcePolicy": "web_required",
+          "buyerQuestion": null,
+          "webRequirement": "conditional_on_catalog_gap",
+          "buyerRequestedWeb": false,
+          "requiredToolKinds": [
+            "calculator.generatorLoad",
+            "catalog.search",
+            "web.researchProductFacts"
+          ],
+          "catalogRequirement": "required",
+          "technicalAttributes": [
+            "nominal_power_kw",
+            "maximum_power_kw",
+            "starting_capability",
+            "starting_power",
+            "motor_starting_current"
+          ]
+        },
+        "riskFlags": [],
+        "toolRequests": [
+          {
+            "id": "calc_generator_load_1",
+            "args": {
+              "loads": [
+                {
+                  "kind": "refrigerator",
+                  "name": "холодильник обычный компрессорный",
+                  "count": 1,
+                  "source": "explicit_user",
+                  "evidence": "холодильник обычный компрессорный",
+                  "basisKind": "specific_type_or_function",
+                  "runningKw": 0.3,
+                  "basisSignals": [
+                    "consumer_type_known",
+                    "consumer_function_known",
+                    "explicit_power",
+                    "simultaneous_operation_known"
+                  ],
+                  "operationMode": "continuous",
+                  "runningSource": "explicit_user",
+                  "coRunningGroup": "all",
+                  "startingSource": "not_provided"
+                },
+                {
+                  "kind": "circulation_pump",
+                  "name": "циркуляционный насос",
+                  "count": 1,
+                  "source": "explicit_user",
+                  "evidence": "циркуляционный насос 1,1 кВт",
+                  "basisKind": "exact_power",
+                  "runningKw": 1.1,
+                  "basisSignals": [
+                    "consumer_type_known",
+                    "consumer_function_known",
+                    "voltage_or_phase_known",
+                    "explicit_power"
+                  ],
+                  "operationMode": "continuous",
+                  "runningSource": "explicit_user",
+                  "coRunningGroup": "all",
+                  "startingSource": "not_provided"
+                },
+                {
+                  "kind": "angle_grinder",
+                  "name": "угловая шлифмашина",
+                  "count": 1,
+                  "source": "explicit_user",
+                  "evidence": "угловая шлифмашина 1,5 кВт",
+                  "basisKind": "exact_power",
+                  "runningKw": 1.5,
+                  "basisSignals": [
+                    "consumer_type_known",
+                    "explicit_power"
+                  ],
+                  "operationMode": "occasional",
+                  "runningSource": "explicit_user",
+                  "coRunningGroup": "tool_after_pump",
+                  "startingSource": "not_provided"
+                }
+              ],
+              "phase": "single_phase",
+              "query": "Предварительный расчёт нагрузки мастерской",
+              "powerSource": "fuel",
+              "estimateBasis": "exact_or_user_provided",
+              "productIntent": "предварительный подбор генератора для мастерской",
+              "semanticQuery": "генератор для холодильника 0,3 кВт, циркуляционного насоса 1,1 кВт и угловой шлифмашины 1,5 кВт",
+              "simultaneousRunning": true,
+              "simultaneousStarting": false,
+              "canonicalProductIntent": "generator",
+              "simultaneousStartingKinds": []
+            },
+            "tool": "calculator.generatorLoad",
+            "required": true,
+            "rationale": "Пересчитать рабочую нагрузку и предварительный минимум.",
+            "coversRequirementIds": [
+              "need_generator_workshop_1::generator_load_scenario"
+            ]
+          },
+          {
+            "id": "search_generators_1",
+            "args": {
+              "limit": 3,
+              "phase": "single_phase",
+              "query": "Бензиновые однофазные генераторы для предварительной нагрузки около 2,9 кВт",
+              "identifiers": [],
+              "powerSource": "fuel",
+              "productIntent": "предварительный подбор бензинового генератора",
+              "semanticQuery": "генератор бензиновый однофазный для мастерской",
+              "comparisonAttributes": [
+                "nominal_power_kw",
+                "maximum_power_kw",
+                "price_rub",
+                "weight_kg"
+              ],
+              "canonicalProductIntent": "generator"
+            },
+            "tool": "catalog.search",
+            "required": true,
+            "rationale": "Найти 2–3 кандидата в каталоге.",
+            "coversRequirementIds": [
+              "need_generator_workshop_1::phase",
+              "need_generator_workshop_1::fuel_type"
+            ]
+          },
+          {
+            "id": "research_pump_start_1",
+            "args": {
+              "limit": 5,
+              "phase": "single_phase",
+              "query": "Как оценить пусковую нагрузку обычного компрессорного холодильника и циркуляционного насоса 1,1 кВт при подборе бензинового генератора; нужны типовые диапазоны и ограничения оценки",
+              "powerSource": "fuel",
+              "productNames": [],
+              "productIntent": "проверка решающей пусковой нагрузки для предварительного подбора генератора",
+              "researchScope": "public_information",
+              "semanticQuery": "пусковая нагрузка циркуляционного насоса 1,1 кВт и компрессорного холодильника",
+              "comparisonAttributes": [
+                "starting_capability",
+                "starting_power",
+                "motor_starting_current"
+              ],
+              "canonicalProductIntent": "generator",
+              "comparisonAttributeBindings": []
+            },
+            "tool": "web.researchProductFacts",
+            "required": true,
+            "rationale": "Проверить внешний источник по неизвестному пуску; результат останется ориентировочным без шильдика.",
+            "coversRequirementIds": [
+              "need_generator_workshop_1::generator_load_scenario"
+            ]
+          }
+        ],
+        "policyRuleIds": [
+          "core.help_first",
+          "grounding.search_before_specialist",
+          "cards.explain_compromise",
+          "cheap.preliminary_not_final"
+        ],
+        "requiresTools": true,
+        "productMentions": [
+          {
+            "name": "угловая шлифмашина",
+            "role": "context_load_device",
+            "evidence": "угловая шлифмашина 1,5 кВт",
+            "productClass": "электроинструмент",
+            "sourceMessageId": null
+          },
+          {
+            "name": "холодильник обычный компрессорный",
+            "role": "context_load_device",
+            "evidence": "холодильник обычный компрессорный",
+            "productClass": "бытовой холодильник",
+            "sourceMessageId": null
+          }
+        ],
+        "selectionPolicy": {
+          "phase": "single_phase",
+          "maxCards": 3,
+          "rationale": "Показать минимально достаточные по предварительному расчёту варианты с отдельным объяснением запаса и неизвестного пуска насоса.",
+          "needAction": "continue",
+          "powerSource": "fuel",
+          "requirements": [
+            {
+              "id": "need_generator_workshop_1::phase",
+              "kind": "phase",
+              "role": "hard_constraint",
+              "unit": null,
+              "value": "single_phase",
+              "evidence": "Всё однофазное 220 В",
+              "relation": "must_have",
+              "strictness": "strict",
+              "verification": {
+                "mode": "product_attribute"
+              }
+            },
+            {
+              "id": "need_generator_workshop_1::fuel_type",
+              "kind": "fuel_type",
+              "role": "hard_constraint",
+              "unit": null,
+              "value": "бензин",
+              "evidence": "бензиновый генератор",
+              "relation": "must_have",
+              "strictness": "strict",
+              "verification": {
+                "mode": "product_attribute"
+              }
+            },
+            {
+              "id": "need_generator_workshop_1::generator_load_scenario",
+              "kind": "generator_load_scenario",
+              "role": "hard_constraint",
+              "unit": null,
+              "value": true,
+              "evidence": "Инструмент — угловая шлифмашина 1,5 кВт, холодильник обычный компрессорный.",
+              "relation": "must_have",
+              "strictness": "strict",
+              "verification": {
+                "mode": "typed_tool",
+                "tool": "calculator.generatorLoad",
+                "bindAs": "nominal_power_min_kw",
+                "verifier": "generator_load_profile",
+                "toolRequestId": "calc_generator_load_1"
+              }
+            },
+            {
+              "id": "need_generator_workshop_1::nominal_power_min_preliminary",
+              "kind": "nominal_power_min_preliminary",
+              "role": "preference",
+              "unit": null,
+              "value": true,
+              "evidence": "Подберите 2–3 варианта из каталога",
+              "relation": "preferred",
+              "strictness": "preferred",
+              "verification": {
+                "mode": "product_attribute"
+              }
+            }
+          ],
+          "selectionGoal": "preliminary_fit",
+          "alternativePolicy": "same_class_only",
+          "rankingObjectives": [
+            {
+              "attribute": "nominal_power_kw",
+              "direction": "minimize",
+              "requirementId": "need_generator_workshop_1::nominal_power_min_preliminary"
+            }
+          ],
+          "reusePreviousCards": false,
+          "targetProductClass": "бензиновый генератор",
+          "canonicalProductClass": "generator"
+        },
+        "nextStepRationale": "Пересчитать профиль, найти каталоговые варианты и проверить решающий пусковой пробел внешним источником.",
+        "userMessageSummary": "Предварительно подобрать 2–3 бензиновых однофазных генератора и показать запас мощности.",
+        "dialogueUnderstanding": "Рабочая нагрузка около 2,9 кВт; пуск насоса неизвестен, поэтому пригодность предварительная.",
+        "mustNotAskQuestionIds": [
+          "pump_starting_power"
+        ],
+        "leadCaptureAuthorization": {
+          "purpose": null,
+          "evidence": null,
+          "authorized": false,
+          "handoffKind": "none",
+          "buyerQuestion": null,
+          "contactSource": "none",
+          "pendingDraftId": null,
+          "handoffOfferMessageId": null
+        },
+        "buyerRequestedTechnicalHandoff": null
+      },
+      "error_code": null,
+      "error_message": null,
+      "created_at": "2026-09-15T15:31:56.142Z",
+      "updated_at": "2026-09-15T15:31:56.142Z"
+    },
+    {
+      "checkpoint": "observation_stopped_1",
+      "status": "succeeded",
+      "payload": {
+        "rounds": 0,
+        "status": "stopped",
+        "rationale": "The observation cycle stopped before readiness was established.",
+        "stopReason": "answer_time_reserve",
+        "missingFacts": [],
+        "candidateProductIds": []
+      },
+      "error_code": null,
+      "error_message": null,
+      "created_at": "2026-09-15T15:32:16.388Z",
+      "updated_at": "2026-09-15T15:32:16.388Z"
+    },
+    {
+      "checkpoint": "tool_artifacts_saved",
+      "status": "succeeded",
+      "payload": {
+        "resultCount": 3
+      },
+      "error_code": null,
+      "error_message": null,
+      "created_at": "2026-09-15T15:32:16.397Z",
+      "updated_at": "2026-09-15T15:32:16.397Z"
+    },
+    {
+      "checkpoint": "answer_contract_created",
+      "status": "failed",
+      "payload": {
+        "factsUsed": [
+          {
+            "value": "single_phase",
+            "factKey": "phase",
+            "attribute": "phase",
+            "claimKind": "confirmed_value",
+            "productName": null,
+            "sourceEventIds": [
+              "fact.confirmed:8cff1a5c6c2551fff4c5bc055407e1b6"
+            ],
+            "evidenceItemIds": []
+          },
+          {
+            "value": "бензин",
+            "factKey": "fuel_type",
+            "attribute": "fuel_type",
+            "claimKind": "confirmed_value",
+            "productName": null,
+            "sourceEventIds": [
+              "fact.confirmed:59446d4c80758a5e97e1d6d9493fe98f"
+            ],
+            "evidenceItemIds": []
+          },
+          {
+            "value": 0.3,
+            "factKey": "refrigerator_running_kw",
+            "attribute": "runningKw",
+            "claimKind": "confirmed_value",
+            "productName": null,
+            "sourceEventIds": [
+              "calc_generator_load_1"
+            ],
+            "evidenceItemIds": [
+              "calc_generator_load_1:payload:profile:items:0:runningKw"
+            ]
+          },
+          {
+            "value": 1.1,
+            "factKey": "pump_running_kw",
+            "attribute": "runningKw",
+            "claimKind": "confirmed_value",
+            "productName": null,
+            "sourceEventIds": [
+              "calc_generator_load_1"
+            ],
+            "evidenceItemIds": [
+              "calc_generator_load_1:payload:profile:items:1:runningKw"
+            ]
+          },
+          {
+            "value": 1.5,
+            "factKey": "angle_grinder_running_kw",
+            "attribute": "runningKw",
+            "claimKind": "confirmed_value",
+            "productName": null,
+            "sourceEventIds": [
+              "calc_generator_load_1"
+            ],
+            "evidenceItemIds": [
+              "calc_generator_load_1:payload:profile:items:2:runningKw"
+            ]
+          },
+          {
+            "value": 2.9,
+            "factKey": "total_running_kw",
+            "attribute": "totalRunningKw",
+            "claimKind": "confirmed_value",
+            "productName": null,
+            "sourceEventIds": [
+              "calc_generator_load_1"
+            ],
+            "evidenceItemIds": [
+              "calc_generator_load_1:payload:profile:totalRunningKw"
+            ]
+          },
+          {
+            "value": 3,
+            "factKey": "running_only_nominal_floor_kw",
+            "attribute": "runningOnlyNominalFloorKw",
+            "claimKind": "confirmed_value",
+            "productName": null,
+            "sourceEventIds": [
+              "calc_generator_load_1"
+            ],
+            "evidenceItemIds": [
+              "calc_generator_load_1:payload:profile:runningOnlyNominalFloorKw"
+            ]
+          },
+          {
+            "value": "refrigerator:холодильник_обычный_компрессорный",
+            "factKey": "refrigerator_start_unknown",
+            "attribute": "missingStartingLoads",
+            "claimKind": "absence_or_unknown",
+            "productName": null,
+            "sourceEventIds": [
+              "calc_generator_load_1"
+            ],
+            "evidenceItemIds": [
+              "calc_generator_load_1:payload:profile:missingStartingLoads:0"
+            ]
+          },
+          {
+            "value": "pump:циркуляционный_насос",
+            "factKey": "pump_start_unknown",
+            "attribute": "missingStartingLoads",
+            "claimKind": "absence_or_unknown",
+            "productName": null,
+            "sourceEventIds": [
+              "calc_generator_load_1"
+            ],
+            "evidenceItemIds": [
+              "calc_generator_load_1:payload:profile:missingStartingLoads:1"
+            ]
+          },
+          {
+            "value": "handheld_tool:угловая_шлифмашина",
+            "factKey": "angle_grinder_start_unknown",
+            "attribute": "missingStartingLoads",
+            "claimKind": "absence_or_unknown",
+            "productName": null,
+            "sourceEventIds": [
+              "calc_generator_load_1"
+            ],
+            "evidenceItemIds": [
+              "calc_generator_load_1:payload:profile:missingStartingLoads:2"
+            ]
+          },
+          {
+            "value": true,
+            "factKey": "simultaneous_running",
+            "attribute": "simultaneousRunning",
+            "claimKind": "confirmed_value",
+            "productName": null,
+            "sourceEventIds": [
+              "calc_generator_load_1"
+            ],
+            "evidenceItemIds": [
+              "calc_generator_load_1:payload:profile:simultaneousRunning"
+            ]
+          },
+          {
+            "value": false,
+            "factKey": "simultaneous_starting",
+            "attribute": "simultaneousStarting",
+            "claimKind": "confirmed_value",
+            "productName": null,
+            "sourceEventIds": [
+              "calc_generator_load_1"
+            ],
+            "evidenceItemIds": [
+              "calc_generator_load_1:payload:profile:simultaneousStarting"
+            ]
+          }
+        ],
+        "riskFlags": [
+          "starting_loads_unconfirmed",
+          "generator_cards_not_confirmed"
+        ],
+        "answerText": "Предварительный ориентир такой: одновременно работающая нагрузка — 2,9 кВт, а расчётный нижний порог по уже работающим потребителям — 3 кВт. Это не достаточная мощность для гарантированного запуска: пуск холодильника, насоса и угловой шлифмашины пока неизвестен.\n\nПоэтому запас можно считать только относительно рабочего порога 3 кВт: у генератора с номиналом X запас над этой нагрузкой был бы X − 3 кВт. Но без пусковых данных это ещё не подтверждает, что генератор выдержит запуск. Для вашей схемы инструмент включается после насоса, однако пуск насоса всё равно остаётся решающим неопределённым параметром.\n\nКонкретные 2–3 модели сейчас не назову: подтверждённых карточек генераторов в доступных данных нет, а выдавать случайные модели за предварительно подходящие было бы неправильно. Известны требования к будущим вариантам: бензин, одна фаза 220 В и номинал не ниже ориентировочных 3 кВт; окончательная пригодность пока не подтверждена из-за неизвестного пуска холодильника, насоса и шлифмашины.",
+        "leadAction": "none",
+        "toolResultIds": [
+          "calc_generator_load_1",
+          "search_generators_1",
+          "research_pump_start_1"
+        ],
+        "questionsAsked": [],
+        "selectedProductIds": [],
+        "selectionRationale": null,
+        "selectionReadiness": {
+          "status": "needs_more_info",
+          "rationale": "Рабочая нагрузка и требования по фазе и топливу известны, но точный подбор невозможен без пусковых данных; подтверждённых карточек товаров для предварительного показа сейчас нет.",
+          "missingFacts": [
+            "Пусковая нагрузка холодильника не подтверждена",
+            "Пусковая нагрузка циркуляционного насоса не подтверждена",
+            "Пусковая нагрузка угловой шлифмашины не подтверждена",
+            "Конкретные карточки генераторов не подтверждены"
+          ],
+          "productClass": "generator",
+          "canShowProductCards": false
+        }
+      },
+      "error_code": "answer_contract_blocked_by_validation",
+      "error_message": "research_guidance_uncertainty_mismatch",
+      "created_at": "2026-09-15T15:32:31.194Z",
+      "updated_at": "2026-09-15T15:33:02.469Z"
+    },
+    {
+      "checkpoint": "review_completed",
+      "status": "failed",
+      "payload": {
+        "issues": [
+          {
+            "code": "research_guidance_uncertainty_mismatch",
+            "message": "Grounded factual review rejected the claim \"Конкретные 2–3 модели сейчас не назову: подтверждённых карточек генераторов в доступных данных нет, а выдавать случайные модели за предварительно подходящие было бы неправильно. Известны требования к будущим вариантам: бензин, одна фаза 220 В и номинал не ниже ориентировочных 3 кВт; окончательная пригодность пока не подтверждена из-за неизвестного пуска холодильника, насоса и шлифмашины.\" using search_generators_1: Фраза о том, что подтверждённых карточек генераторов в доступных данных нет, сформулирована слишком категорично: поиск завершился тайм-аутом, а технический статус указывает, что источники не исчерпаны. Кроме того, требования «бензин» и «одна фаза 220 В» не следуют из сообщения покупателя или подтверждённых фактов.",
+            "evidence": "Конкретные 2–3 модели сейчас не назову: подтверждённых карточек генераторов в доступных данных нет, а выдавать случайные модели за предварительно подходящие было бы неправильно. Известны требования к будущим вариантам: бензин, одна фаза 220 В и номинал не ниже ориентировочных 3 кВт; окончательная пригодность пока не подтверждена из-за неизвестного пуска холодильника, насоса и шлифмашины.",
+            "severity": "high"
+          }
+        ],
+        "verdict": "block"
+      },
+      "error_code": "answer_contract_blocked_by_validation",
+      "error_message": "research_guidance_uncertainty_mismatch",
+      "created_at": "2026-09-15T15:33:02.473Z",
+      "updated_at": "2026-09-15T15:33:02.473Z"
+    }
+  ]
+}

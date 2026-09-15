@@ -237,6 +237,48 @@ function sameProduct(expected: unknown, actual: string | null) {
   return compactModelText(expected) === compactModelText(actual);
 }
 
+function indexedPathValue(path: string, prefix: string, values: unknown) {
+  if (!path.startsWith(prefix) || !Array.isArray(values)) return null;
+  const closing = path.indexOf(']', prefix.length);
+  if (closing < 0) return null;
+  const index = Number(path.slice(prefix.length, closing));
+  return Number.isInteger(index) && index >= 0 ? values[index] : null;
+}
+
+function calculatorEvidenceProductName(item: AnswerEvidenceItem, source: ToolResult | undefined): string | null {
+  if (item.productName || source?.tool !== 'calculator.generatorLoad' || source.status !== 'ok') {
+    return item.productName;
+  }
+  const payload = record(source.payload);
+  const profile = record(payload?.profile);
+  const entry = indexedPathValue(item.path, 'payload.profile.items[', profile?.items) ??
+    indexedPathValue(item.path, 'payload.loads[', payload?.loads);
+  const entryRecord = record(entry);
+  if (typeof entryRecord?.name === 'string' && entryRecord.name.trim()) return entryRecord.name.trim();
+  if (item.path.startsWith('payload.profile.missingStartingLoads[') && typeof item.value === 'string') {
+    const separator = item.value.indexOf(':');
+    if (separator >= 0 && separator < item.value.length - 1) {
+      return item.value.slice(separator + 1).replaceAll('_', ' ').trim() || null;
+    }
+  }
+  return null;
+}
+
+function evidenceProductNameForFact(input: {
+  factProductName: string | null | undefined;
+  item: AnswerEvidenceItem;
+  toolResultById: Map<string, ToolResult>;
+}): string | null {
+  // Null remains valid for legacy aggregate/load claims. When the writer names
+  // the concrete consumer, resolve that scope from the calculator's canonical
+  // load item instead of treating every calculator scalar as productless.
+  if (!input.factProductName) return input.item.productName;
+  return input.item.productName ?? calculatorEvidenceProductName(
+    input.item,
+    input.toolResultById.get(input.item.sourceEventId)
+  );
+}
+
 function scalarValueKey(value: unknown) {
   return JSON.stringify(normalizedFactValue(itemText(value)));
 }
@@ -279,6 +321,7 @@ export function bindUniqueMissingAnswerEvidenceItems(input: {
 }): AnswerContract {
   const items = answerEvidenceItems(input.toolResults);
   const toolIds = new Set(input.toolResults.map((result) => result.requestId));
+  const toolResultById = new Map(input.toolResults.map((result) => [result.requestId, result]));
   return {
     ...input.answer,
     factsUsed: input.answer.factsUsed.map((fact) => {
@@ -287,7 +330,11 @@ export function bindUniqueMissingAnswerEvidenceItems(input: {
       if (!sourceIds.length) return fact;
       const candidates = items.filter((item) =>
         sourceIds.includes(item.sourceEventId) &&
-        sameProduct(fact.productName, item.productName) &&
+        sameProduct(fact.productName, evidenceProductNameForFact({
+          factProductName: fact.productName,
+          item,
+          toolResultById
+        })) &&
         factAttributeMatchesItem(fact, item) &&
         factStatusMatchesItem(fact, item) &&
         factValueMatchesItem(fact, item)
@@ -444,9 +491,14 @@ export function resolveAnswerEvidenceBindings(input: {
           factKey: fact.factKey, evidence: evidenceItemId });
         continue;
       }
-      if (!sameProduct(fact.productName, item.productName)) {
+      const evidenceProductName = evidenceProductNameForFact({
+        factProductName: fact.productName,
+        item,
+        toolResultById
+      });
+      if (!sameProduct(fact.productName, evidenceProductName)) {
         issues.push({ code: 'fact_evidence_product_mismatch', factKey: fact.factKey,
-          evidence: `${evidenceItemId}:${item.productName ?? 'unknown'}` });
+          evidence: `${evidenceItemId}:${evidenceProductName ?? 'unknown'}` });
         continue;
       }
       if (fact.attribute && item.attribute !== 'page_text' &&

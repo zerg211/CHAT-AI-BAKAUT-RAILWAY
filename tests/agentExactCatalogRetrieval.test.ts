@@ -48,9 +48,13 @@ describe('exact catalog retrieval scope', () => {
     let now = 1_000_000;
     const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now);
     const neverAborted = new AbortController();
-    const timeoutSpy = vi.spyOn(AbortSignal, 'timeout').mockReturnValue(neverAborted.signal);
+    let scheduledTimeoutMs = 0;
+    const timeoutSpy = vi.spyOn(AbortSignal, 'timeout').mockImplementation((milliseconds) => {
+      scheduledTimeoutMs = milliseconds;
+      return neverAborted.signal;
+    });
     const searchProducts = vi.fn(async () => {
-      now += 10_001;
+      now += scheduledTimeoutMs + 1;
       return [] as Product[];
     });
     const saveToolArtifact = vi.fn(async () => undefined);
@@ -158,6 +162,77 @@ describe('exact catalog retrieval scope', () => {
         }
       }
     });
+  });
+
+  it('keeps closer preliminary generators ahead of oversized cards with more complete attributes', async () => {
+    const candidate = (id: string, power: number, phaseKnown: boolean): Product => ({
+      ...exact,
+      id,
+      name: `Generator ${power} kW`,
+      specs: {
+        'Nominal power': `${power} kW`,
+        ...(phaseKnown ? { 'число фаз': 'однофазные' } : {})
+      }
+    });
+    const candidates = [
+      candidate('confirmed-6', 6, true),
+      candidate('confirmed-12', 12, true),
+      candidate('preliminary-4', 4, false),
+      candidate('preliminary-5', 5, false)
+    ];
+    const repository = {
+      searchProductsByModelTokens: vi.fn(async () => []),
+      searchProducts: vi.fn(async () => candidates),
+      vectorSearch: vi.fn(async () => []),
+      getEmbeddingCoverage: vi.fn(async () => ({ target: 'products', total: 4, embedded: 4, usable: 4, coverage: 1 }))
+    };
+    const loadRequest = {
+      id: 'load', tool: 'calculator.generatorLoad' as const, args: { loads: [] },
+      required: true, rationale: 'reuse workshop load', coversRequirementIds: []
+    };
+    const catalogRequest = {
+      id: 'catalog', tool: 'catalog.search' as const,
+      args: { query: 'generator', productIntent: 'generator', canonicalProductIntent: 'generator' as const, limit: 3 },
+      required: true, rationale: 'find three preliminary candidates', coversRequirementIds: []
+    };
+    const intent = { ...intentFor(['generator']), toolRequests: [loadRequest, catalogRequest] };
+    intent.selectionPolicy!.alternativePolicy = 'same_class_only';
+    intent.selectionPolicy!.selectionGoal = 'preliminary_fit';
+    intent.selectionPolicy!.maxCards = 3;
+    intent.selectionPolicy!.phase = 'single_phase';
+    const loadResult: ToolResult = {
+      requestId: 'load', tool: 'calculator.generatorLoad', status: 'ok', warnings: ['generator_load_startup_unconfirmed'],
+      payload: { profile: { totalRunningKw: 2.9, runningOnlyNominalFloorKw: 3, missingStartingLoads: ['pump:насос'] } }
+    };
+    const executor = new AgentManagerToolExecutor(
+      { saveToolArtifact: vi.fn(async () => undefined) } as never,
+      repository as never,
+      {} as never,
+      {} as never,
+      async () => null,
+      (async () => { throw new Error('unexpected price read'); }) as never,
+      vi.fn(async () => undefined)
+    );
+
+    const result = await (executor as unknown as { executeTools(input: Record<string, unknown>): Promise<{
+      toolResults: ToolResult[];
+    }> }).executeTools({
+      session: { id: 'session' }, turnId: 'turn', executionOwner: 'test', userMessage: 'workshop generator', history: [],
+      intent, toolRequests: [loadRequest, catalogRequest], needState: emptyNeedState(), pendingLeadCaptureDraft: null,
+      persistedToolResults: new Map([['load', loadResult]]), budget: new AgentManagerTurnBudget()
+    });
+    const catalog = result.toolResults.find((toolResult) => toolResult.requestId === 'catalog');
+
+    expect(catalog?.payload).toMatchObject({
+      productIds: ['preliminary-4', 'preliminary-5', 'confirmed-6'],
+      generatorLoadFit: {
+        ranking: {
+          orderedProductIds: ['preliminary-4', 'preliminary-5', 'confirmed-6']
+        }
+      }
+    });
+    expect(catalog?.warnings).toContain('answer_products_preliminary:unknown_evidence_kept:2');
+    expect(catalog?.payload).not.toMatchObject({ productIds: expect.arrayContaining(['confirmed-12']) });
   });
   it('uses exact identity lookup without unrelated text, embedding or category expansion', async () => {
     const { repository, search } = setup([exact, other]);

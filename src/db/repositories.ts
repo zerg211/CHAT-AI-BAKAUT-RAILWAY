@@ -3958,9 +3958,7 @@ export class ProductRepository {
              FROM unnest($3::text[]) AS token
              WHERE lower(name) LIKE '%' || lower(token) || '%'
                 OR lower(coalesce(category, '')) LIKE '%' || lower(token) || '%'
-                OR lower(coalesce(description, '')) LIKE '%' || lower(token) || '%'
                 OR lower(coalesce(source_url, '')) LIKE '%' || lower(token) || '%'
-                OR lower(coalesce(specs::text, '')) LIKE '%' || lower(token) || '%'
            ) AS token_match_count,
            'text'::text AS retrieval_source
          FROM products
@@ -3972,9 +3970,7 @@ export class ProductRepository {
                SELECT 1 FROM unnest($3::text[]) AS token
                WHERE lower(name) LIKE '%' || lower(token) || '%'
                   OR lower(coalesce(category, '')) LIKE '%' || lower(token) || '%'
-                  OR lower(coalesce(description, '')) LIKE '%' || lower(token) || '%'
                   OR lower(coalesce(source_url, '')) LIKE '%' || lower(token) || '%'
-                  OR lower(coalesce(specs::text, '')) LIKE '%' || lower(token) || '%'
              )
            )
        )

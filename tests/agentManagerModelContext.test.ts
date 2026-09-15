@@ -42,7 +42,7 @@ describe('agent manager model context compaction', () => {
     expect(compactObserverCandidates(candidates,[details])[2]).toEqual(candidates[2]);
     expect(compactObserverCandidates(candidates,[{...details,status:'error'}])[2]).not.toHaveProperty('specs');
   });
-  it('shares only exactly represented web products and keeps unmatched source evidence and durable artifacts intact', () => {
+  it('removes every nested web product while preserving ids, validated evidence and durable artifacts', () => {
     const same = catalogProduct('p1');
     const different = { ...same, description: 'A different source description.', specs: { oil: '10W-30' } };
     const outside = catalogProduct('outside');
@@ -53,9 +53,10 @@ describe('agent manager model context compaction', () => {
         sourceAttempts: ['official_manual'], sourcesExhausted: false, answerGuidance: { directAnswer: 'No recoil starter.' } } };
     const snapshot = structuredClone(original);
     const compact = compactToolResultsForModel([original], [same])[0]!;
-    expect(compact.payload).toMatchObject({ products: [different, outside], productIds: [same.id], facts,
+    expect(compact.payload).toMatchObject({ productIds: [same.id, outside.id], facts,
       conflicts: snapshot.payload.conflicts, sourceAttempts: ['official_manual'], sourcesExhausted: false,
       answerGuidance: snapshot.payload.answerGuidance });
+    expect(compact.payload).not.toHaveProperty('products');
     expect(original).toEqual(snapshot);
   });
 

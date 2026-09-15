@@ -35,6 +35,38 @@ describe('OpenAIAgentManagerModel semantic inputs', () => {
     createStructuredJsonResponse.mockReset();
   });
 
+  it('gives the final reviewer prior ledger facts and recommendation eligibility roles', async () => {
+    createStructuredJsonResponse.mockResolvedValueOnce({ parsed: {
+      processDisclosure: false, evidence: '', rationale: 'Context is consistent.',
+      factualIssues: [], ownershipIssues: []
+    } });
+    const ledgerState = reduceDialogueLedger([]);
+    (ledgerState.factsByKey as Record<string, unknown>).fuel_type = {
+      eventId: 'fact.confirmed:fuel', eventType: 'fact.confirmed', factKey: 'fuel_type', value: 'бензин',
+      status: 'active', evidence: 'Нужен бензиновый генератор', source: 'buyer', confidence: 'confirmed'
+    };
+    const product = { id: 'eligible', name: 'Генератор бензиновый Test 4000', specs: {} };
+    const productEvidenceRoles = [{ productId: product.id, role: 'recommendation_candidate' as const,
+      eligibleForRecommendation: true, rejectionReasons: [] }];
+
+    await new OpenAIAgentManagerModel().reviewCustomerLanguage({
+      userMessage: 'Покажите предварительные варианты.',
+      answerText: 'Показываю предварительный бензиновый вариант.',
+      products: [product], toolResults: [], ledgerState, productEvidenceRoles
+    });
+
+    const request = createStructuredJsonResponse.mock.calls[0]![0].request;
+    const data = JSON.parse(request.input.find((item: { role: string }) => item.role === 'user').content);
+    expect(data.ledger.facts).toEqual(expect.arrayContaining([
+      expect.objectContaining({ key: 'fuel_type', value: 'бензин' })
+    ]));
+    expect(data.productEvidenceRoles).toEqual(productEvidenceRoles);
+    expect(request.input.find((item: { role: string }) => item.role === 'system').content)
+      .toContain('comparison_reference_only');
+    expect(request.input.find((item: { role: string }) => item.role === 'system').content)
+      .toContain('Товар без роли нельзя считать доступным кандидатом');
+  });
+
   it.each(['generator', 'engineOil'] as const)('normalizes an explicit canonical mention class before strict web-target validation: %s', async (canonicalProductClass) => {
     const now = new Date('2026-09-05T17:00:00Z').toISOString();
     const session: ConversationSession = { id: '11111111-1111-4111-8111-111111111111', status: 'active',
