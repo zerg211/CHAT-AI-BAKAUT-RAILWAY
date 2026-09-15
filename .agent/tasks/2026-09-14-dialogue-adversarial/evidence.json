@@ -2,7 +2,7 @@
   "taskId": "2026-09-14-dialogue-adversarial",
   "baselineSha": "4a8edb186ad7086fb2a302782993ff3713141116",
   "branch": "codex/dialogue-adversarial-correctness",
-  "verdict": "SECOND_CORRECTIVE_PRE_PUBLICATION_IN_PROGRESS",
+  "verdict": "THIRD_CORRECTIVE_PRE_PUBLICATION_IN_PROGRESS",
   "acceptance": {
     "AC1": "PASS",
     "AC2": "PASS",
@@ -66,6 +66,16 @@
     "build": { "status": "PASS" },
     "criticReview": { "status": "PASS", "independentTestsPassed": 196 }
   },
+  "thirdCorrectiveChecks": {
+    "focusedTests": { "status": "PASS", "testsPassed": 285 },
+    "finalDirectTests": { "status": "PASS", "testsPassed": 40 },
+    "typecheck": { "status": "PASS" },
+    "noNewRegex": { "status": "PASS", "legacyBaseline": 203 },
+    "build": { "status": "PASS" },
+    "criticReview": { "status": "PASS", "independentTestsPassed": 285 },
+    "isolatedDialogueLedgerRetry": { "status": "PASS", "testsPassed": 24 },
+    "realPostgresIntegration": { "status": "NOT_RUN", "reason": "no isolated DATABASE_URL configured" }
+  },
   "production": {
     "githubPr": 26,
     "mergedSha": "22d519e581e87e5a06f80d73b046138695600dc8",
@@ -96,6 +106,22 @@
       "errorCode": "agent_manager_generation_failed",
       "cause": "aggregate calculator evidence attribute mismatch followed by repair admitted with only 31.359 seconds remaining"
     },
-    "secondCorrectiveBranch": "codex/calculator-total-evidence-binding"
+    "secondCorrectiveBranch": "codex/calculator-total-evidence-binding",
+    "secondCorrectivePr": 28,
+    "secondCorrectiveMergedSha": "984cbf7eba8fd736848f79995df3cc10aaa8cc7f",
+    "secondCorrectiveRailway": {
+      "status": "SUCCESS",
+      "deploymentId": "050492ad-7e20-404e-add1-f014bffa4d06",
+      "codeSha": "984cbf7eba8fd736848f79995df3cc10aaa8cc7f"
+    },
+    "thirdLiveDialogue": {
+      "status": "FAIL",
+      "conversationId": 2188,
+      "sessionId": "355fccf1-14f5-493e-b5d2-5640416cca07",
+      "turnId": "81ecd066-ddec-495b-bc04-b855e3dc1a2d",
+      "errorCode": "agent_manager_recovery_failed",
+      "cause": "verified memory projection lost durable exact-evidence provenance and nonnumeric tool facts did not require item binding"
+    },
+    "thirdCorrectiveBranch": "codex/verified-memory-evidence-source"
   }
 }

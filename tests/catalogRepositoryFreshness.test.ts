@@ -107,6 +107,7 @@ describe('ProductRepository catalog freshness integration', () => {
             source_url: 'https://manufacturer.example/current-product',
             source_title: 'Official specification',
             evidence: 'Nominal power 5 kW',
+            evidence_verified_exact: true,
             source_tier: 'official_page',
             source_authority: 'manufacturer',
             observed_at: new Date('2026-08-30T12:00:00.000Z'),
@@ -138,6 +139,7 @@ describe('ProductRepository catalog freshness integration', () => {
       sourceUrl: 'https://manufacturer.example/current-product',
       sourceTitle: 'Official specification',
       evidence: 'Nominal power 5 kW',
+      evidenceVerifiedExact: true,
       sourceTier: 'official_page',
       sourceAuthority: 'manufacturer',
       observedAt: '2026-08-30T12:00:00.000Z',
@@ -154,6 +156,7 @@ describe('ProductRepository catalog freshness integration', () => {
     expect(writeSql).toContain('source_tier');
     expect(writeSql).toContain('source_authority');
     expect(writeSql).toContain('observed_at');
+    expect(writeSql).toContain('evidence_verified_exact');
     expect(writeSql).toContain('ON CONFLICT DO NOTHING');
     expect(writeSql).toContain('WHERE NOT EXISTS (SELECT 1 FROM inserted)');
     expect(writeSql).toContain('AND product_key = $2');
@@ -168,10 +171,27 @@ describe('ProductRepository catalog freshness integration', () => {
       sourceFingerprint: 'source-fingerprint-current',
       sourceTier: 'official_page',
       sourceAuthority: 'manufacturer',
-      observedAt: '2026-08-30T12:00:00.000Z'
+      observedAt: '2026-08-30T12:00:00.000Z',
+      evidenceVerifiedExact: true
     });
     expect(savedAgain?.id).toBe(saved?.id);
     expect(query.mock.calls.filter(([sql]) => String(sql).includes('INSERT INTO verified_product_facts'))).toHaveLength(2);
+  });
+
+  it('rejects unvalidated web or manual evidence before it can overwrite an exact row', async () => {
+    const query = vi.fn();
+    const repository = new ProductRepository({ query } as never);
+    const unvalidated = {
+      productName: 'Current product', attribute: 'nominal power', value: '5 kW',
+      sourceUrl: 'https://manufacturer.example/current-product.pdf', sourceTitle: 'Official manual',
+      evidence: 'Unvalidated replacement text', sourceTier: 'official_manual' as const,
+      sourceAuthority: 'manufacturer' as const, confidence: 'high' as const
+    };
+
+    for (const sourceType of ['web', 'manual'] as const) {
+      expect(await repository.upsertVerifiedProductFact({ ...unvalidated, sourceType })).toBeNull();
+    }
+    expect(query).not.toHaveBeenCalled();
   });
 
   it('does not return a product-bound verified fact after its catalog fingerprint changes', async () => {

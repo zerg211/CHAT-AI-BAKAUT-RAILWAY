@@ -3222,8 +3222,11 @@ describe('AgentManagerOrchestrator', () => {
             answerText: `${exact.name}: the current catalog description confirms electric start with a key.`,
             factsUsed: [{
               factKey: 'start_method',
-              value: true,
-              sourceEventIds: ['current-product-details']
+              value: exact.description,
+              sourceEventIds: ['current-product-details'],
+              productName: exact.name,
+              attribute: 'description',
+              claimKind: 'confirmed_value'
             }],
             questionsAsked: [],
             toolResultIds: ['current-product-details'],
@@ -3352,9 +3355,11 @@ describe('AgentManagerOrchestrator', () => {
           return {
             answerText: `${withPavingMat.name} беру как конкретный вариант: коврик для мощения подтверждён в карточке, цена ${withPavingMat.price} ₽.`,
             factsUsed: [{
-              factKey: 'protective_mat_for_paving',
-              value: true,
-              sourceEventIds: ['plate-details']
+              factKey: 'protective_mat_for_paving', value: 'Да', sourceEventIds: ['plate-details'],
+              productName: withPavingMat.name, attribute: 'коврик для мощения брусчатки', claimKind: 'confirmed_value'
+            }, {
+              factKey: 'selected_plate_price', value: withPavingMat.price, sourceEventIds: ['plate-details'],
+              productName: withPavingMat.name, attribute: 'price', claimKind: 'confirmed_value'
             }],
             questionsAsked: [],
             toolResultIds: ['plate-details'],
@@ -10319,7 +10324,8 @@ describe('verified product memory across catalog-only follow-ups', () => {
     return { id: 'memory-force', productId: champion.id, productKey: 'championpc5431f', productName: champion.name,
       attribute: 'centrifugal_force_kn', value: '8,2 кН', sourceType: 'web', confidence: 'high', status: 'active',
       sourceUrl: 'https://www.champion-tools.ru/shop/vibroplity/champion-pc5431f/', sourceTitle: 'CHAMPION PC5431F',
-      evidence: 'Центробежная сила, (кН) 8,2', sourceTier: 'official_page', sourceAuthority: 'manufacturer',
+      evidence: 'Центробежная сила, (кН) 8,2', evidenceVerifiedExact: true,
+      sourceTier: 'official_page', sourceAuthority: 'manufacturer',
       firstSeenAt: now, lastVerifiedAt: now, createdAt: now, updatedAt: now, hitCount: 0, ...overrides };
   }
   async function followUp(options: { attribute?: string; facts?: VerifiedProductFact[]; omitCards?: boolean; bothCards?: boolean;

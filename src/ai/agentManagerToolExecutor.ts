@@ -15,7 +15,7 @@ import { buildGeneratorLoadToolPayload, isGeneratorProductClass } from './agentM
 import { agentManagerToolRegistry, toolResultByteLength, validateToolResultOutput } from './agentManagerToolRegistry.js';
 import { AGENT_MANAGER_FINALIZATION_RESERVE_MS, AgentManagerTurnBudget, AgentManagerTurnBudgetExceededError } from './agentManagerTurnBudget.js';
 import { compactModelText, exactProductIdentity, modelTextTokens, normalizeModelText, textMatchesTargetName, tokenHasDigit, tokenHasLetter } from './modelTextMatching.js';
-import { matchingVerifiedFactsForRequest, reusableVerifiedFact, researchFactConfidenceNumber, researchFactMemoryCandidates, verifiedFactCoverageForRequest, verifiedFactsCoverRequest, verifiedFactsResearchResult } from './verifiedFactMemory.js';
+import { matchingVerifiedFactsForRequest, reusableVerifiedFact, reusableVerifiedFactSource, researchFactConfidenceNumber, researchFactMemoryCandidates, verifiedFactCoverageForRequest, verifiedFactsCoverRequest, verifiedFactsResearchResult } from './verifiedFactMemory.js';
 import { canonicalFactAttribute, verifiedFactValueKey } from './verifiedFactNormalization.js';
 import { readCurrentSitePrice } from '../catalog/currentSitePrice.js';
 import { verifyBudgetPrices } from '../catalog/verifyBudgetPrices.js';
@@ -1070,7 +1070,7 @@ async researchFromVerifiedFactMemory(input: {
       attributes: input.comparisonAttributes,
       limit: 32
     });
-    const exactBoundFacts = (input.targetProductNames.length
+    const identityBoundFacts = input.targetProductNames.length
       ? facts.filter((fact) => input.targetProductNames.some((targetName) => {
           if (!textMatchesTargetName(fact.productName, targetName)) return false;
           const targetProductIds = input.selectedProducts
@@ -1080,10 +1080,12 @@ async researchFromVerifiedFactMemory(input: {
             ? Boolean(fact.productId && targetProductIds.includes(fact.productId))
             : fact.productId === null || fact.productId === undefined;
         }))
-      : exactProductIds.length
+        : exactProductIds.length
         ? facts.filter((fact) => Boolean(fact.productId && exactProductIds.includes(fact.productId)))
-        : facts).filter(fact=>reusableVerifiedFact(fact,new Date()));
-    const knownSourceCandidates = [...new Map(exactBoundFacts.filter(fact => reusableVerifiedFact(fact, new Date()) &&
+        : facts;
+    const now = new Date();
+    const exactBoundFacts = identityBoundFacts.filter(fact => reusableVerifiedFact(fact, now));
+    const knownSourceCandidates = [...new Map(identityBoundFacts.filter(fact => reusableVerifiedFactSource(fact, now) &&
       fact.sourceTier && fact.sourceAuthority && fact.sourceUrl).map(fact => [fact.sourceUrl!, {
         url: fact.sourceUrl!, title: fact.sourceTitle ?? undefined
       }])).values()].slice(0, 8);
@@ -1254,6 +1256,7 @@ async persistVerifiedResearchFacts(input: {
         sourceUrl,
         sourceTitle,
         evidence,
+        evidenceVerifiedExact: true,
         sourceTier: fact.sourceTier,
         sourceAuthority: fact.sourceAuthority,
         observedAt: new Date().toISOString(),

@@ -1,5 +1,6 @@
 import type { AnswerContract, ToolResult } from './agentManagerContracts.js';
 import { compactModelText } from './modelTextMatching.js';
+import { canonicalFactAttribute, normalizedFactText, normalizedFactValue } from './verifiedFactNormalization.js';
 
 export type AnswerEvidenceClaimKind = 'confirmed_value' | 'source_label' | 'absence_or_unknown';
 
@@ -13,6 +14,7 @@ export interface AnswerEvidenceItem {
   evidence: string;
   exactEvidence: boolean;
   status: 'confirmed' | 'not_confirmed' | 'contradicted' | 'ambiguous' | 'not_found' | 'observed';
+  verifiedFactId?: string;
 }
 
 export interface AnswerEvidenceBinding {
@@ -69,7 +71,7 @@ function productItems(result: ToolResult, products: unknown, basePath: string) {
         status: 'observed'
       });
     }
-    for (const attribute of ['price', 'oldPrice', 'name', 'brand', 'article', 'externalId']) {
+    for (const attribute of ['price', 'oldPrice', 'name', 'brand', 'article', 'externalId', 'description']) {
       const value = product[attribute];
       if (!['string', 'number', 'boolean'].includes(typeof value)) continue;
       items.push({
@@ -114,8 +116,13 @@ export function toolResultEvidenceItems(result: ToolResult): AnswerEvidenceItem[
         const attribute = typeof entry.attribute === 'string' && entry.attribute.trim()
           ? entry.attribute.trim()
           : 'unknown';
+        const verifiedFactId = kind === 'fact' && typeof entry.verifiedFactId === 'string' && entry.verifiedFactId.trim()
+          ? entry.verifiedFactId.trim()
+          : undefined;
         return [{
-          id: `${result.requestId}:${kind}:${index}`,
+          id: verifiedFactId
+            ? `${result.requestId}:verified_fact:${verifiedFactId}:${encodeURIComponent(canonicalFactAttribute(attribute))}`
+            : `${result.requestId}:${kind}:${index}`,
           sourceEventId: result.requestId,
           path: `payload.${kind === 'fact' ? 'facts' : 'answerGuidance.coverage'}[${index}]`,
           productName: typeof entry.productName === 'string' ? entry.productName : null,
@@ -124,7 +131,8 @@ export function toolResultEvidenceItems(result: ToolResult): AnswerEvidenceItem[
           evidence,
           exactEvidence: kind === 'fact' ? entry.sourceType === 'catalog' || entry.evidenceVerifiedExact === true
             : entry.evidenceVerifiedExact === true,
-          status: kind === 'fact' ? 'confirmed' as const : safeStatus(entry.status)
+          status: kind === 'fact' ? 'confirmed' as const : safeStatus(entry.status),
+          verifiedFactId
         }];
       });
   }
@@ -229,6 +237,86 @@ function sameProduct(expected: unknown, actual: string | null) {
   return compactModelText(expected) === compactModelText(actual);
 }
 
+function scalarValueKey(value: unknown) {
+  return JSON.stringify(normalizedFactValue(itemText(value)));
+}
+
+function factValueMatchesItem(
+  fact: AnswerContract['factsUsed'][number],
+  item: AnswerEvidenceItem
+) {
+  if (scalarValueKey(fact.value) === scalarValueKey(item.value)) return true;
+  if (fact.claimKind !== 'source_label' || !item.exactEvidence) return false;
+  const factText = normalizedFactText(itemText(fact.value));
+  if (!factText) return false;
+  return normalizedFactText(itemText(item.value)).includes(factText) ||
+    normalizedFactText(item.evidence).includes(factText);
+}
+
+function factAttributeMatchesItem(fact: AnswerContract['factsUsed'][number], item: AnswerEvidenceItem) {
+  if (!fact.attribute) return false;
+  return canonicalFactAttribute(fact.attribute) === canonicalFactAttribute(item.attribute);
+}
+
+function factStatusMatchesItem(fact: AnswerContract['factsUsed'][number], item: AnswerEvidenceItem) {
+  if ((fact.claimKind ?? 'confirmed_value') === 'confirmed_value') {
+    return item.status === 'confirmed' || item.status === 'observed';
+  }
+  if (fact.claimKind === 'absence_or_unknown') {
+    return item.status !== 'confirmed';
+  }
+  return item.exactEvidence;
+}
+
+/**
+ * Fills a missing item id only when the current tool artifacts contain one
+ * unambiguous scalar proof. The writer still owns semantic claims; this only
+ * restores an address that the model omitted.
+ */
+export function bindUniqueMissingAnswerEvidenceItems(input: {
+  answer: AnswerContract;
+  toolResults: ToolResult[];
+}): AnswerContract {
+  const items = answerEvidenceItems(input.toolResults);
+  const toolIds = new Set(input.toolResults.map((result) => result.requestId));
+  return {
+    ...input.answer,
+    factsUsed: input.answer.factsUsed.map((fact) => {
+      if ((fact.evidenceItemIds?.length ?? 0) > 0) return fact;
+      const sourceIds = fact.sourceEventIds.filter((id) => toolIds.has(id));
+      if (!sourceIds.length) return fact;
+      const candidates = items.filter((item) =>
+        sourceIds.includes(item.sourceEventId) &&
+        sameProduct(fact.productName, item.productName) &&
+        factAttributeMatchesItem(fact, item) &&
+        factStatusMatchesItem(fact, item) &&
+        factValueMatchesItem(fact, item)
+      );
+      const durableCandidates = candidates.filter((item) => item.verifiedFactId);
+      // Verified-memory results deliberately repeat the same row in facts and
+      // coverage. Remove only that proven projection duplicate. A separate fresh
+      // fact without a durable id remains a competing candidate and therefore
+      // keeps auto-binding fail-closed.
+      const unambiguousCandidates = candidates.filter((candidate) =>
+        candidate.verifiedFactId ||
+        !candidate.path.startsWith('payload.answerGuidance.coverage[') ||
+        !durableCandidates.some((durable) =>
+          durable.sourceEventId === candidate.sourceEventId &&
+          durable.status === candidate.status &&
+          durable.exactEvidence === candidate.exactEvidence &&
+          sameProduct(durable.productName, candidate.productName) &&
+          canonicalFactAttribute(durable.attribute) === canonicalFactAttribute(candidate.attribute) &&
+          scalarValueKey(durable.value) === scalarValueKey(candidate.value) &&
+          normalizedFactText(durable.evidence) === normalizedFactText(candidate.evidence)
+        )
+      );
+      return unambiguousCandidates.length === 1
+        ? { ...fact, evidenceItemIds: [unambiguousCandidates[0]!.id] }
+        : fact;
+    })
+  };
+}
+
 function calculatorRunningTotalBinding(input: {
   fact: AnswerContract['factsUsed'][number];
   requestedIds: string[];
@@ -265,10 +353,11 @@ function calculatorRunningTotalBinding(input: {
 }
 
 export type AnswerEvidenceBindingIssue = {
-  code: 'numeric_fact_evidence_binding_missing' | 'numeric_fact_evidence_binding_unknown' |
-    'numeric_fact_value_not_in_bound_evidence' | 'fact_evidence_product_mismatch' |
+  code: 'numeric_fact_evidence_binding_missing' | 'fact_evidence_binding_missing' |
+    'numeric_fact_evidence_binding_unknown' | 'fact_evidence_binding_unknown' |
+    'numeric_fact_value_not_in_bound_evidence' | 'fact_value_not_in_bound_evidence' | 'fact_evidence_product_mismatch' |
     'fact_evidence_attribute_mismatch' | 'unconfirmed_evidence_used_as_confirmed_value' |
-    'numeric_source_label_evidence_unverified';
+    'numeric_source_label_evidence_unverified' | 'source_label_evidence_unverified';
   factKey: string;
   evidence: string;
 };
@@ -288,9 +377,9 @@ export function resolveAnswerEvidenceBindings(input: {
     const tokens = numericTokens(fact.value);
     if (!toolSourceIds.length) continue;
     const requestedIds = fact.evidenceItemIds ?? [];
-    if (tokens.length > 0 && requestedIds.length === 0) {
-      issues.push({ code: 'numeric_fact_evidence_binding_missing', factKey: fact.factKey,
-        evidence: `${fact.factKey}:${tokens.join(',')}` });
+    if (requestedIds.length === 0) {
+      issues.push({ code: tokens.length > 0 ? 'numeric_fact_evidence_binding_missing' : 'fact_evidence_binding_missing',
+        factKey: fact.factKey, evidence: `${fact.factKey}:${tokens.length ? tokens.join(',') : itemText(fact.value)}` });
       continue;
     }
     const runningTotalBinding = calculatorRunningTotalBinding({
@@ -303,7 +392,8 @@ export function resolveAnswerEvidenceBindings(input: {
     for (const evidenceItemId of requestedIds) {
       const item = itemById.get(evidenceItemId);
       if (!item || !toolSourceIds.includes(item.sourceEventId)) {
-        issues.push({ code: 'numeric_fact_evidence_binding_unknown', factKey: fact.factKey, evidence: evidenceItemId });
+        issues.push({ code: tokens.length > 0 ? 'numeric_fact_evidence_binding_unknown' : 'fact_evidence_binding_unknown',
+          factKey: fact.factKey, evidence: evidenceItemId });
         continue;
       }
       if (!sameProduct(fact.productName, item.productName)) {
@@ -311,7 +401,8 @@ export function resolveAnswerEvidenceBindings(input: {
           evidence: `${evidenceItemId}:${item.productName ?? 'unknown'}` });
         continue;
       }
-      if (fact.attribute && item.attribute !== 'page_text' && compactModelText(fact.attribute) !== compactModelText(item.attribute)) {
+      if (fact.attribute && item.attribute !== 'page_text' &&
+        canonicalFactAttribute(fact.attribute) !== canonicalFactAttribute(item.attribute)) {
         issues.push({ code: 'fact_evidence_attribute_mismatch', factKey: fact.factKey,
           evidence: `${evidenceItemId}:${item.attribute}` });
         continue;
@@ -321,19 +412,25 @@ export function resolveAnswerEvidenceBindings(input: {
           evidence: `${evidenceItemId}:page_text_requires_source_label` });
         continue;
       }
-      if (tokens.length > 0 && !evidenceContainsNumbers(item, tokens)) {
+      if (fact.claimKind === 'confirmed_value' && item.status !== 'confirmed' && item.status !== 'observed') {
+        issues.push({ code: 'unconfirmed_evidence_used_as_confirmed_value', factKey: fact.factKey,
+          evidence: `${evidenceItemId}:${item.status}` });
+        continue;
+      }
+      if (fact.claimKind === 'source_label' && !item.exactEvidence) {
+        issues.push({ code: tokens.length > 0 ? 'numeric_source_label_evidence_unverified' : 'source_label_evidence_unverified', factKey: fact.factKey,
+          evidence: `${evidenceItemId}:exact_evidence_required` });
+        continue;
+      }
+      const valueMatches = factValueMatchesItem(fact, item);
+      if (tokens.length > 0 && !valueMatches && !evidenceContainsNumbers(item, tokens)) {
         issues.push({ code: 'numeric_fact_value_not_in_bound_evidence', factKey: fact.factKey,
           evidence: `${evidenceItemId}:${tokens.join(',')}` });
         continue;
       }
-      if (tokens.length > 0 && fact.claimKind === 'source_label' && !item.exactEvidence) {
-        issues.push({ code: 'numeric_source_label_evidence_unverified', factKey: fact.factKey,
-          evidence: `${evidenceItemId}:exact_evidence_required` });
-        continue;
-      }
-      if (fact.claimKind === 'confirmed_value' && item.status !== 'confirmed' && item.status !== 'observed') {
-        issues.push({ code: 'unconfirmed_evidence_used_as_confirmed_value', factKey: fact.factKey,
-          evidence: `${evidenceItemId}:${item.status}` });
+      if (!valueMatches) {
+        issues.push({ code: tokens.length > 0 ? 'numeric_fact_value_not_in_bound_evidence' : 'fact_value_not_in_bound_evidence',
+          factKey: fact.factKey, evidence: `${evidenceItemId}:${itemText(fact.value)}!=${itemText(item.value)}` });
         continue;
       }
       bindings.push({

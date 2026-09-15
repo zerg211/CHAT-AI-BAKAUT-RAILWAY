@@ -98,3 +98,15 @@ The critic's final opinion prevailed:
 - admit answer repair only above 47 seconds, preserving 30 seconds for writer, 12 for re-review and 5 for operational work.
 
 Tests cover the exact production draft, a counted/scenario case where naive summation is wrong, malformed bindings, the evidence cap and the 47,000/47,001 millisecond repair boundary.
+
+## Third post-deployment dispute: durable memory evidence
+
+Production dialogue #2188 completed its first turn, then rejected a useful second-turn draft because A-iPower facts loaded from memory had no addressable exact evidence. The critic also identified a nonnumeric bypass: `a_ipower_fuel=бензиновый` had no item ID and escaped the numeric-only missing-binding guard.
+
+Root first proposed remapping matching memory-derived tool sources directly to `verified_fact:<id>`. The critic objected that old SQL/legacy rows do not prove exact excerpts; in the failed payload, some evidence fields contained only a URL. Root accepted a durable database marker but challenged whether coverage needed its own row ID and whether the tool source should be rewritten. Final agreement: the fact projection carries `verifiedFactId`; coverage carries only the exact marker; the source remains the truthful current `web.researchProductFacts` memory-hit tool.
+
+After the first implementation, the critic found that production projects a stored row into both `facts` and `coverage`, making a simple unique match ambiguous. The critic initially preferred any durable candidate. Root objected that this could silently ignore a separate fresh exact fact. The critic narrowed the correction: ignore only a coverage item proven to duplicate the durable fact by request, product, canonical attribute, normalized value, evidence, status and exact marker. A second durable row or a fresh independent exact fact remains ambiguous and fail-closed.
+
+Root also challenged the repository-wide rejection of new web/manual rows without `evidenceVerifiedExact=true`. The critic checked every runtime caller: exact research persistence is the only producer, both direct and queued paths carry `true`, and the worker separately enforces it. SQL legacy rows receive the migration default `false`, remain URL candidates, and cannot supply confirmed values. The repository guard therefore prevents a future unvalidated caller from replacing evidence or refreshing the TTL of an exact row. This is the final shared opinion.
+
+Final verification: root focused 285/285 and final direct 40/40 PASS; critic focused 285/285, direct 27/27, typecheck, no-new-regex and build PASS. The isolated long generated-state file passed 24/24. Real PostgreSQL integration was not run because no isolated test database was configured.

@@ -503,6 +503,7 @@ function mapVerifiedProductFact(row: QueryResultRow): VerifiedProductFact {
     sourceUrl: row.source_url ?? null,
     sourceTitle: row.source_title ?? null,
     evidence: row.evidence ?? null,
+    evidenceVerifiedExact: row.evidence_verified_exact === true,
     sourceTier: row.source_tier ?? null,
     sourceAuthority: row.source_authority ?? null,
     observedAt: row.observed_at ? isoTimestamp(row.observed_at) : null,
@@ -3602,6 +3603,7 @@ export class ProductRepository {
           const required = [fact?.productName, fact?.attribute, fact?.value, fact?.sourceUrl, fact?.evidence];
           if (required.some(value => typeof value !== 'string' || !value.trim()) ||
             typeof fact?.observedAt !== 'string' || !Number.isFinite(Date.parse(fact.observedAt)) ||
+            fact.evidenceVerifiedExact !== true ||
             !['web', 'catalog', 'manual'].includes(fact.sourceType) || !['high', 'medium', 'low'].includes(fact.confidence) ||
             !['official_page', 'official_manual', 'reliable_secondary'].includes(fact.sourceTier ?? '') ||
             !['manufacturer', 'secondary'].includes(fact.sourceAuthority ?? '')) {
@@ -3655,6 +3657,10 @@ export class ProductRepository {
     const attribute = input.attribute.trim();
     const value = input.value.trim();
     if (!productName || !productKey || !attribute || !value) return null;
+    // Web/manual rows are consumed later as fact-bearing memory. Keep the exact
+    // evidence marker a repository invariant so an unvalidated retry cannot
+    // overwrite an already exact row while its monotonic marker remains true.
+    if ((input.sourceType === 'web' || input.sourceType === 'manual') && input.evidenceVerifiedExact !== true) return null;
     const sourceFingerprint = input.sourceFingerprint?.trim() || catalogSourceContentHash({
       sourceType: input.sourceType,
       sourceUrl: input.sourceUrl?.trim() || null,
@@ -3699,11 +3705,12 @@ export class ProductRepository {
           INSERT INTO verified_product_facts(
             product_id, product_key, product_name, attribute, value, source_type,
             source_url, source_title, evidence, source_tier, source_authority, observed_at, last_verified_at,
-            confidence, catalog_source_hash, source_fingerprint, normalized_attribute, normalized_value, valid_until, supersedes_fact_ids
+            confidence, catalog_source_hash, source_fingerprint, normalized_attribute, normalized_value, valid_until,
+            supersedes_fact_ids, evidence_verified_exact
           )
           SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $12, $13, coalesce($14::timestamptz, now()), coalesce($14::timestamptz, now()), $10,
                  (SELECT source_content_hash FROM product_snapshot), $11, $16, $17::jsonb,
-                 coalesce($14::timestamptz, now())+interval '90 days', ARRAY(SELECT id FROM superseded)
+                 coalesce($14::timestamptz, now())+interval '90 days', ARRAY(SELECT id FROM superseded), $18
          FROM supersede_barrier
          WHERE ($1::uuid IS NULL OR EXISTS (SELECT 1 FROM product_snapshot))
            AND (SELECT current FROM evidence_order)
@@ -3725,8 +3732,9 @@ export class ProductRepository {
            confidence = $10,
            last_verified_at = greatest(verified_product_facts.last_verified_at, coalesce($14::timestamptz, now())),
            valid_until = greatest(verified_product_facts.last_verified_at, coalesce($14::timestamptz, now()))+interval '90 days',
-           normalized_attribute = $16,
-           normalized_value = $17::jsonb,
+            normalized_attribute = $16,
+            normalized_value = $17::jsonb,
+           evidence_verified_exact = verified_product_facts.evidence_verified_exact OR $18,
            updated_at = now()
          WHERE NOT EXISTS (SELECT 1 FROM inserted)
            AND (SELECT current FROM evidence_order)
@@ -3760,7 +3768,8 @@ export class ProductRepository {
           input.observedAt ?? null,
           input.expectedTechnicalVersion ?? null,
           canonicalFactAttribute(attribute),
-          JSON.stringify(normalizedFactValue(value))
+          JSON.stringify(normalizedFactValue(value)),
+          input.evidenceVerifiedExact === true
         ]
       );
       return result.rows[0] ? mapVerifiedProductFact(result.rows[0]) : null;

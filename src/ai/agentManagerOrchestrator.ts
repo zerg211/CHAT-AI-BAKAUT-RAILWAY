@@ -28,7 +28,7 @@ import { extractConfirmedGeneratorNominalPowerKw, extractWeightKg, fromEscaped, 
 import { emptyNeedState } from './needState.js';
 import { safeError } from './responseUtils.js';
 import { getAgentManagerRuntimeDecision } from './agentManagerRuntime.js';
-import { resolveAnswerEvidenceBindings } from './answerEvidenceBindings.js';
+import { bindUniqueMissingAnswerEvidenceItems, resolveAnswerEvidenceBindings } from './answerEvidenceBindings.js';
 import { ApparentPowerInputSchema } from './agentManagerContracts.js';
 import { extractContact, hasLeadContact } from './contactExtraction.js';
 import { leadCaptureMissingContact, leadCaptureMissingName, leadOfferWithoutReviewableResult } from './leadReviewGuards.js';
@@ -372,14 +372,16 @@ function normalizeAnswerEvidenceSources(input: {
   ledgerState: ReducedDialogueLedgerState;
   toolResults: ToolResult[];
 }): AnswerContract {
-  return {
+  const normalized = {
     ...input.answer,
     toolResultIds: [...new Set(input.answer.toolResultIds)],
     factsUsed: input.answer.factsUsed.map((fact) => ({
       ...fact,
-      sourceEventIds: [...new Set(fact.sourceEventIds)]
+      sourceEventIds: [...new Set(fact.sourceEventIds)],
+      evidenceItemIds: fact.evidenceItemIds ? [...new Set(fact.evidenceItemIds)] : undefined
     }))
   };
+  return bindUniqueMissingAnswerEvidenceItems({ answer: normalized, toolResults: input.toolResults });
 }
 
 function failClosedRecoveredAnswerContract(answer: AnswerContract, intent: AgentIntentContract): AnswerContract {

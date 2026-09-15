@@ -91,7 +91,7 @@ function isHttpSourceUrl(value: string | null | undefined) {
   }
 }
 
-export function reusableVerifiedFact(fact: VerifiedProductFact, now: Date) {
+export function reusableVerifiedFactSource(fact: VerifiedProductFact, now: Date) {
   if (fact.status !== 'active') return false;
   if (fact.confidence !== 'high' && fact.confidence !== 'medium') return false;
   if (fact.validUntil != null) {
@@ -103,6 +103,11 @@ export function reusableVerifiedFact(fact: VerifiedProductFact, now: Date) {
   if (!Number.isFinite(verifiedAt)) return false;
   const ageMs = now.getTime() - verifiedAt;
   return ageMs >= -futureClockSkewMs && ageMs <= verifiedFactMemoryTtlMs;
+}
+
+export function reusableVerifiedFact(fact: VerifiedProductFact, now: Date) {
+  if (!reusableVerifiedFactSource(fact, now)) return false;
+  return fact.sourceType === 'catalog' || fact.evidenceVerifiedExact === true;
 }
 
 export function verifiedFactMatchesAttribute(fact: VerifiedProductFact, attribute: string) {
@@ -234,7 +239,9 @@ export function verifiedFactsResearchResult(
     sourceUrl: fact.sourceUrl ?? undefined,
     sourceTitle: fact.sourceTitle ?? undefined,
     sourceTier: fact.sourceTier ?? undefined,
-    sourceAuthority: fact.sourceAuthority ?? undefined
+    sourceAuthority: fact.sourceAuthority ?? undefined,
+    evidenceVerifiedExact: fact.evidenceVerifiedExact === true,
+    verifiedFactId: fact.id
   }));
   const attributesCovered = options.attributesCovered !== false;
   return {
@@ -255,7 +262,8 @@ export function verifiedFactsResearchResult(
         sourceUrl: fact.sourceUrl ?? undefined,
         sourceTitle: fact.sourceTitle ?? undefined,
         sourceTier: fact.sourceTier ?? undefined,
-        sourceAuthority: fact.sourceAuthority ?? undefined
+        sourceAuthority: fact.sourceAuthority ?? undefined,
+        evidenceVerifiedExact: fact.evidenceVerifiedExact === true
       }))
     },
     summaryForAnswer: attributesCovered

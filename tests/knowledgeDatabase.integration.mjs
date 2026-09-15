@@ -21,7 +21,7 @@ const input={name:`BAKAUT-TEST KNOWLEDGE ${key}`,sourceUrl:`https://fixtures.bak
 const fact={productName:input.name,attribute:'Масса',value:'70 кг',sourceType:'manual',
   sourceUrl:`https://fixtures.bakaut.invalid/manual/${key}`,sourceTitle:input.name,
   evidence:`${input.name}: масса 70 кг.`,sourceTier:'official_manual',sourceAuthority:'manufacturer',
-  confidence:'high',observedAt:new Date(Date.now()-86400000).toISOString()};
+  evidenceVerifiedExact:true,confidence:'high',observedAt:new Date(Date.now()-86400000).toISOString()};
 try {
  await run('REAL_AUDIT_RETRIEVES_FAILED_AND_COMPLETED_TURNS_WITHOUT_BUYER_TEXT',async()=>{
   const sessionId=randomUUID(),failedId=randomUUID(),completeId=randomUUID(),messageId=randomUUID();
