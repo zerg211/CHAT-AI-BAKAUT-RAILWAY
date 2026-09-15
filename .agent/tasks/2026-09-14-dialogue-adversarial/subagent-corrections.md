@@ -83,3 +83,18 @@ The critic's final position prevailed and was implemented:
 - initial FAST/NORMAL catalog work retains the old 8-second answer reserve until semantic research expands the turn profile.
 
 The critic re-read the final diff, repeated the focused tests, and returned PASS. The root focused run passed 205/205; typecheck also passed.
+
+## Second post-deployment dispute: calculator aggregate evidence
+
+The second production attempt proved that the finalization reserve worked, but review rejected the writer's `totalRunningKw=2.9` fact because it referenced three `runningKw` component items. Root first implemented a special-case sum of those components. The critic rejected that approach with a concrete counterexample: calculator totals may apply `count`, strongest-scenario selection, operation mode, simultaneous-running groups and rounding, so a validator sum can disagree with the calculator or pass coincidentally.
+
+The critic's final opinion prevailed:
+
+- never reimplement calculator aggregation in the evidence validator;
+- accept the remap only for a null-product, confirmed `totalRunningKw` fact with exactly one successful `calculator.generatorLoad` source and only distinct `runningKw` component IDs from that request;
+- bind one evidence item, `payload.profile.totalRunningKw`, after exact numeric equality with the fact;
+- preserve ordinary fail-closed validation when any condition is absent;
+- enumerate `payload.profile` before `payload.loads` so the canonical item cannot be displaced by the per-tool evidence cap;
+- admit answer repair only above 47 seconds, preserving 30 seconds for writer, 12 for re-review and 5 for operational work.
+
+Tests cover the exact production draft, a counted/scenario case where naive summation is wrong, malformed bindings, the evidence cap and the 47,000/47,001 millisecond repair boundary.

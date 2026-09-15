@@ -168,7 +168,11 @@ export function toolResultEvidenceItems(result: ToolResult): AnswerEvidenceItem[
       visit(entry, `${path}.${key}`, `${idPath}:${key}`, key, depth + 1);
     }
   };
-  for (const [attribute, value] of Object.entries(payload)) {
+  const payloadEntries = result.tool === 'calculator.generatorLoad' && Object.hasOwn(payload, 'profile')
+    ? [['profile', payload.profile] as const,
+      ...Object.entries(payload).filter(([attribute]) => attribute !== 'profile')]
+    : Object.entries(payload);
+  for (const [attribute, value] of payloadEntries) {
     visit(value, `payload.${attribute}`, `payload:${attribute}`, attribute, 0);
   }
   return primitiveItems;
@@ -225,6 +229,41 @@ function sameProduct(expected: unknown, actual: string | null) {
   return compactModelText(expected) === compactModelText(actual);
 }
 
+function calculatorRunningTotalBinding(input: {
+  fact: AnswerContract['factsUsed'][number];
+  requestedIds: string[];
+  itemById: Map<string, AnswerEvidenceItem>;
+  toolResultById: Map<string, ToolResult>;
+}): AnswerEvidenceBinding | null {
+  if (input.fact.attribute !== 'totalRunningKw' || input.fact.claimKind !== 'confirmed_value' ||
+    input.fact.productName !== null || typeof input.fact.value !== 'number' || !Number.isFinite(input.fact.value) ||
+    input.fact.sourceEventIds.length !== 1 || input.requestedIds.length === 0 ||
+    new Set(input.requestedIds).size !== input.requestedIds.length) return null;
+  const sourceEventId = input.fact.sourceEventIds[0]!;
+  const source = input.toolResultById.get(sourceEventId);
+  if (source?.tool !== 'calculator.generatorLoad' || source.status !== 'ok') return null;
+  const items = input.requestedIds.map((id) => input.itemById.get(id));
+  if (items.some((item) => !item || item.sourceEventId !== sourceEventId || item.attribute !== 'runningKw' ||
+    !item.path.startsWith('payload.loads[') || !item.path.endsWith('].runningKw') || item.productName !== null ||
+    !item.exactEvidence || !['confirmed', 'observed'].includes(item.status))) return null;
+
+  // The calculator owns aggregation semantics (counts, co-running groups,
+  // scenarios and rounding). Components only identify the intended aggregate;
+  // the claim is grounded in the calculator's canonical result.
+  const canonical = input.itemById.get(`${sourceEventId}:payload:profile:totalRunningKw`);
+  if (!canonical || canonical.sourceEventId !== sourceEventId || canonical.path !== 'payload.profile.totalRunningKw' ||
+    canonical.attribute !== 'totalRunningKw' || canonical.productName !== null || !canonical.exactEvidence ||
+    !['confirmed', 'observed'].includes(canonical.status) || typeof canonical.value !== 'number' ||
+    !Number.isFinite(canonical.value) || canonical.value !== input.fact.value) return null;
+  return {
+    factKey: input.fact.factKey,
+    sourceEventId,
+    evidenceItemId: canonical.id,
+    evidencePath: canonical.path,
+    status: canonical.status
+  };
+}
+
 export type AnswerEvidenceBindingIssue = {
   code: 'numeric_fact_evidence_binding_missing' | 'numeric_fact_evidence_binding_unknown' |
     'numeric_fact_value_not_in_bound_evidence' | 'fact_evidence_product_mismatch' |
@@ -241,6 +280,7 @@ export function resolveAnswerEvidenceBindings(input: {
   const items = answerEvidenceItems(input.toolResults);
   const itemById = new Map(items.map((item) => [item.id, item]));
   const toolIds = new Set(input.toolResults.map((result) => result.requestId));
+  const toolResultById = new Map(input.toolResults.map((result) => [result.requestId, result]));
   const issues: AnswerEvidenceBindingIssue[] = [];
   const bindings: AnswerEvidenceBinding[] = [];
   for (const fact of input.answer.factsUsed) {
@@ -251,6 +291,13 @@ export function resolveAnswerEvidenceBindings(input: {
     if (tokens.length > 0 && requestedIds.length === 0) {
       issues.push({ code: 'numeric_fact_evidence_binding_missing', factKey: fact.factKey,
         evidence: `${fact.factKey}:${tokens.join(',')}` });
+      continue;
+    }
+    const runningTotalBinding = calculatorRunningTotalBinding({
+      fact, requestedIds, itemById, toolResultById
+    });
+    if (runningTotalBinding) {
+      bindings.push(runningTotalBinding);
       continue;
     }
     for (const evidenceItemId of requestedIds) {

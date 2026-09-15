@@ -1,0 +1,5 @@
+
+> bakaut-ai-sales-assistant@0.1.0 lint:no-regex
+> node scripts/no-regex-guard.mjs
+
+No new regex constructs. Legacy baseline: 203.

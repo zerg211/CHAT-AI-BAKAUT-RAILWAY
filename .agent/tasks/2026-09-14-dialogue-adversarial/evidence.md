@@ -23,7 +23,7 @@ Branch: `codex/dialogue-adversarial-correctness`
 | AC7 | PASS | Admin detail renders turn status/error/build, current readiness, task outcome, unresolved facts, required-tool/research diagnostics and warnings. |
 | AC8 | PASS | Contact panel follows the latest valid assistant `leadRequested`; sending/error placeholders cannot create or revoke authorization. |
 | AC9 | PASS | All local proof below passed without a local OpenAI call. |
-| AC10 | IN PROGRESS | PR #26 and Railway deployment passed. The first production dialogue #2186 exposed a finalization deadline defect; the corrective branch is verified locally and awaits merge, deployment and a fresh clean-session dialogue. |
+| AC10 | IN PROGRESS | PRs #26-#27 and their exact Railway deployments passed. Dialogues #2186-#2187 exposed two distinct finalization defects; the second corrective branch is under local verification before publication and a fresh clean-session dialogue. |
 
 ## Fresh verification
 
@@ -45,6 +45,14 @@ Raw logs are stored in `raw/`. The first parallel timeout run and its clean sequ
 - Trace cause: calculator and catalog completed; web research consumed 45.846 seconds; optional observation/read work left about 36.5 seconds, so the writer received about 21 seconds before the hard 15-second review reserve and timed out.
 - Corrective focused verification — PASS: 205/205 tests. TypeScript, no-new-regex guard and production build also PASS. The independent critic's final review is PASS.
 - Fresh full suite — 1501 tests PASS, one intentional skip, two failures. The chat-route timeout passed on focused retry. The remaining PDF integration test uses a live URL that now returns HTTP 404. The release gate passed oracle, mutation, regex, configured dependency audit, TypeScript and build, but honestly remained BLOCKED by its full-suite phase because of that external PDF fixture and one generated-sequence timeout; the complete generated-sequence file then passed 24/24 in isolation. See `problems.md` P4-P5.
+
+## Second production checkpoint and canonical-evidence correction
+
+- PR #27 merged as `d5b1f5573318efa46f8167710b23dfc2707229c7`; Railway deployment `5c7ca768-944b-4580-b231-01fd5bca2c9a` reached SUCCESS at that exact SHA, and both public health markers matched it.
+- The second clean production-widget dialogue was conversation `#2187`, session `96948942-ee02-400d-9ba7-65b0478aa6d0`. It produced no assistant message; the buyer again saw `Не удалось завершить ответ. Текст вашего вопроса остался в чате.` Captures are `raw/production-dialogue-2026-09-15-failed2-admin.json`, `raw/production-dialogue-2026-09-15-failed2-answer-contracts.json` and `raw/production-dialogue-2026-09-15-failed2-turn-artifacts.json`.
+- The first reserve correction did its job: continuation stopped with 68.15 seconds left and the initial writer completed. Review found exactly three attribute mismatches because the aggregate `totalRunningKw=2.9` cited three component `runningKw` items, despite the calculator's canonical `payload.profile.totalRunningKw=2.9` being present.
+- Repair then started with 31.359 seconds, below the full writer/review/operation budget, and timed out. The new correction binds the canonical calculator total without duplicating calculator semantics and changes repair admission to `remaining > 47,000 ms`.
+- Focused verification of the new correction — PASS: 196/196 tests; TypeScript, production build and the no-new-regex guard also PASS. The critic independently repeated 196/196 tests, found no blocking defect and returned PASS. Publication and a fresh production dialogue remain pending at this checkpoint.
 
 ## Known scoped limits
 
