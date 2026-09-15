@@ -29,6 +29,28 @@ type GeneratorLoadToolItem = ProductElectricalLoadItem & {
   basisKind?: string;
 };
 
+/**
+ * Returns the proven lower bound that every generator candidate must meet.
+ * With unknown startup loads this is not a sufficient sizing recommendation,
+ * but any nominal rating below the simultaneous running load is a confirmed
+ * conflict and must not survive preliminary catalog filtering.
+ */
+export function generatorLoadRunningFloorKw(toolResults: ToolResult[] = []) {
+  for (let index = toolResults.length - 1; index >= 0; index -= 1) {
+    const result = toolResults[index];
+    if (result?.tool !== 'calculator.generatorLoad' || result.status !== 'ok') continue;
+    const profile = (result.payload as { profile?: {
+      requiredNominalKw?: unknown;
+      runningOnlyNominalFloorKw?: unknown;
+    } }).profile;
+    const values = [profile?.requiredNominalKw, profile?.runningOnlyNominalFloorKw]
+      .map(Number)
+      .filter((value) => Number.isFinite(value) && value > 0);
+    if (values.length) return Math.max(...values);
+  }
+  return undefined;
+}
+
 function compactLoadToken(value: unknown) {
   return typeof value === 'string'
     ? value.trim().toLowerCase().replaceAll(' ', '_').replaceAll('-', '_')

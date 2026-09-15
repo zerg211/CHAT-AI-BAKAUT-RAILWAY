@@ -2,7 +2,7 @@
 
 Task: `2026-09-14-dialogue-adversarial`
 Baseline: `4a8edb186ad7086fb2a302782993ff3713141116`
-Branch: `codex/dialogue-adversarial-correctness`
+Branch: `codex/evidence-attribute-enum`
 
 ## Review and dispute
 
@@ -23,7 +23,7 @@ Branch: `codex/dialogue-adversarial-correctness`
 | AC7 | PASS | Admin detail renders turn status/error/build, current readiness, task outcome, unresolved facts, required-tool/research diagnostics and warnings. |
 | AC8 | PASS | Contact panel follows the latest valid assistant `leadRequested`; sending/error placeholders cannot create or revoke authorization. |
 | AC9 | PASS | All local proof below passed without a local OpenAI call. |
-| AC10 | IN PROGRESS | PRs #26-#27 and their exact Railway deployments passed. Dialogues #2186-#2187 exposed two distinct finalization defects; the second corrective branch is under local verification before publication and a fresh clean-session dialogue. |
+| AC10 | IN PROGRESS | PRs #26-#32 and their exact Railway deployments passed. Dialogue #2192 exposed an evidence-vocabulary mismatch, an underpowered pre-ranking pool and a catalog timeout overrun; the seventh corrective branch is under fresh verification before publication and a clean adaptive dialogue. |
 
 ## Fresh verification
 
@@ -79,6 +79,15 @@ Raw logs are stored in `raw/`. The first parallel timeout run and its clean sequ
 - Clean production conversation #2191, session `f02ea0e8-a2b8-482b-b66a-b8a5200a4fec`, turn `01feb77f-fc67-4c8f-88cc-509c2933226b`, used canonical evidence addresses. It still committed no assistant message because the writer grouped different values/attributes into three composite `factsUsed`; deterministic review correctly blocked eleven binding issues. Captures are `raw/production-dialogue-2026-09-15-failed6-admin.json` and `raw/production-dialogue-2026-09-15-failed6-turn-artifacts.json`.
 - The correction constrains writer output to one evidence item per atomic fact, teaches the same rule to initial and repair calls, keeps exact issue evidence in untrusted user JSON, and replaces internal `расчётный профиль` wording with customer-facing calculation language without banning useful source attribution.
 - Focused verification — PASS: 228/228 tests. The #2191 composites remain blocked; the seven atomic canonical facts pass with exact bindings. TypeScript and the no-new-regex guard pass. Publication, Railway readback and the final clean adaptive production dialogue remain pending.
+
+## Sixth production checkpoint and evidence-vocabulary correction
+
+- PR #32 merged as `4b91438a5ee192cb0bce92b9c3d46638f71449a6`; required GitHub workflow run `34975653578` passed. Railway deployment `844b97ed-3b66-4a57-ba81-4acb621bd32b` reached SUCCESS at the exact SHA, and public `/api/health` returned the same commit marker with `productionRuntime=agent_manager`.
+- Clean production conversation #2192, session `08ca6331-b992-4c79-afdd-da5f6ecf34c3`, turn `077c56fc-5a46-439b-a2d8-7110d277b644`, again showed the generic completion error and committed no assistant message. Captures are `raw/production-dialogue-2026-09-15-failed7-admin.json`, `raw/production-dialogue-2026-09-15-failed7-turn-artifacts.json` and `raw/production-dialogue-2026-09-15-failed7-turn1.txt`.
+- Atomic fact structure was correct, but all three unresolved starts used invented `attribute=starting_power_kw` against exact evidence attribute `missingStartingLoads`. The schema now enumerates only attributes available from active ledger facts, current evidence items and durable verified facts. Deterministic validation remains unchanged and still blocks the exact #2192 mismatch.
+- The same trace proved that a 3 kW running-only floor was lost before ranking: the returned eight products were only 0.65–1.6 kW. The correction filters nominal ratings below the validated floor before preference ranking/slicing while retaining unknown ratings as preliminary and never treating the floor as final startup sizing.
+- The trace also recorded `catalog.search durationMs=34128` against `configuredTimeoutMs=10000`. Primary expansion now transfers a bounded description prefix for 1,000 candidates, hydrates only the chosen products, checks an absolute deadline and rethrows cancellation. This preserves broad discovery and description-based feature signals while reducing transfer/map work.
+- Current focused verification — PASS: 238/238 tests across schema, evidence bindings, catalog expansion, running-load filtering, cards, repository cancellation and durable-fact paths. TypeScript, production build and no-new-regex guard pass. The independent critic challenged the absolute-deadline retry path; the executor-level regression now proves `timeoutSignal.aborted=false` still yields one repository call, `status=timeout` and `attempts:1`. The critic repeated a fresh 230/230 focused run plus TypeScript, regex and diff checks and returned PASS. Publication and a new adaptive production dialogue remain pending.
 
 ## Known scoped limits
 

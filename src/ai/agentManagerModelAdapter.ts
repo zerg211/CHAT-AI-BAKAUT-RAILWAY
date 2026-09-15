@@ -287,6 +287,7 @@ export function answerEvidenceSourceHints(input: {
   const factSourceToolIds = input.toolResults
     .filter(toolResultCanGroundFacts)
     .map((result) => result.requestId);
+  const evidenceItems = answerEvidenceItemsForModel(input.toolResults);
   return {
     allowedSourceIds: [
       ...ledgerFacts.map((fact) => fact.id),
@@ -295,7 +296,12 @@ export function answerEvidenceSourceHints(input: {
     ],
     ledgerFacts,
     toolResults,
-    evidenceItems: answerEvidenceItemsForModel(input.toolResults)
+    evidenceItems,
+    allowedAttributes: uniqueStrings([
+      ...ledgerFacts.map((fact) => fact.factKey),
+      ...evidenceItems.map((item) => item.attribute),
+      ...(input.verifiedProductFacts ?? []).map((fact) => fact.attribute)
+    ])
   };
 }
 
@@ -1893,8 +1899,13 @@ export const answerContractFormat = {
   }
 } as const;
 
-export function answerContractFormatForEvidenceSources(allowedSourceIds: string[], eligibleProductIds: string[]) {
+export function answerContractFormatForEvidenceSources(
+  allowedSourceIds: string[],
+  eligibleProductIds: string[],
+  allowedAttributes: string[] = []
+) {
   const productIds = uniqueStrings(eligibleProductIds);
+  const attributes = uniqueStrings(allowedAttributes);
   const sourceIdItems = allowedSourceIds.length
     ? { type: 'string', enum: allowedSourceIds }
     : { type: 'string' };
@@ -1920,7 +1931,10 @@ export function answerContractFormatForEvidenceSources(allowedSourceIds: string[
                   type: 'array',
                   items: sourceIdItems,
                   ...(allowedSourceIds.length ? {} : { maxItems: 0 })
-                }
+                },
+                attribute: attributes.length
+                  ? { type: 'string', enum: attributes }
+                  : { type: 'string' }
               }
             }
           }
@@ -2399,6 +2413,7 @@ export class OpenAIAgentManagerModel implements AgentManagerModel {
             'Отдельно проверь ownershipIssues: переложена ли доступная менеджеру проверка на покупателя. Для каждого нарушения верни claimId из claimReferences, reason с объяснением с учётом вопроса и наблюдений, managerAction — конкретную работу, которую должен выполнить менеджер имеющимися возможностями. Это самостоятельная ошибка качества даже при верных фактах. Не отмечай допустимые вопросы о личных условиях покупателя и физическом осмотре полученного товара. Без нарушения верни [].',
             untrustedEvidenceBoundary,
             'Также проверь factualIssues: противоречия между точными товарными утверждениями ответа и products/toolResults/verifiedProductFacts, перенос факта на другую модель, утрату отрицания или условий, выдачу неподтвержденного/конфликтного значения за установленный факт. verifiedProductFacts — актуальные сохраненные факты с источниками для точных моделей: учитывай исходные attribute/value, даже если вопрос использует другой термин. confirmed означает подтверждение конкретного value, включая отсутствие свойства; название атрибута, тип документа и упоминание слова не подтверждают наличие свойства. Не путай отрицание свойства другой модели с отрицанием свойства проверяемой модели.',
+            'В сравнениях и превосходной степени сохраняй точный показатель и область найденных результатов. Номинальная, максимальная, пусковая, активная и полная мощность — разные показатели: «наибольшая найденная номинальная мощность» допустима по номинальным значениям, а общее «самый мощный» без доказательства по единому показателю является factualIssue.',
             'Когда ответ сопоставляет измерительные значения из разных источников, отдельное подтверждение каждого числа не доказывает сопоставимость. Если наблюдения не подтверждают одинаковый тип показателя, стандарт, расстояние, нагрузку и существенные условия измерения, пометь как factualIssue вывод о разнице в реальной работе или практическом превосходстве. Допустимо раздельно назвать заявленные источниками числа и прямо сказать, что методики не подтверждены как сопоставимые.',
             'Определи роль каждого товарного обозначения по смыслу: предлагаемый к покупке товар, подтверждённая деталь/расходник, стандарт или характеристика, либо упоминание покупателя. Обозначение детали или стандарта не обязано быть названием отдельного товара каталога, но его применение и совместимость должны опираться на источники. Если ответ предлагает не подтверждённую каталогом модель как наш товар либо выдумывает совместимость, верни factualIssues с claimId и sourceResultId соответствующего каталожного наблюдения или проверенного факта. Само сочетание букв и цифр не является нарушением.',
             'conflictingVerifiedProductFacts — актуальные источники точных моделей с разными значениями одного атрибута. Они не подтверждают окончательное значение: проверь, разрешают ли текущие toolResults конфликт; иначе ответ должен сохранить неопределенность. sourceResultId=verified_fact:<id> конфликтующего источника допустим для указания проблемы, но сам конфликт не становится фактом ответа.',
@@ -2573,6 +2588,7 @@ export class OpenAIAgentManagerModel implements AgentManagerModel {
             'Отвечай по-русски как живой менеджер БАКАУТ: просто, легко, без канцелярита и третьего лица, от лица магазина («у нас есть», «можем уточнить»). Простое — кратко; сложное/сравнение — сначала вывод 1-2 предложения, затем 2-4 отличия. Покупателю сообщай состояние товарного факта, а не процесс работы системы: что уже известно по конкретной модели и какой именно параметр, артикул или совместимость пока не подтверждены. Никогда не упоминай инструменты, web/внешний поиск, попытки, timeout/тайм-аут, сбой, pipeline, внутреннюю проверку или то, завершилась ли проверка. Эти сведения остаются только в admin metadata.',
             'Опирайся только на ledger, catalog/tool results, checked research facts и диалог. Чего нет в фактах (dB, наличие, доставка, скидка, срок) — честно «нужно уточнить», при необходимости предложи форму.',
             'Specs товара из tool result catalog.* — подтверждённые данные каталога: если вопрос покупателя о характеристике и её значение есть в specs, отвечай прямо этим значением (factsUsed с sourceEventIds=requestId инструмента). Не отказывайся отвечать и не требуй дополнительного подтверждения того, что в карточке уже написано.',
+            'В сравнениях и превосходной степени называй точный измеряемый показатель и область найденных результатов: например, «наибольшая найденная номинальная мощность». Не объединяй номинальную, максимальную, пусковую, активную и полную мощность в общее «самый мощный», если evidence не доказывает один и тот же показатель.',
             'evidenceConflicts в products — это неразрешённое расхождение значений одной характеристики. Не выбирай значение самостоятельно и не называй его подтвержденным; сохрани полезный вывод по остальным фактам и обозначь эту характеристику как требующую уточнения.',
             'lead.capture ok → подтверди получение и не проси повторно. not_found/error (нет имени/телефона) → НЕ подтверждай и не говори, что передано; leadAction="offer_form" и просьба недостающего контакта в форме.',
             'Без лишних вопросов; вопрос — только если он реально нужен для следующего шага.',
@@ -2628,7 +2644,8 @@ export class OpenAIAgentManagerModel implements AgentManagerModel {
         input.productEvidenceRoles
           ? input.products.filter(product => input.productEvidenceRoles!.some(role =>
             role.productId === product.id && role.eligibleForRecommendation)).map(product => product.id)
-          : input.products.map(product => product.id))
+          : input.products.map(product => product.id),
+        availableEvidenceSources.allowedAttributes)
     };
     const { parsed } = await createStructuredJsonResponse({
       request,

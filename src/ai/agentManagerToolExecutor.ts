@@ -11,7 +11,7 @@ import { extractWeightKg, fromEscaped, generatorAutoStartProfile, generatorPhase
 import { safeError } from './responseUtils.js';
 import { extractContact } from './contactExtraction.js';
 import { budgetMaxFromNeedState, filterGeneratorProductsByLoadProfile, gateStrictSelectionRequirements, hasStructuredGeneratorRemoteStartPreference, productMeetsSupportedStrictAutoStartRequirement, productMeetsSupportedStrictRemoteStartRequirement, productMeetsSupportedStrictFuelRequirement, productMeetsSupportedStrictPriceVisibilityRequirement, productMeetsSupportedStrictVoltageRequirement, qualifiedNominalActivePowerKw, rankCatalogProductsByStructuredPreferences, structuredSelectionRankingObjectives, toolRequestProductIntent, toolRequestScopedQuery, uniqueStrings } from './agentManagerCardSelection.js';
-import { buildGeneratorLoadToolPayload, isGeneratorProductClass } from './agentManagerGeneratorLoad.js';
+import { buildGeneratorLoadToolPayload, generatorLoadRunningFloorKw, isGeneratorProductClass } from './agentManagerGeneratorLoad.js';
 import { agentManagerToolRegistry, toolResultByteLength, validateToolResultOutput } from './agentManagerToolRegistry.js';
 import { AGENT_MANAGER_FINALIZATION_RESERVE_MS, AgentManagerTurnBudget, AgentManagerTurnBudgetExceededError } from './agentManagerTurnBudget.js';
 import { compactModelText, exactProductIdentity, modelTextTokens, normalizeModelText, textMatchesTargetName, tokenHasDigit, tokenHasLetter } from './modelTextMatching.js';
@@ -422,7 +422,8 @@ export function filterProductsByStructuredSelectionPolicy(input: {
       warnings: [`answer_products_suppressed:unsupported_or_unverifiable_strict_hard_constraint:${strictRequirementAssessment.blockers.length}`]
     };
   }
-  const calculatorNominalPowerMin = generatorLoadRequirementKw(input.toolResults);
+  const calculatorNominalPowerMin = generatorLoadRequirementKw(input.toolResults)
+    ?? generatorLoadRunningFloorKw(input.toolResults);
   const derivedNominalPowerMin = strictRequirementAssessment.generatorNominalPowerMinKw === undefined
     ? calculatorNominalPowerMin
     : calculatorNominalPowerMin === undefined
@@ -1590,6 +1591,7 @@ async executeTools(input: {
               identifiers: request.args.identifiers,
               limit,
               signal: toolSignal,
+              deadlineAtMs: toolAttemptStartedAt + effectiveTimeoutMs,
               productIntent,
               powerSource: resolvedToolPowerSource(request, input.intent),
               embeddingQuery: semanticQuery,
@@ -1600,10 +1602,17 @@ async executeTools(input: {
             const loadRequirementKw = isGeneratorProductClass(productIntent)
               ? generatorLoadRequirementKw(toolResults)
               : undefined;
+            const runningOnlyFloorKw = loadRequirementKw === undefined && isGeneratorProductClass(productIntent)
+              ? generatorLoadRunningFloorKw(toolResults)
+              : undefined;
+            const loadFilterMinimumKw = loadRequirementKw ?? runningOnlyFloorKw;
             const budgetPrices = verifyBudget ? await verifyBudgetPrices({products:search.products,
               read:this.readSitePrice, persist:price=>this.products.updateVerifiedSitePrice(price), signal:toolSignal,
               maxProducts: CURRENT_PRICE_VERIFICATION_TOP_K}) : undefined;
-            const loadFit = filterGeneratorProductsByLoadProfile(budgetPrices?.products ?? search.products, loadRequirementKw);
+            const loadFit = filterGeneratorProductsByLoadProfile(
+              budgetPrices?.products ?? search.products,
+              loadFilterMinimumKw
+            );
             const loadAwareRetry = false;
             const products = loadFit.products;
             const warnings = [...search.warnings, ...loadFit.warnings,
@@ -1619,9 +1628,12 @@ async executeTools(input: {
                 productIds: products.map((product) => product.id),
                 products,
                 ...(budgetPrices ? { priceVerifications: budgetPrices.proofs } : {}),
-                ...(loadRequirementKw === undefined ? {} : {
+                ...(loadFilterMinimumKw === undefined ? {} : {
                   generatorLoadFit: {
-                    requiredNominalKw: loadRequirementKw,
+                    ...(loadRequirementKw === undefined ? {} : { requiredNominalKw: loadRequirementKw }),
+                    ...(runningOnlyFloorKw === undefined ? {} : { runningOnlyNominalFloorKw: runningOnlyFloorKw }),
+                    filterMinimumKw: loadFilterMinimumKw,
+                    basis: loadRequirementKw === undefined ? 'running_only_floor' : 'required_nominal',
                     droppedProductIds: loadFit.droppedProductIds,
                     loadAwareRetry
                   }
@@ -2572,7 +2584,9 @@ async executeTools(input: {
             });
             continue;
           }
+          const deadlineTimedOut = error instanceof DOMException && error.name === 'TimeoutError';
           const retryable = attempt < definition.maxAttempts &&
+            !deadlineTimedOut &&
             !timeoutSignal.aborted &&
             !input.signal?.aborted;
           if (retryable) {
@@ -2586,7 +2600,7 @@ async executeTools(input: {
             });
             continue;
           }
-          const timedOut = timeoutSignal.aborted && !input.signal?.aborted;
+          const timedOut = (timeoutSignal.aborted || deadlineTimedOut) && !input.signal?.aborted;
           // Web research must exhaust the turn budget before giving up (AGENTS.md):
           // a single timeout is often a network flap. If the remaining wall time
           // still fits one shortened attempt plus the writer reserve, retry once.
@@ -2751,6 +2765,7 @@ async searchCatalogProducts(input: {
     query: string;
     limit: number;
     signal?: AbortSignal;
+    deadlineAtMs?: number;
     productIntent?: ProductSelectionClass;
     powerSource?: 'battery' | 'fuel' | 'mains' | 'any';
     embeddingQuery?: string;
@@ -2759,6 +2774,13 @@ async searchCatalogProducts(input: {
     toolResults?: ToolResult[];
     allowPrimaryExpansion?: boolean;
   }) {
+    const throwIfSearchExpired = () => {
+      input.signal?.throwIfAborted();
+      if (input.deadlineAtMs !== undefined && Date.now() >= input.deadlineAtMs) {
+        throw new DOMException('Catalog search deadline exceeded.', 'TimeoutError');
+      }
+    };
+    throwIfSearchExpired();
     const query = input.query;
     const limit = input.limit;
     const productIntent = input.productIntent ?? 'unknown';
@@ -2831,6 +2853,7 @@ async searchCatalogProducts(input: {
           }
         }
       } catch (error) {
+        throwIfSearchExpired();
         warnings.push(`catalog_exact_identifier_error:${safeError(error).code ?? safeError(error).message}`);
       }
     }
@@ -2845,9 +2868,11 @@ async searchCatalogProducts(input: {
         try {
           const tokens = exactProductIdentity(name).decisiveParts.map(compactModelText).filter(Boolean);
           const candidates = await exactModelSearch.call(this.products, tokens, 20, { signal: input.signal });
+          throwIfSearchExpired();
           if (candidates.length >= 20) exactLookupSaturated = true;
           textProducts.push(...candidates.filter((product) => matchesCompleteTarget(product, name)));
         } catch (error) {
+          throwIfSearchExpired();
           warnings.push(`catalog_exact_search_error:${safeError(error).code ?? safeError(error).message}`);
         }
       }
@@ -2857,8 +2882,10 @@ async searchCatalogProducts(input: {
     if (!exactTargetsResolved(textProducts) && !exactEvidenceSaturated) {
       try {
         const found = await this.products.searchProducts(query, retrievalLimit, { signal: input.signal });
+        throwIfSearchExpired();
         textProducts = [...new Map([...textProducts, ...found].map((product) => [product.id, product])).values()];
       } catch (error) {
+        throwIfSearchExpired();
         firstError = error;
         warnings.push(`catalog_text_search_error:${safeError(error).code ?? safeError(error).message}`);
       }
@@ -2868,11 +2895,15 @@ async searchCatalogProducts(input: {
       vectorSearch?: ProductRepository['vectorSearch'];
     }).vectorSearch;
     if (!exactTargetsResolved(textProducts) && !exactEvidenceSaturated && vectorSearchFn && await this.canUseProductEmbeddings(input.signal)) {
+      throwIfSearchExpired();
       const embedding = await this.createCachedQueryEmbedding(embeddingQuery, input.signal);
+      throwIfSearchExpired();
       if (embedding) {
         try {
           vectorProducts = await vectorSearchFn.call(this.products, embedding, retrievalLimit, { signal: input.signal });
+          throwIfSearchExpired();
         } catch (error) {
+          throwIfSearchExpired();
           firstError ??= error;
           warnings.push(`catalog_vector_search_error:${safeError(error).code ?? safeError(error).message}`);
         }
@@ -2900,6 +2931,7 @@ async searchCatalogProducts(input: {
             500,
             { signal: input.signal }
           );
+          throwIfSearchExpired();
           let added = 0;
           for (const product of broadProducts) {
             if (!productMatchesIntent(product, productIntent)) continue;
@@ -2909,6 +2941,7 @@ async searchCatalogProducts(input: {
           }
           if (added > 0) warnings.push(`catalog_budget_expansion_pool:${added}`);
         } catch (error) {
+          throwIfSearchExpired();
           firstError ??= error;
           warnings.push(`catalog_budget_expansion_error:${safeError(error).code ?? safeError(error).message}`);
         }
@@ -2943,6 +2976,7 @@ async searchCatalogProducts(input: {
             Math.max(limit * 6, 80),
             { signal: input.signal }
           );
+          throwIfSearchExpired();
           sourceFilteredProducts = expandedBatteryProducts
             .filter((product) => productMatchesIntent(product, productIntent))
             .filter((product) => {
@@ -2955,12 +2989,14 @@ async searchCatalogProducts(input: {
             warnings.push('catalog_search_no_power_source_fit:battery');
           }
         } catch (error) {
+          throwIfSearchExpired();
           firstError ??= error;
           warnings.push(`catalog_battery_power_station_expansion_error:${safeError(error).code ?? safeError(error).message}`);
           warnings.push('catalog_search_no_power_source_fit:battery');
         }
       }
     }
+    throwIfSearchExpired();
     let structuredEvidence = input.intent
       ? filterProductsByStructuredSelectionPolicy({
           products: sourceFilteredProducts,
@@ -2968,6 +3004,7 @@ async searchCatalogProducts(input: {
           toolResults: input.toolResults ?? []
         })
       : { products: sourceFilteredProducts, droppedProductIds: [] as string[], warnings: [] as string[] };
+    throwIfSearchExpired();
     let primaryExpansion: {
       attempted: boolean;
       query: string;
@@ -3004,8 +3041,13 @@ async searchCatalogProducts(input: {
         input.intent?.selectionPolicy?.targetProductClass
       );
       try {
+        throwIfSearchExpired();
         const initialStructuredEvidence = structuredEvidence;
-        const expansionPool = await this.products.searchProducts(expansionQuery, 1_000, { signal: input.signal });
+        const expansionPool = await this.products.searchProducts(expansionQuery, 1_000, {
+          signal: input.signal,
+          compact: true
+        });
+        throwIfSearchExpired();
         const matchingExpansionPool = expansionPool
           .filter((product) => productMatchesIntent(product, productIntent))
           .filter((product) => productMeetsStructuredPowerSource(
@@ -3018,6 +3060,7 @@ async searchCatalogProducts(input: {
           intent: input.intent!,
           toolResults: input.toolResults ?? []
         });
+        throwIfSearchExpired();
         const mergedEvidence = filterProductsByStructuredSelectionPolicy({
           products: [...new Map(
             [...initialStructuredEvidence.products, ...expandedEvidence.products]
@@ -3026,6 +3069,7 @@ async searchCatalogProducts(input: {
           intent: input.intent!,
           toolResults: input.toolResults ?? []
         });
+        throwIfSearchExpired();
         structuredEvidence = {
           products: mergedEvidence.products,
           droppedProductIds: uniqueStrings([
@@ -3051,19 +3095,39 @@ async searchCatalogProducts(input: {
         }
         if (remoteStartPreference) warnings.push('catalog_structured_remote_start_preference_expansion');
       } catch (error) {
+        throwIfSearchExpired();
         firstError ??= error;
         primaryExpansion = { attempted: true, query: expansionQuery, scannedCount: 0, matchedCount: 0 };
         warnings.push(`catalog_primary_expansion_error:${safeError(error).code ?? safeError(error).message}`);
       }
     }
     warnings.push(...structuredEvidence.warnings);
+    throwIfSearchExpired();
     const preferenceRankedProducts = input.intent
       ? rankCatalogProductsByStructuredPreferences({
           products: structuredEvidence.products,
           intent: input.intent
         })
       : structuredEvidence.products;
-    const products = preferenceRankedProducts.slice(0, limit);
+    throwIfSearchExpired();
+    let products = preferenceRankedProducts.slice(0, limit);
+    const hydrateProductsById = this.products.getProductsByIds;
+    if (primaryExpansion && products.length && typeof hydrateProductsById === 'function') {
+      try {
+        throwIfSearchExpired();
+        const hydrated = await hydrateProductsById.call(
+          this.products,
+          products.map((product) => product.id),
+          { signal: input.signal }
+        );
+        throwIfSearchExpired();
+        const hydratedById = new Map(hydrated.map((product) => [product.id, product]));
+        products = products.map((product) => hydratedById.get(product.id) ?? product);
+      } catch (error) {
+        throwIfSearchExpired();
+        warnings.push(`catalog_selected_product_hydration_error:${safeError(error).code ?? safeError(error).message}`);
+      }
+    }
     if (!products.length && firstError) throw firstError;
     return {
       query,

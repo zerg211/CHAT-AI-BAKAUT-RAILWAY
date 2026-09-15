@@ -1,8 +1,8 @@
 {
   "taskId": "2026-09-14-dialogue-adversarial",
   "baselineSha": "4a8edb186ad7086fb2a302782993ff3713141116",
-  "branch": "codex/atomic-answer-evidence",
-  "verdict": "SIXTH_CORRECTIVE_PRE_PUBLICATION_IN_PROGRESS",
+  "branch": "codex/evidence-attribute-enum",
+  "verdict": "SEVENTH_CORRECTIVE_PRE_PUBLICATION_IN_PROGRESS",
   "acceptance": {
     "AC1": "PASS",
     "AC2": "PASS",
@@ -266,7 +266,23 @@
       "errorCode": "agent_manager_generation_failed",
       "cause": "writer combined different attributes and values into three composite factsUsed entries"
     },
-    "sixthCorrectiveBranch": "codex/atomic-answer-evidence"
+    "sixthCorrectiveBranch": "codex/atomic-answer-evidence",
+    "sixthCorrectivePr": 32,
+    "sixthCorrectiveMergedSha": "4b91438a5ee192cb0bce92b9c3d46638f71449a6",
+    "sixthCorrectiveRailway": {
+      "status": "SUCCESS",
+      "deploymentId": "844b97ed-3b66-4a57-ba81-4acb621bd32b",
+      "codeSha": "4b91438a5ee192cb0bce92b9c3d46638f71449a6"
+    },
+    "seventhLiveDialogue": {
+      "status": "FAIL",
+      "conversationId": 2192,
+      "sessionId": "08ca6331-b992-4c79-afdd-da5f6ecf34c3",
+      "turnId": "077c56fc-5a46-439b-a2d8-7110d277b644",
+      "errorCode": "agent_manager_generation_failed",
+      "cause": "writer invented starting_power_kw for missingStartingLoads; trace also exposed underpowered pre-ranking pool and 34.128s catalog timeout overrun"
+    },
+    "seventhCorrectiveBranch": "codex/evidence-attribute-enum"
   },
   "fifthCorrectiveChecks": {
     "focusedTests": {
@@ -293,6 +309,44 @@
     "atomic2191": {
       "status": "PASS",
       "factsBound": 7
+    }
+  },
+  "sixthCorrectiveChecks": {
+    "focusedTests": {
+      "status": "PASS",
+      "testsPassed": 238
+    },
+    "typecheck": {
+      "status": "PASS"
+    },
+    "attributeVocabulary": {
+      "status": "PASS",
+      "wrongProductionAttributeBlocked": true,
+      "exactAttributeAllowed": true
+    },
+    "runningFloor": {
+      "status": "PASS",
+      "appliedBeforeRanking": true,
+      "totalRunningFallback": false
+    },
+    "catalogTimeout": {
+      "status": "PASS_LOCAL",
+      "absoluteDeadline": true,
+      "compactExpansion": true,
+      "selectedHydration": true,
+      "noRetryAfterAbsoluteDeadline": true,
+      "executorAttempts": 1
+    },
+    "criticReview": {
+      "status": "PASS",
+      "independentTestsPassed": 230
+    },
+    "build": {
+      "status": "PASS"
+    },
+    "noNewRegex": {
+      "status": "PASS",
+      "legacyBaseline": 203
     }
   }
 }

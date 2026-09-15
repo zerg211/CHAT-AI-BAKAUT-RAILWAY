@@ -230,6 +230,17 @@ describe('ProductRepository catalog freshness integration', () => {
     expect(query.mock.calls[3][0]).toContain('is_active IS NOT FALSE');
   });
 
+  it('keeps a bounded description prefix in compact expansion candidates', async () => {
+    const query = vi.fn().mockResolvedValue({ rowCount: 0, rows: [] });
+    const repository = new ProductRepository({ query } as never);
+
+    await repository.searchProducts('generator', 1000, { compact: true });
+
+    const sql = String(query.mock.calls[0]?.[0]);
+    expect(sql).toContain('left(description, 1200) AS description');
+    expect(sql).not.toContain('SELECT id, external_id, slug, source_url, name, brand, category, price, currency, image_url, description, specs');
+  });
+
   it('cancels an aborted product search on its leased pool client', async () => {
     let resolveQueryStarted!: () => void;
     const queryStarted = new Promise<void>((resolve) => {

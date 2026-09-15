@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildGeneratorLoadToolPayload,
+  generatorLoadRunningFloorKw,
   hasGeneratorLoadBasisThatBlocksPreliminaryFit,
   hasUnconfirmedGeneratorLoadBasisResult
 } from '../src/ai/agentManagerGeneratorLoad.js';
@@ -48,6 +49,14 @@ function toolResultFromPayload(payload: ReturnType<typeof buildGeneratorLoadTool
 }
 
 describe('Agent Manager generator load payload', () => {
+  it('uses only a validated running floor and never an incomplete raw total as a product lower bound', () => {
+    const result = (profile: Record<string, unknown>): ToolResult => ({
+      requestId: 'load', tool: 'calculator.generatorLoad', status: 'ok', warnings: [], payload: { profile }
+    });
+    expect(generatorLoadRunningFloorKw([result({ totalRunningKw: 2.9 })])).toBeUndefined();
+    expect(generatorLoadRunningFloorKw([result({ totalRunningKw: 2.9, runningOnlyNominalFloorKw: 3 })])).toBe(3);
+    expect(generatorLoadRunningFloorKw([result({ runningOnlyNominalFloorKw: 3, requiredNominalKw: 5.5 })])).toBe(5.5);
+  });
   it('converts independently evidenced running and starting kVA using their own known power factors', () => {
     const request = generatorLoadRequest([{ kind: 'pump', count: 1, source: 'explicit_user',
       runningSource: 'explicit_user', startingSource: 'explicit_user', operationMode: 'continuous',

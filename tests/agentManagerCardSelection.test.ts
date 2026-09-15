@@ -1191,7 +1191,7 @@ describe('AgentManager visible card readiness', () => {
     });
   });
 
-  it.each(['preliminary_fit', 'browse_catalog', 'final_fit'] as const)('handles unknown startup without turning a running floor into a minimum: %s', selectionGoal => {
+  it.each(['preliminary_fit', 'browse_catalog', 'final_fit'] as const)('uses an unknown-start running floor only to reject proven-underpowered cards: %s', selectionGoal => {
     const intent = generatorLoadDerivedConstraintIntent();
     intent.selectionPolicy!.selectionGoal = selectionGoal;
     const result = generatorLoadResult();
@@ -1203,9 +1203,10 @@ describe('AgentManager visible card readiness', () => {
     else {
       expect(assessment.blockers).toEqual([]);
       const candidate = generatorWithPower('preliminary', '3');
-      const selection = selectProductsForVisibleCards({ products: [candidate], userMessage: 'Нужен предварительный вариант.', history: [],
+      const underpowered = generatorWithPower('underpowered', '1');
+      const selection = selectProductsForVisibleCards({ products: [underpowered, candidate], userMessage: 'Нужен предварительный вариант.', history: [],
         intent, answerText: `${candidate.name} — предварительный вариант; пуск насоса не подтверждён.`,
-        selectedProductIds: [candidate.id], needState: needStateWithBudget(), toolResults: [result] });
+        selectedProductIds: [underpowered.id, candidate.id], needState: needStateWithBudget(), toolResults: [result] });
       expect(selection.selectedProductIds).toEqual([candidate.id]);
     }
   });
