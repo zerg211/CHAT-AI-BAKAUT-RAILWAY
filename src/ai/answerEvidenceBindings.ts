@@ -352,6 +352,49 @@ function calculatorRunningTotalBinding(input: {
   };
 }
 
+function normalizedCalculatorProfileAddress(value: string) {
+  let normalized = '';
+  for (const character of value) {
+    if (character === '.' || character === ':' || character === '[') {
+      if (normalized && !normalized.endsWith(':')) normalized += ':';
+      continue;
+    }
+    if (character === ']') continue;
+    normalized += character;
+  }
+  return normalized.endsWith(':') ? normalized.slice(0, -1) : normalized;
+}
+
+/**
+ * The model occasionally copies the exact calculator evidence path while
+ * mixing display-path separators (`payload.profile.items[1]`) with stable
+ * item-id separators (`payload:profile:items:1`). Resolve only that notation
+ * difference inside one successful calculator profile. The caller still
+ * validates product, attribute, status, exactness and value against the
+ * canonical item.
+ */
+function calculatorProfileEvidenceAlias(input: {
+  requestedId: string;
+  toolSourceIds: string[];
+  items: AnswerEvidenceItem[];
+  toolResultById: Map<string, ToolResult>;
+}) {
+  const candidates = input.toolSourceIds.flatMap((sourceEventId) => {
+    const source = input.toolResultById.get(sourceEventId);
+    if (source?.tool !== 'calculator.generatorLoad' || source.status !== 'ok') return [];
+    const prefix = `${sourceEventId}:`;
+    if (!input.requestedId.startsWith(prefix)) return [];
+    const requestedAddress = normalizedCalculatorProfileAddress(input.requestedId.slice(prefix.length));
+    if (!requestedAddress.startsWith('payload:profile:')) return [];
+    return input.items.filter((item) =>
+      item.sourceEventId === sourceEventId &&
+      item.path.startsWith('payload.profile.') &&
+      normalizedCalculatorProfileAddress(item.path) === requestedAddress
+    );
+  });
+  return candidates.length === 1 ? candidates[0]! : null;
+}
+
 export type AnswerEvidenceBindingIssue = {
   code: 'numeric_fact_evidence_binding_missing' | 'fact_evidence_binding_missing' |
     'numeric_fact_evidence_binding_unknown' | 'fact_evidence_binding_unknown' |
@@ -390,7 +433,12 @@ export function resolveAnswerEvidenceBindings(input: {
       continue;
     }
     for (const evidenceItemId of requestedIds) {
-      const item = itemById.get(evidenceItemId);
+      const item = itemById.get(evidenceItemId) ?? calculatorProfileEvidenceAlias({
+        requestedId: evidenceItemId,
+        toolSourceIds,
+        items,
+        toolResultById
+      });
       if (!item || !toolSourceIds.includes(item.sourceEventId)) {
         issues.push({ code: tokens.length > 0 ? 'numeric_fact_evidence_binding_unknown' : 'fact_evidence_binding_unknown',
           factKey: fact.factKey, evidence: evidenceItemId });
