@@ -17,6 +17,7 @@ import type {
   ToolResult
 } from '../src/ai/agentManagerContracts.js';
 import { selectionRequirementAttributeMatches } from '../src/ai/requirementProofs.js';
+import { automaticWebTargetNamesFromCatalog } from '../src/ai/agentManagerToolExecutor.js';
 import type { Product } from '../src/shared/types.js';
 
 function generator(
@@ -177,6 +178,21 @@ function openedNeed(
 }
 
 describe('conditional catalog-evidence web short-circuit', () => {
+  it('derives automatic web targets from the first four candidates in deterministic catalog order', () => {
+    const products = ['3.4', '4', '6.6', '7', '8'].map((power) => ({
+      ...generator(power),
+      name: `Generator ${power} kW`
+    }));
+    const priorMapOrder = [products[4]!, products[0]!, products[1]!, products[2]!, products[3]!];
+
+    expect(automaticWebTargetNamesFromCatalog({
+      catalogResults: [catalogResult(products)],
+      scopedProducts: priorMapOrder
+    })).toEqual([
+      'Generator 3.4 kW', 'Generator 4 kW', 'Generator 6.6 kW', 'Generator 7 kW'
+    ]);
+  });
+
   it('allows catalog-only LLM extraction for conditional preliminary comparisons but not independent or final checks', () => {
     const conditionalComparison = conditionalWebIntent({
       productNames: ['TEST DG quiet'],

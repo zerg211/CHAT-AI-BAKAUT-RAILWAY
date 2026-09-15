@@ -10,7 +10,7 @@ import { refreshExactCatalogProducts } from '../catalog/sitemapSync.js';
 import { extractWeightKg, fromEscaped, generatorAutoStartProfile, generatorPhaseProfile, generatorRemoteStartProfile, productMatchesIntent, productPowerSource } from './productClassifier.js';
 import { safeError } from './responseUtils.js';
 import { extractContact } from './contactExtraction.js';
-import { budgetMaxFromNeedState, filterGeneratorProductsByLoadProfile, gateStrictSelectionRequirements, hasStructuredGeneratorRemoteStartPreference, productMeetsSupportedStrictAutoStartRequirement, productMeetsSupportedStrictRemoteStartRequirement, productMeetsSupportedStrictFuelRequirement, productMeetsSupportedStrictPriceVisibilityRequirement, productMeetsSupportedStrictVoltageRequirement, qualifiedNominalActivePowerKw, rankCatalogProductsByStructuredPreferences, structuredSelectionRankingObjectives, toolRequestProductIntent, toolRequestScopedQuery, uniqueStrings } from './agentManagerCardSelection.js';
+import { budgetMaxFromNeedState, filterGeneratorProductsByLoadProfile, gateStrictSelectionRequirements, hasStructuredGeneratorRemoteStartPreference, productMeetsSupportedStrictAutoStartRequirement, productMeetsSupportedStrictRemoteStartRequirement, productMeetsSupportedStrictFuelRequirement, productMeetsSupportedStrictPriceVisibilityRequirement, productMeetsSupportedStrictVoltageRequirement, qualifiedNominalActivePowerKw, rankCatalogProductsByStructuredPreferences, rankGeneratorProductsByLoadMinimum, structuredSelectionRankingObjectives, toolRequestProductIntent, toolRequestScopedQuery, uniqueStrings } from './agentManagerCardSelection.js';
 import { buildGeneratorLoadToolPayload, generatorLoadRunningFloorKw, isGeneratorProductClass } from './agentManagerGeneratorLoad.js';
 import { agentManagerToolRegistry, toolResultByteLength, validateToolResultOutput } from './agentManagerToolRegistry.js';
 import { AGENT_MANAGER_FINALIZATION_RESERVE_MS, AgentManagerTurnBudget, AgentManagerTurnBudgetExceededError } from './agentManagerTurnBudget.js';
@@ -220,6 +220,27 @@ export function effectiveAgentToolTimeoutMs(input: {
       : 0;
   const reserveMs = Math.max(defaultReserveMs, input.downstreamReserveMs ?? 0);
   return Math.min(input.configuredTimeoutMs, Math.max(1, input.remainingWallTimeMs - reserveMs));
+}
+
+export function automaticWebTargetNamesFromCatalog(input: {
+  catalogResults: ToolResult[];
+  scopedProducts: Product[];
+}) {
+  const scopedIds = new Set(input.scopedProducts.map((product) => product.id));
+  const latestOrderedCatalogProducts = [...input.catalogResults]
+    .reverse()
+    .map((result) => {
+      const seen = new Set<string>();
+      return productsFromPersistedToolResult(result).filter((product) => {
+        if (!scopedIds.has(product.id) || seen.has(product.id)) return false;
+        seen.add(product.id);
+        return true;
+      });
+    })
+    .find((products) => products.length > 0);
+  return (latestOrderedCatalogProducts ?? input.scopedProducts)
+    .slice(0, 4)
+    .map((product) => product.name);
 }
 
 export function productsFromPersistedToolResult(result: ToolResult): Product[] {
@@ -1615,6 +1636,27 @@ async executeTools(input: {
             );
             const loadAwareRetry = false;
             const products = loadFit.products;
+            const ownsDefaultLoadOrder = loadFilterMinimumKw !== undefined &&
+              toolRequestTargetsPrimarySelectionClass(request, input.intent) &&
+              structuredSelectionRankingObjectives(input.intent).length === 0 &&
+              !hasStructuredGeneratorRemoteStartPreference(input.intent);
+            const loadOrder = ownsDefaultLoadOrder ? {
+              scope: 'returned_eligible_candidates' as const,
+              metric: 'nominal_power_kw' as const,
+              referenceKw: loadFilterMinimumKw,
+              basis: loadRequirementKw === undefined ? 'running_only_floor' as const : 'required_nominal' as const,
+              orderedProductIds: products.map((product) => product.id),
+              candidates: products.map((product) => {
+                const nominalKw = qualifiedNominalActivePowerKw(product);
+                return {
+                  productId: product.id,
+                  ...(nominalKw === undefined ? {} : {
+                    nominalKw,
+                    deltaAboveMinimumKw: Math.round((nominalKw - loadFilterMinimumKw) * 1_000) / 1_000
+                  })
+                };
+              })
+            } : undefined;
             const warnings = [...search.warnings, ...loadFit.warnings,
               ...(budgetPrices?.proofs.filter(proof=>proof.status==='unavailable').map(proof=>`site_price_not_verified:${proof.productId}`) ?? [])];
             const catalogSearchGrounded = products.length > 0 || search.candidateTiers.length > 0;
@@ -1635,7 +1677,8 @@ async executeTools(input: {
                     filterMinimumKw: loadFilterMinimumKw,
                     basis: loadRequirementKw === undefined ? 'running_only_floor' : 'required_nominal',
                     droppedProductIds: loadFit.droppedProductIds,
-                    loadAwareRetry
+                    loadAwareRetry,
+                    ...(loadOrder ? { ranking: loadOrder } : {})
                   }
                 }),
                 retrieval: {
@@ -1805,13 +1848,17 @@ async executeTools(input: {
             return products.filter((product) => webLookupProductIds.has(product.id));
           };
           const catalogCandidatesBeforeWeb = scopedProductsForWeb();
-          const precedingCatalogSucceeded = toolResults.some((result) =>
+          const successfulCatalogResults = toolResults.filter((result) =>
             (result.tool === 'catalog.search' || result.tool === 'catalog.getProductDetails') &&
             result.status === 'ok' &&
             requestMatchesWebIntent(result.requestId)
           );
+          const precedingCatalogSucceeded = successfulCatalogResults.length > 0;
           if (!targetProductNames.length && precedingCatalogSucceeded && catalogCandidatesBeforeWeb.length) {
-            targetProductNames = catalogCandidatesBeforeWeb.slice(0, 4).map((product) => product.name);
+            targetProductNames = automaticWebTargetNamesFromCatalog({
+              catalogResults: successfulCatalogResults,
+              scopedProducts: catalogCandidatesBeforeWeb
+            });
           }
           const allExplicitTargetsPresent = targetProductNames.length > 0 && targetProductNames.every((targetName) =>
             catalogCandidatesBeforeWeb.some((product) => productMatchesTargetName(product, targetName))
@@ -2997,9 +3044,23 @@ async searchCatalogProducts(input: {
       }
     }
     throwIfSearchExpired();
+    const structuredRankingObjectives = input.intent
+      ? structuredSelectionRankingObjectives(input.intent)
+      : [];
+    const remoteStartPreference = input.intent
+      ? hasStructuredGeneratorRemoteStartPreference(input.intent)
+      : false;
+    const defaultLoadOrderReferenceKw = input.intent && isGeneratorProductClass(productIntent) &&
+      structuredRankingObjectives.length === 0 && !remoteStartPreference
+      ? generatorLoadRequirementKw(input.toolResults ?? []) ?? generatorLoadRunningFloorKw(input.toolResults ?? [])
+      : undefined;
+    const applyDefaultLoadOrder = (products: Product[]) => rankGeneratorProductsByLoadMinimum(
+      products,
+      defaultLoadOrderReferenceKw
+    );
     let structuredEvidence = input.intent
       ? filterProductsByStructuredSelectionPolicy({
-          products: sourceFilteredProducts,
+          products: applyDefaultLoadOrder(sourceFilteredProducts),
           intent: input.intent,
           toolResults: input.toolResults ?? []
         })
@@ -3019,12 +3080,6 @@ async searchCatalogProducts(input: {
       1,
       Math.min(limit, input.intent?.selectionPolicy?.maxCards ?? Math.min(limit, 3))
     );
-    const structuredRankingObjectives = input.intent
-      ? structuredSelectionRankingObjectives(input.intent)
-      : [];
-    const remoteStartPreference = input.intent
-      ? hasStructuredGeneratorRemoteStartPreference(input.intent)
-      : false;
     if (
       structuredCatalogSelection &&
       (
@@ -3056,16 +3111,16 @@ async searchCatalogProducts(input: {
           ));
         for (const product of matchingExpansionPool) structuredCandidatesById.set(product.id, product);
         const expandedEvidence = filterProductsByStructuredSelectionPolicy({
-          products: matchingExpansionPool,
+          products: applyDefaultLoadOrder(matchingExpansionPool),
           intent: input.intent!,
           toolResults: input.toolResults ?? []
         });
         throwIfSearchExpired();
         const mergedEvidence = filterProductsByStructuredSelectionPolicy({
-          products: [...new Map(
+          products: applyDefaultLoadOrder([...new Map(
             [...initialStructuredEvidence.products, ...expandedEvidence.products]
               .map((product) => [product.id, product])
-          ).values()],
+          ).values()]),
           intent: input.intent!,
           toolResults: input.toolResults ?? []
         });

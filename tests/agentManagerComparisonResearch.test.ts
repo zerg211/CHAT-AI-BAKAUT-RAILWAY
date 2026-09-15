@@ -367,6 +367,91 @@ describe('AgentManager comparison research flow', () => {
     extractCatalogProductComparisonFacts.mockResolvedValue(null);
   });
 
+  it('keeps automatic web targets in the current ranked catalog order despite stale prior product insertion order', async () => {
+    const ranked = [
+      product('daewoo-3.4', 'DAEWOO 3.4 kW', { 'Nominal power': '3.4 kW' }),
+      product('zongshen-4', 'ZONGSHEN 4 kW', { 'Nominal power': '4 kW' }),
+      product('energo-6.6', 'ENERGO 6.6 kW', { 'Nominal power': '6.6 kW' }),
+      product('fubag-7', 'FUBAG 7 kW', { 'Nominal power': '7 kW' }),
+      product('energo-8', 'ENERGO 8 kW', { 'Nominal power': '8 kW' })
+    ];
+    class OrderedProducts extends FakeProducts {
+      override async searchProducts() { return ranked; }
+    }
+    researchProductComparisonFacts.mockResolvedValue({
+      usedWebSearch: true,
+      usedDocumentRead: false,
+      searchDisposition: 'completed',
+      sourcesExhausted: false,
+      facts: [],
+      conflicts: [],
+      warnings: [],
+      summaryForAnswer: '',
+      answerGuidance: { directAnswer: '', completeness: 'partially_answered', coverage: [] }
+    });
+    const catalogRequest: ToolRequest = {
+      id: 'catalog-ranked', tool: 'catalog.search', required: true, coversRequirementIds: [],
+      args: { query: 'generator', canonicalProductIntent: 'generator', productIntent: 'generator', limit: 5 },
+      rationale: 'rank workshop generators'
+    };
+    const webRequest: ToolRequest = {
+      id: 'web-ranked', tool: 'web.researchProductFacts', required: true, coversRequirementIds: [],
+      args: { query: 'verify startup details', canonicalProductIntent: 'generator', productIntent: 'generator',
+        productNames: [], comparisonAttributes: ['starting power'] },
+      rationale: 'verify the current leading candidates'
+    };
+    const intent = AgentIntentContractSchema.parse({
+      userMessageSummary: 'preliminary workshop generator selection',
+      dialogueUnderstanding: 'running load is known but startup loads remain unknown',
+      nextStepRationale: 'rank the current catalog and verify the leading candidates',
+      requiresTools: true,
+      toolRequests: [catalogRequest, webRequest],
+      productMentions: [],
+      selectionPolicy: {
+        targetProductClass: 'generator', canonicalProductClass: 'generator', selectionGoal: 'preliminary_fit',
+        needAction: 'continue', alternativePolicy: 'same_class_only', reusePreviousCards: false, maxCards: 5,
+        powerSource: 'any', phase: 'any', requirements: [], rankingObjectives: [],
+        rationale: 'current ranked generator candidates'
+      },
+      grounding: {
+        taskType: 'product_selection', sourcePolicy: 'web_required', webPurpose: 'technical_specs',
+        webRequirement: 'independent_required', requiredToolKinds: ['catalog.search', 'web.researchProductFacts'],
+        technicalAttributes: ['starting power'], rationale: 'web verification is required for startup facts'
+      },
+      mustNotAskQuestionIds: [], riskFlags: []
+    });
+    const load: ToolResult = {
+      requestId: 'load', tool: 'calculator.generatorLoad', status: 'ok', warnings: ['generator_load_startup_unconfirmed'],
+      payload: { profile: { totalRunningKw: 2.9, runningOnlyNominalFloorKw: 3, missingStartingLoads: ['pump:насос'] } }
+    };
+    const orchestrator = new AgentManagerOrchestrator(
+      new FakeConversations() as never,
+      new OrderedProducts() as never,
+      {} as never,
+      withStrictToolFixtures(model())
+    );
+    const executor = orchestrator as unknown as {
+      executeTools(input: Record<string, unknown>): Promise<{ toolResults: ToolResult[] }>;
+    };
+
+    await executor.executeTools({
+      session: session(), turnId, executionOwner: 'ranked-web-targets', userMessage: 'Select workshop generators.',
+      history: [], intent, toolRequests: intent.toolRequests, needState: emptyNeedState(), pendingLeadCaptureDraft: null,
+      persistedToolResults: new Map(), priorProducts: [ranked[4], ranked[0]], priorToolResults: [load],
+      budget: new AgentManagerTurnBudget()
+    });
+
+    expect(researchProductComparisonFacts).toHaveBeenCalledWith(expect.objectContaining({
+      targetProductNames: ['DAEWOO 3.4 kW', 'ZONGSHEN 4 kW', 'ENERGO 6.6 kW', 'FUBAG 7 kW'],
+      products: expect.arrayContaining([
+        expect.objectContaining({ id: 'daewoo-3.4' }),
+        expect.objectContaining({ id: 'zongshen-4' }),
+        expect.objectContaining({ id: 'energo-6.6' }),
+        expect.objectContaining({ id: 'fubag-7' })
+      ])
+    }));
+  });
+
   it('researches public information without inheriting a prior product or searching the product catalog', async () => {
     const products = new FakeProducts();
     const search = vi.spyOn(products, 'searchProducts');

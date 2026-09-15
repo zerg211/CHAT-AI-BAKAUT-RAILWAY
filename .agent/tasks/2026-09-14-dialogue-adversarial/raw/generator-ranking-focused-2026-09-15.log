@@ -1,0 +1,24 @@
+
+ RUN  v4.1.5 C:/Projects/chatAI
+
+stdout | tests/agentManagerCardSelection.test.ts
+◇ injected env (33) from .env // tip: ⌘ multiple files { path: ['.env.local', '.env'] }
+
+stdout | tests/agentManagerComparisonResearch.test.ts
+◇ injected env (33) from .env // tip: ◈ secrets for agents [www.dotenvx.com]
+
+·············································································stdout | tests/agentExactCatalogRetrieval.test.ts
+◇ injected env (33) from .env // tip: ◈ encrypted .env [www.dotenvx.com]
+
+·················································································stdout | tests/agentManagerConditionalWebShortCircuit.test.ts
+◇ injected env (33) from .env // tip: ◈ encrypted .env [www.dotenvx.com]
+
+stdout | tests/openAIAgentManagerModel.test.ts
+◇ injected env (33) from .env // tip: ⌘ custom filepath { path: '/custom/path/.env' }
+
+····································································
+
+ Test Files  5 passed (5)
+      Tests  226 passed (226)
+   Start at  18:16:27
+   Duration  14.48s (transform 6.54s, setup 0ms, import 21.18s, tests 3.37s, environment 2ms)

@@ -6,6 +6,7 @@ import {
   filterGeneratorProductsByLoadProfile,
   gateStrictSelectionRequirements,
   rankCatalogProductsByStructuredPreferences,
+  rankGeneratorProductsByLoadMinimum,
   selectProductsForVisibleCards,
   structuredSelectionRankingObjectives,
   suppressVisibleCardsForReadiness,
@@ -684,6 +685,24 @@ describe('AgentManager visible card readiness', () => {
     expect(filtered.droppedProductIds).toEqual(['two-kw', 'three-kw']);
     expect(filtered.warnings).toContain('catalog_products_filtered_by_generator_load:2');
     expect(filtered.warnings).not.toContain('catalog_search_no_generator_load_fit');
+  });
+
+  it('orders generator candidates by the smallest known nominal above the deterministic load floor', () => {
+    const unknown = { ...generatorWithPower('unknown', '9.0'), specs: { 'Maximum power': '9 kW' } };
+    const duplicate = generatorWithPower('duplicate', '4.0');
+    const products = [
+      generatorWithPower('eight', '8.0'),
+      unknown,
+      generatorWithPower('four', '4.0'),
+      generatorWithPower('three-four', '3.4'),
+      generatorWithPower('six-six', '6.6'),
+      duplicate
+    ];
+
+    expect(rankGeneratorProductsByLoadMinimum(products, 3).map((product) => product.id)).toEqual([
+      'three-four', 'four', 'duplicate', 'six-six', 'eight', 'unknown'
+    ]);
+    expect(rankGeneratorProductsByLoadMinimum(products, undefined)).toBe(products);
   });
 
   it('keeps a generator with unknown nominal active power as a preliminary load candidate', () => {

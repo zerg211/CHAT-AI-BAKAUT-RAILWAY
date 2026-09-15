@@ -1,0 +1,1034 @@
+{
+  "session": {
+    "id": "f663e763-6ace-4358-8944-e00d1866b138",
+    "status": "active",
+    "conversationNumber": 2193,
+    "topic": null,
+    "title": "Диалог #2193",
+    "visitorId": "1879d658-ecf9-4643-a5da-2645d870183f",
+    "pageUrl": "https://bakautprof.ru/",
+    "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36",
+    "needState": {
+      "activeNeeds": [
+        {
+          "id": "generator-workshop-1",
+          "status": "open",
+          "summary": "Предварительный подбор бензинового однофазного генератора для мастерской",
+          "updatedAt": "2026-09-15T14:36:25.311Z",
+          "constraints": [
+            "fuel_type: бензин",
+            "phase: single_phase",
+            "generator_load_scenario: {\"loads\":[{\"kind\":\"refrigerator\",\"name\":\"холодильник\",\"count\":1,\"runningKw\":0.3,\"startingKw\":null,\"runningApparentPower\":null,\"startingApparentPower\":null,\"source\":\"explicit_user\",\"runningSource\":\"explicit_user\",\"startingSource\":\"not_provided\",\"operationMode\":\"continuous\",\"coRunningGroup\":\"main\",\"evidence\":\"«холодильник 300 Вт»\",\"basisKind\":\"exact_power\",\"basisSignals\":[\"consumer_type_known\",\"explicit_power\",\"simultaneous_operation_known\"]},{\"kind\":\"circulation_pump\",\"name\":\"циркуляционный насос\",\"count\":1,\"runningKw\":1.1,\"startingKw\":2.75,\"runningApparentPower\":null,\"startingApparentPower\":null,\"source\":\"explicit_user\",\"runningSource\":\"explicit_user\",\"startingSource\":\"estimated_average\",\"operationMode\":\"continuous\",\"coRunningGroup\":\"main\",\"evidence\":\"«циркуляционный насос 1,1 кВт», пусковой ток неизвестен\",\"basisKind\":\"exact_power\",\"basisSignals\":[\"consumer_type_known\",\"consumer_function_known\",\"voltage_or_phase_known\",\"simultaneous_operation_known\",\"buyer_requested_approximation\",\"explicit_power\"]},{\"kind\":\"handheld_tool\",\"name\":\"инструмент\",\"count\":1,\"runningKw\":1.5,\"startingKw\":null,\"runningApparentPower\":null,\"startingApparentPower\":null,\"source\":\"explicit_user\",\"runningSource\":\"explicit_user\",\"startingSource\":\"not_provided\",\"operationMode\":\"occasional\",\"coRunningGroup\":\"main\",\"evidence\":\"«инструмент около 1,5 кВт»\",\"basisKind\":\"exact_power\",\"basisSignals\":[\"consumer_type_known\",\"simultaneous_operation_known\",\"buyer_requested_approximation\",\"explicit_power\"]}],\"simultaneousRunning\":true,\"simultaneousStarting\":false}"
+          ],
+          "productClass": "generator",
+          "openQuestions": [],
+          "selectedProductIds": []
+        }
+      ],
+      "semanticMemory": {
+        "version": 1,
+        "activeRequirementIds": [],
+        "requirements": [],
+        "mentionedProducts": [],
+        "selectionPolicy": {
+          "primaryRequirementIds": [],
+          "alternativeMode": "none",
+          "explanationRequired": false
+        },
+        "botCommitments": []
+      },
+      "explicitNeeds": [
+        {
+          "value": "fuel_type: бензин",
+          "evidence": "«бензиновый генератор»",
+          "updatedAt": "2026-09-15T14:36:25.311Z",
+          "confidence": 1
+        },
+        {
+          "value": "phase: single_phase",
+          "evidence": "«Всё однофазное 220 В»",
+          "updatedAt": "2026-09-15T14:36:25.311Z",
+          "confidence": 1
+        },
+        {
+          "value": "generator_load_scenario: {\"loads\":[{\"kind\":\"refrigerator\",\"name\":\"холодильник\",\"count\":1,\"runningKw\":0.3,\"startingKw\":null,\"runningApparentPower\":null,\"startingApparentPower\":null,\"source\":\"explicit_user\",\"runningSource\":\"explicit_user\",\"startingSource\":\"not_provided\",\"operationMode\":\"continuous\",\"coRunningGroup\":\"main\",\"evidence\":\"«холодильник 300 Вт»\",\"basisKind\":\"exact_power\",\"basisSignals\":[\"consumer_type_known\",\"explicit_power\",\"simultaneous_operation_known\"]},{\"kind\":\"circulation_pump\",\"name\":\"циркуляционный насос\",\"count\":1,\"runningKw\":1.1,\"startingKw\":2.75,\"runningApparentPower\":null,\"startingApparentPower\":null,\"source\":\"explicit_user\",\"runningSource\":\"explicit_user\",\"startingSource\":\"estimated_average\",\"operationMode\":\"continuous\",\"coRunningGroup\":\"main\",\"evidence\":\"«циркуляционный насос 1,1 кВт», пусковой ток неизвестен\",\"basisKind\":\"exact_power\",\"basisSignals\":[\"consumer_type_known\",\"consumer_function_known\",\"voltage_or_phase_known\",\"simultaneous_operation_known\",\"buyer_requested_approximation\",\"explicit_power\"]},{\"kind\":\"handheld_tool\",\"name\":\"инструмент\",\"count\":1,\"runningKw\":1.5,\"startingKw\":null,\"runningApparentPower\":null,\"startingApparentPower\":null,\"source\":\"explicit_user\",\"runningSource\":\"explicit_user\",\"startingSource\":\"not_provided\",\"operationMode\":\"occasional\",\"coRunningGroup\":\"main\",\"evidence\":\"«инструмент около 1,5 кВт»\",\"basisKind\":\"exact_power\",\"basisSignals\":[\"consumer_type_known\",\"simultaneous_operation_known\",\"buyer_requested_approximation\",\"explicit_power\"]}],\"simultaneousRunning\":true,\"simultaneousStarting\":false}",
+          "evidence": "«одновременно холодильник 300 Вт, циркуляционный насос 1,1 кВт и инструмент около 1,5 кВт»",
+          "updatedAt": "2026-09-15T14:36:25.311Z",
+          "confidence": 0.95
+        }
+      ],
+      "implicitNeeds": [],
+      "constraints": [
+        {
+          "value": "fuel_type: бензин",
+          "evidence": "«бензиновый генератор»",
+          "updatedAt": "2026-09-15T14:36:25.311Z",
+          "confidence": 1
+        },
+        {
+          "value": "phase: single_phase",
+          "evidence": "«Всё однофазное 220 В»",
+          "updatedAt": "2026-09-15T14:36:25.311Z",
+          "confidence": 1
+        },
+        {
+          "value": "generator_load_scenario: {\"loads\":[{\"kind\":\"refrigerator\",\"name\":\"холодильник\",\"count\":1,\"runningKw\":0.3,\"startingKw\":null,\"runningApparentPower\":null,\"startingApparentPower\":null,\"source\":\"explicit_user\",\"runningSource\":\"explicit_user\",\"startingSource\":\"not_provided\",\"operationMode\":\"continuous\",\"coRunningGroup\":\"main\",\"evidence\":\"«холодильник 300 Вт»\",\"basisKind\":\"exact_power\",\"basisSignals\":[\"consumer_type_known\",\"explicit_power\",\"simultaneous_operation_known\"]},{\"kind\":\"circulation_pump\",\"name\":\"циркуляционный насос\",\"count\":1,\"runningKw\":1.1,\"startingKw\":2.75,\"runningApparentPower\":null,\"startingApparentPower\":null,\"source\":\"explicit_user\",\"runningSource\":\"explicit_user\",\"startingSource\":\"estimated_average\",\"operationMode\":\"continuous\",\"coRunningGroup\":\"main\",\"evidence\":\"«циркуляционный насос 1,1 кВт», пусковой ток неизвестен\",\"basisKind\":\"exact_power\",\"basisSignals\":[\"consumer_type_known\",\"consumer_function_known\",\"voltage_or_phase_known\",\"simultaneous_operation_known\",\"buyer_requested_approximation\",\"explicit_power\"]},{\"kind\":\"handheld_tool\",\"name\":\"инструмент\",\"count\":1,\"runningKw\":1.5,\"startingKw\":null,\"runningApparentPower\":null,\"startingApparentPower\":null,\"source\":\"explicit_user\",\"runningSource\":\"explicit_user\",\"startingSource\":\"not_provided\",\"operationMode\":\"occasional\",\"coRunningGroup\":\"main\",\"evidence\":\"«инструмент около 1,5 кВт»\",\"basisKind\":\"exact_power\",\"basisSignals\":[\"consumer_type_known\",\"simultaneous_operation_known\",\"buyer_requested_approximation\",\"explicit_power\"]}],\"simultaneousRunning\":true,\"simultaneousStarting\":false}",
+          "evidence": "«одновременно холодильник 300 Вт, циркуляционный насос 1,1 кВт и инструмент около 1,5 кВт»",
+          "updatedAt": "2026-09-15T14:36:25.311Z",
+          "confidence": 0.95
+        }
+      ],
+      "importantCriteria": [],
+      "confirmedFacts": [
+        {
+          "value": "fuel_type: бензин",
+          "evidence": "«бензиновый генератор»",
+          "updatedAt": "2026-09-15T14:36:25.311Z",
+          "confidence": 1
+        },
+        {
+          "value": "phase: single_phase",
+          "evidence": "«Всё однофазное 220 В»",
+          "updatedAt": "2026-09-15T14:36:25.311Z",
+          "confidence": 1
+        },
+        {
+          "value": "generator_load_scenario: {\"loads\":[{\"kind\":\"refrigerator\",\"name\":\"холодильник\",\"count\":1,\"runningKw\":0.3,\"startingKw\":null,\"runningApparentPower\":null,\"startingApparentPower\":null,\"source\":\"explicit_user\",\"runningSource\":\"explicit_user\",\"startingSource\":\"not_provided\",\"operationMode\":\"continuous\",\"coRunningGroup\":\"main\",\"evidence\":\"«холодильник 300 Вт»\",\"basisKind\":\"exact_power\",\"basisSignals\":[\"consumer_type_known\",\"explicit_power\",\"simultaneous_operation_known\"]},{\"kind\":\"circulation_pump\",\"name\":\"циркуляционный насос\",\"count\":1,\"runningKw\":1.1,\"startingKw\":2.75,\"runningApparentPower\":null,\"startingApparentPower\":null,\"source\":\"explicit_user\",\"runningSource\":\"explicit_user\",\"startingSource\":\"estimated_average\",\"operationMode\":\"continuous\",\"coRunningGroup\":\"main\",\"evidence\":\"«циркуляционный насос 1,1 кВт», пусковой ток неизвестен\",\"basisKind\":\"exact_power\",\"basisSignals\":[\"consumer_type_known\",\"consumer_function_known\",\"voltage_or_phase_known\",\"simultaneous_operation_known\",\"buyer_requested_approximation\",\"explicit_power\"]},{\"kind\":\"handheld_tool\",\"name\":\"инструмент\",\"count\":1,\"runningKw\":1.5,\"startingKw\":null,\"runningApparentPower\":null,\"startingApparentPower\":null,\"source\":\"explicit_user\",\"runningSource\":\"explicit_user\",\"startingSource\":\"not_provided\",\"operationMode\":\"occasional\",\"coRunningGroup\":\"main\",\"evidence\":\"«инструмент около 1,5 кВт»\",\"basisKind\":\"exact_power\",\"basisSignals\":[\"consumer_type_known\",\"simultaneous_operation_known\",\"buyer_requested_approximation\",\"explicit_power\"]}],\"simultaneousRunning\":true,\"simultaneousStarting\":false}",
+          "evidence": "«одновременно холодильник 300 Вт, циркуляционный насос 1,1 кВт и инструмент около 1,5 кВт»",
+          "updatedAt": "2026-09-15T14:36:25.311Z",
+          "confidence": 0.95
+        }
+      ],
+      "uncertainInferences": [],
+      "contradictions": [],
+      "featureSignals": {
+        "compact": 0,
+        "homeUse": 0,
+        "lowNoise": 0,
+        "portable": 0,
+        "coldStart": 0,
+        "budgetSensitive": 0,
+        "professionalDuty": 0
+      },
+      "selectionState": {
+        "currentProductClass": "generator",
+        "targetProductClass": "generator",
+        "hardConstraints": {
+          "productIntent": "unknown",
+          "productRole": "unknown",
+          "exactModelTokens": [],
+          "exactModelTokenRoles": [],
+          "mustHaveTraits": [],
+          "excludedClasses": [],
+          "provenance": {}
+        },
+        "softPreferences": {
+          "productIntent": "unknown",
+          "productRole": "unknown",
+          "exactModelTokens": [],
+          "exactModelTokenRoles": [],
+          "mustHaveTraits": [],
+          "excludedClasses": [],
+          "provenance": {}
+        },
+        "unknowns": [],
+        "conflicts": [],
+        "selectedProductIds": [],
+        "matchedProductIds": [],
+        "comparisonProductIds": [],
+        "rejectedProducts": [],
+        "previousCandidateProductIds": [],
+        "confidence": 0,
+        "updatedAt": "2026-09-15T14:36:25.311Z",
+        "semanticSource": "planner"
+      },
+      "lastSummary": "Active Предварительный подбор бензинового однофазного генератора для мастерской"
+    },
+    "historySummary": null,
+    "createdAt": "2026-09-15T14:35:38.679Z",
+    "updatedAt": "2026-09-15T14:38:33.942Z",
+    "lastHeartbeatAt": "2026-09-15T14:38:33.942Z",
+    "closedAt": null
+  },
+  "messages": [
+    {
+      "id": "12208bb4-b3b2-473c-a443-8d8821183729",
+      "sessionId": "f663e763-6ace-4358-8944-e00d1866b138",
+      "role": "user",
+      "content": "Нужен бензиновый генератор для мастерской: одновременно холодильник 300 Вт, циркуляционный насос 1,1 кВт и инструмент около 1,5 кВт. Всё однофазное 220 В, инструмент включаю после запуска насоса. Подберите 2–3 варианта из каталога, но пусковой ток насоса мне неизвестен.",
+      "metadata": {},
+      "createdAt": "2026-09-15T14:35:38.941Z"
+    }
+  ],
+  "turns": [
+    {
+      "id": "76ab31ce-1ecc-43ab-873e-eb4017f05211",
+      "sessionId": "f663e763-6ace-4358-8944-e00d1866b138",
+      "clientMessageId": "30f09d45-9007-40c1-9523-8d6fc3b05e02",
+      "userMessageId": "12208bb4-b3b2-473c-a443-8d8821183729",
+      "assistantMessageId": null,
+      "status": "failed",
+      "requestHash": "0d3bbde4c24dfe61c6ad7bed84534cea7cf9afdea1621868890fd3e9ab8f8fbb",
+      "stage": "failed",
+      "errorCode": "agent_manager_generation_failed",
+      "errorMessage": "Agent manager answer blocked: research_guidance_uncertainty_mismatch, research_guidance_uncertainty_mismatch",
+      "plannerContract": {
+        "grounding": {
+          "taskType": "product_selection",
+          "rationale": "Каталог нужен для кандидатов; внешняя проверка обязательна для решающего вопроса о пусковой способности.",
+          "webPurpose": "technical_specs",
+          "responseMode": "recommend",
+          "sourcePolicy": "web_required",
+          "buyerQuestion": "Подберите 2–3 варианта из каталога",
+          "webRequirement": "conditional_on_catalog_gap",
+          "buyerRequestedWeb": false,
+          "requiredToolKinds": [
+            "calculator.generatorLoad",
+            "catalog.search",
+            "web.researchProductFacts"
+          ],
+          "catalogRequirement": "required",
+          "technicalAttributes": [
+            "nominal_power_kw",
+            "starting_capability",
+            "phase",
+            "fuel_type"
+          ]
+        },
+        "riskFlags": [],
+        "toolRequests": [
+          {
+            "id": "calc-generator-workshop-1",
+            "args": {
+              "loads": [
+                {
+                  "kind": "refrigerator",
+                  "name": "холодильник",
+                  "count": 1,
+                  "source": "explicit_user",
+                  "evidence": "«холодильник 300 Вт»",
+                  "basisKind": "exact_power",
+                  "runningKw": 0.3,
+                  "basisSignals": [
+                    "consumer_type_known",
+                    "explicit_power",
+                    "simultaneous_operation_known"
+                  ],
+                  "operationMode": "continuous",
+                  "runningSource": "explicit_user",
+                  "coRunningGroup": "main",
+                  "startingSource": "not_provided"
+                },
+                {
+                  "kind": "circulation_pump",
+                  "name": "циркуляционный насос",
+                  "count": 1,
+                  "source": "explicit_user",
+                  "evidence": "«циркуляционный насос 1,1 кВт», пусковой ток неизвестен",
+                  "basisKind": "exact_power",
+                  "runningKw": 1.1,
+                  "startingKw": 2.75,
+                  "basisSignals": [
+                    "consumer_type_known",
+                    "consumer_function_known",
+                    "voltage_or_phase_known",
+                    "simultaneous_operation_known",
+                    "buyer_requested_approximation",
+                    "explicit_power"
+                  ],
+                  "operationMode": "continuous",
+                  "runningSource": "explicit_user",
+                  "coRunningGroup": "main",
+                  "startingSource": "estimated_average"
+                },
+                {
+                  "kind": "handheld_tool",
+                  "name": "инструмент",
+                  "count": 1,
+                  "source": "explicit_user",
+                  "evidence": "«инструмент около 1,5 кВт»",
+                  "basisKind": "exact_power",
+                  "runningKw": 1.5,
+                  "basisSignals": [
+                    "consumer_type_known",
+                    "simultaneous_operation_known",
+                    "buyer_requested_approximation",
+                    "explicit_power"
+                  ],
+                  "operationMode": "occasional",
+                  "runningSource": "explicit_user",
+                  "coRunningGroup": "main",
+                  "startingSource": "not_provided"
+                }
+              ],
+              "phase": "single_phase",
+              "query": "расчёт генератора для мастерской",
+              "powerSource": "fuel",
+              "estimateBasis": "bounded_assumption",
+              "productIntent": "бензиновый генератор для мастерской",
+              "semanticQuery": "бензиновый однофазный генератор для холодильника 0,3 кВт, циркуляционного насоса 1,1 кВт и инструмента 1,5 кВт",
+              "simultaneousRunning": true,
+              "simultaneousStarting": false,
+              "canonicalProductIntent": "generator",
+              "simultaneousStartingKinds": []
+            },
+            "tool": "calculator.generatorLoad",
+            "required": true,
+            "rationale": "Рассчитать рабочую нагрузку и ограниченную оценку пуска насоса.",
+            "coversRequirementIds": [
+              "generator_load_scenario"
+            ]
+          },
+          {
+            "id": "search-generators-workshop-1",
+            "args": {
+              "limit": 8,
+              "phase": "single_phase",
+              "query": "бензиновые однофазные генераторы для мастерской, мощность около 4–6 кВт",
+              "identifiers": [],
+              "powerSource": "fuel",
+              "productIntent": "бензиновый генератор для мастерской",
+              "semanticQuery": "бензиновый однофазный генератор для нагрузки около 2,9 кВт с насосом 1,1 кВт",
+              "comparisonAttributes": [
+                "nominal_power_kw",
+                "price_rub",
+                "weight_kg",
+                "electric_start_required"
+              ],
+              "canonicalProductIntent": "generator"
+            },
+            "tool": "catalog.search",
+            "required": true,
+            "rationale": "Найти 2–3 каталожных кандидата.",
+            "coversRequirementIds": []
+          },
+          {
+            "id": "research-generator-starting-1",
+            "args": {
+              "limit": 8,
+              "phase": "single_phase",
+              "query": "Проверить пусковую способность и условия запуска бензиновых однофазных генераторов для холодильника, циркуляционного насоса 1,1 кВт и инструмента 1,5 кВт; сопоставить номинальную мощность, пусковую способность и фазу.",
+              "powerSource": "fuel",
+              "productNames": [],
+              "productIntent": "бензиновый генератор для мастерской",
+              "researchScope": "product",
+              "semanticQuery": "пусковая способность бензиновых однофазных генераторов для нагрузки мастерской",
+              "comparisonAttributes": [
+                "nominal_power_kw",
+                "starting_capability",
+                "phase",
+                "fuel_type"
+              ],
+              "canonicalProductIntent": "generator",
+              "comparisonAttributeBindings": []
+            },
+            "tool": "web.researchProductFacts",
+            "required": true,
+            "rationale": "Проверить решающий пробел — пригодность к неизвестному пуску насоса.",
+            "coversRequirementIds": []
+          }
+        ],
+        "policyRuleIds": [
+          "cheap.preliminary_not_final"
+        ],
+        "requiresTools": true,
+        "productMentions": [],
+        "selectionPolicy": {
+          "phase": "single_phase",
+          "maxCards": 3,
+          "rationale": "Предварительный подбор; окончательная пригодность зависит от фактического пуска насоса.",
+          "needAction": "open",
+          "powerSource": "fuel",
+          "requirements": [
+            {
+              "id": "fuel_type",
+              "kind": "fuel_type",
+              "role": "hard_constraint",
+              "unit": null,
+              "value": "бензин",
+              "evidence": "«бензиновый генератор»",
+              "relation": "must_have",
+              "strictness": "strict",
+              "verification": {
+                "mode": "product_attribute"
+              }
+            },
+            {
+              "id": "phase",
+              "kind": "phase",
+              "role": "hard_constraint",
+              "unit": null,
+              "value": "single_phase",
+              "evidence": "«Всё однофазное 220 В»",
+              "relation": "must_have",
+              "strictness": "strict",
+              "verification": {
+                "mode": "product_attribute"
+              }
+            },
+            {
+              "id": "generator_load_scenario",
+              "kind": "generator_load_scenario",
+              "role": "hard_constraint",
+              "unit": null,
+              "value": true,
+              "evidence": "«одновременно холодильник 300 Вт, циркуляционный насос 1,1 кВт и инструмент около 1,5 кВт»; пуск насоса неизвестен, оценка предварительная",
+              "relation": "must_have",
+              "strictness": "strict",
+              "verification": {
+                "mode": "typed_tool",
+                "tool": "calculator.generatorLoad",
+                "bindAs": "nominal_power_min_kw",
+                "verifier": "generator_load_profile",
+                "toolRequestId": "calc-generator-workshop-1"
+              }
+            }
+          ],
+          "selectionGoal": "preliminary_fit",
+          "alternativePolicy": "same_class_only",
+          "rankingObjectives": [],
+          "reusePreviousCards": false,
+          "targetProductClass": "бензиновый генератор",
+          "canonicalProductClass": "generator"
+        },
+        "nextStepRationale": "Рассчитать профиль, найти кандидатов и проверить заявленную пусковую способность по внешним источникам.",
+        "userMessageSummary": "Подобрать 2–3 бензиновых однофазных генератора по нагрузке мастерской.",
+        "dialogueUnderstanding": "Рабочая нагрузка около 2,9 кВт; пуск насоса оценочный и требует проверки пригодности кандидатов.",
+        "mustNotAskQuestionIds": [],
+        "leadCaptureAuthorization": {
+          "purpose": null,
+          "evidence": null,
+          "authorized": false,
+          "handoffKind": "none",
+          "buyerQuestion": null,
+          "contactSource": "none",
+          "pendingDraftId": null,
+          "handoffOfferMessageId": null
+        },
+        "buyerRequestedTechnicalHandoff": null
+      },
+      "activeNeedsBefore": [],
+      "activeNeedsAfter": [
+        {
+          "id": "generator-workshop-1",
+          "status": "open",
+          "summary": "Предварительный подбор бензинового однофазного генератора для мастерской",
+          "updatedAt": "2026-09-15T14:36:25.311Z",
+          "constraints": [
+            "fuel_type: бензин",
+            "phase: single_phase",
+            "generator_load_scenario: {\"loads\":[{\"kind\":\"refrigerator\",\"name\":\"холодильник\",\"count\":1,\"runningKw\":0.3,\"startingKw\":null,\"runningApparentPower\":null,\"startingApparentPower\":null,\"source\":\"explicit_user\",\"runningSource\":\"explicit_user\",\"startingSource\":\"not_provided\",\"operationMode\":\"continuous\",\"coRunningGroup\":\"main\",\"evidence\":\"«холодильник 300 Вт»\",\"basisKind\":\"exact_power\",\"basisSignals\":[\"consumer_type_known\",\"explicit_power\",\"simultaneous_operation_known\"]},{\"kind\":\"circulation_pump\",\"name\":\"циркуляционный насос\",\"count\":1,\"runningKw\":1.1,\"startingKw\":2.75,\"runningApparentPower\":null,\"startingApparentPower\":null,\"source\":\"explicit_user\",\"runningSource\":\"explicit_user\",\"startingSource\":\"estimated_average\",\"operationMode\":\"continuous\",\"coRunningGroup\":\"main\",\"evidence\":\"«циркуляционный насос 1,1 кВт», пусковой ток неизвестен\",\"basisKind\":\"exact_power\",\"basisSignals\":[\"consumer_type_known\",\"consumer_function_known\",\"voltage_or_phase_known\",\"simultaneous_operation_known\",\"buyer_requested_approximation\",\"explicit_power\"]},{\"kind\":\"handheld_tool\",\"name\":\"инструмент\",\"count\":1,\"runningKw\":1.5,\"startingKw\":null,\"runningApparentPower\":null,\"startingApparentPower\":null,\"source\":\"explicit_user\",\"runningSource\":\"explicit_user\",\"startingSource\":\"not_provided\",\"operationMode\":\"occasional\",\"coRunningGroup\":\"main\",\"evidence\":\"«инструмент около 1,5 кВт»\",\"basisKind\":\"exact_power\",\"basisSignals\":[\"consumer_type_known\",\"simultaneous_operation_known\",\"buyer_requested_approximation\",\"explicit_power\"]}],\"simultaneousRunning\":true,\"simultaneousStarting\":false}"
+          ],
+          "productClass": "generator",
+          "openQuestions": [],
+          "selectedProductIds": []
+        }
+      ],
+      "executionOwner": null,
+      "executionLeaseExpiresAt": null,
+      "deadlineAt": "2026-09-15T14:38:18.939Z",
+      "recoveryAttempts": 0,
+      "createdAt": "2026-09-15T14:35:38.941Z",
+      "updatedAt": "2026-09-15T14:37:34.064Z"
+    }
+  ],
+  "agentTraces": [
+    {
+      "id": "455aa956-8bfd-46d5-9304-d81a2f2015ae",
+      "session_id": "f663e763-6ace-4358-8944-e00d1866b138",
+      "turn_id": "76ab31ce-1ecc-43ab-873e-eb4017f05211",
+      "phase": "recovery",
+      "event_type": "blocked_answer_checkpoint_invalidated",
+      "payload": {
+        "issueCodes": [
+          "research_guidance_uncertainty_mismatch",
+          "research_guidance_uncertainty_mismatch"
+        ]
+      },
+      "redacted": true,
+      "created_at": "2026-09-15T14:37:34.057Z"
+    },
+    {
+      "id": "b241ea1b-4b90-474f-af6b-e2a5a545559a",
+      "session_id": "f663e763-6ace-4358-8944-e00d1866b138",
+      "turn_id": "76ab31ce-1ecc-43ab-873e-eb4017f05211",
+      "phase": "answer",
+      "event_type": "contract_created",
+      "payload": {
+        "factsUsed": [
+          "fuel_type",
+          "phase",
+          "total_running_kw",
+          "running_only_nominal_floor_kw",
+          "pump_starting_estimate_kw",
+          "pump_starting_basis",
+          "missing_refrigerator_start",
+          "missing_tool_start",
+          "daewoo_name",
+          "daewoo_nominal_power",
+          "daewoo_price",
+          "daewoo_phase",
+          "daewoo_fuel",
+          "energo_name",
+          "energo_nominal_power",
+          "energo_price",
+          "energo_phase",
+          "energo_fuel",
+          "energo_starter"
+        ],
+        "leadAction": "none",
+        "questionsAsked": [
+          "pump_nameplate_starting_data"
+        ]
+      },
+      "redacted": true,
+      "created_at": "2026-09-15T14:37:26.534Z"
+    },
+    {
+      "id": "8babdbe9-0de1-40f8-8134-b95af926eea4",
+      "session_id": "f663e763-6ace-4358-8944-e00d1866b138",
+      "turn_id": "76ab31ce-1ecc-43ab-873e-eb4017f05211",
+      "phase": "tools",
+      "event_type": "artifacts_saved",
+      "payload": {
+        "statuses": [
+          {
+            "tool": "calculator.generatorLoad",
+            "status": "ok",
+            "requestId": "calc-generator-workshop-1",
+            "observationStatus": "success"
+          },
+          {
+            "tool": "catalog.search",
+            "status": "ok",
+            "requestId": "search-generators-workshop-1",
+            "observationStatus": "success"
+          },
+          {
+            "tool": "web.researchProductFacts",
+            "status": "ok",
+            "requestId": "research-generator-starting-1",
+            "observationStatus": "success"
+          }
+        ]
+      },
+      "redacted": true,
+      "created_at": "2026-09-15T14:36:56.572Z"
+    },
+    {
+      "id": "aaf797c8-5cd1-4c57-96ef-05aa6202b567",
+      "session_id": "f663e763-6ace-4358-8944-e00d1866b138",
+      "turn_id": "76ab31ce-1ecc-43ab-873e-eb4017f05211",
+      "phase": "tools",
+      "event_type": "observation_cycle_stopped",
+      "payload": {
+        "rounds": 0,
+        "status": "stopped",
+        "rationale": "The observation cycle stopped before readiness was established.",
+        "stopReason": "answer_time_reserve",
+        "missingFacts": [],
+        "candidateProductIds": []
+      },
+      "redacted": true,
+      "created_at": "2026-09-15T14:36:56.563Z"
+    },
+    {
+      "id": "6f9b63ad-8b65-4215-b993-3526eafc1b12",
+      "session_id": "f663e763-6ace-4358-8944-e00d1866b138",
+      "turn_id": "76ab31ce-1ecc-43ab-873e-eb4017f05211",
+      "phase": "tools",
+      "event_type": "tool_completed",
+      "payload": {
+        "tool": "web.researchProductFacts",
+        "status": "ok",
+        "errorCode": null,
+        "requestId": "research-generator-starting-1",
+        "timeoutMs": 30009,
+        "durationMs": 22563,
+        "attemptCount": 1,
+        "remainingTurnMs": 72446,
+        "observationStatus": "success",
+        "configuredTimeoutMs": 60000,
+        "retryDecisionWarnings": []
+      },
+      "redacted": true,
+      "created_at": "2026-09-15T14:36:56.531Z"
+    },
+    {
+      "id": "13844737-95c0-4dfe-a948-92010f6ade29",
+      "session_id": "f663e763-6ace-4358-8944-e00d1866b138",
+      "turn_id": "76ab31ce-1ecc-43ab-873e-eb4017f05211",
+      "phase": "tools",
+      "event_type": "verified_fact_memory_persistence",
+      "payload": {
+        "savedCount": 0,
+        "skippedReason": "research_execution_not_completed",
+        "persistableCount": 0,
+        "searchDisposition": "skipped_budget",
+        "targetProductNames": [
+          "Генератор бензиновый инверторный DAEWOO GDA 4400i (3,4 кВт)",
+          "Генератор бензиновый Energo E11000EAX (8,0 кВт) E11000EAX",
+          "Генератор бензиновый FUBAG BS 7500 (7,0 кВт) 641032",
+          "Генератор бензиновый Zongshen PB 22000 E (17,0 кВт) 1T90DF220"
+        ]
+      },
+      "redacted": true,
+      "created_at": "2026-09-15T14:36:56.509Z"
+    },
+    {
+      "id": "f5ec2cf0-99a0-4500-b2b4-5c17cf12b8be",
+      "session_id": "f663e763-6ace-4358-8944-e00d1866b138",
+      "turn_id": "76ab31ce-1ecc-43ab-873e-eb4017f05211",
+      "phase": "tools",
+      "event_type": "product_research_stage",
+      "payload": {
+        "stage": "tier_fallback",
+        "tiers": [
+          "reliable_secondary"
+        ],
+        "outcome": "skipped_budget",
+        "elapsedMs": 0,
+        "requestId": "research-generator-starting-1",
+        "sourceCount": 0,
+        "attemptNumber": 3,
+        "acceptedFactCount": 0,
+        "remainingBudgetMs": 7473
+      },
+      "redacted": true,
+      "created_at": "2026-09-15T14:36:56.504Z"
+    },
+    {
+      "id": "b120977a-4295-4314-9b37-fe906641b948",
+      "session_id": "f663e763-6ace-4358-8944-e00d1866b138",
+      "turn_id": "76ab31ce-1ecc-43ab-873e-eb4017f05211",
+      "phase": "tools",
+      "event_type": "product_research_stage",
+      "payload": {
+        "stage": "primary_web",
+        "tiers": [
+          "official_manual"
+        ],
+        "outcome": "completed",
+        "elapsedMs": 17633,
+        "requestId": "research-generator-starting-1",
+        "sourceCount": 0,
+        "attemptNumber": 2,
+        "acceptedFactCount": 0,
+        "remainingBudgetMs": 7481
+      },
+      "redacted": true,
+      "created_at": "2026-09-15T14:36:56.497Z"
+    },
+    {
+      "id": "a2ae34da-2264-4d89-9f09-22815ad126a0",
+      "session_id": "f663e763-6ace-4358-8944-e00d1866b138",
+      "turn_id": "76ab31ce-1ecc-43ab-873e-eb4017f05211",
+      "phase": "tools",
+      "event_type": "product_research_stage",
+      "payload": {
+        "stage": "source_validation",
+        "tiers": [
+          "official_manual"
+        ],
+        "outcome": "completed",
+        "elapsedMs": 0,
+        "requestId": "research-generator-starting-1",
+        "sourceCount": 0,
+        "attemptNumber": 1,
+        "acceptedFactCount": 0,
+        "remainingBudgetMs": 5989,
+        "evidenceValidation": []
+      },
+      "redacted": true,
+      "created_at": "2026-09-15T14:36:56.491Z"
+    },
+    {
+      "id": "792f9085-6c53-4878-b21a-deafbc408d30",
+      "session_id": "f663e763-6ace-4358-8944-e00d1866b138",
+      "turn_id": "76ab31ce-1ecc-43ab-873e-eb4017f05211",
+      "phase": "tools",
+      "event_type": "product_research_stage",
+      "payload": {
+        "stage": "document_read",
+        "tiers": [
+          "official_manual"
+        ],
+        "outcome": "timed_out",
+        "elapsedMs": 10511,
+        "requestId": "research-generator-starting-1",
+        "sourceCount": 1,
+        "attemptNumber": 1,
+        "documentEvidence": {
+          "documents": [
+            {
+              "textHash": "4aca942e542be6b974d13aeb97fdb8b39987510fbbca968f66393a183f0c29ff",
+              "sourceUrl": "https://www.daewoo-shop.com/upload/iblock/7c0/z0tp15qsv3085oc2mmpfdtffbrgqgcdv/Manual%20GDA%201400i_4400i_RU_2022.pdf",
+              "textLength": 51357,
+              "sourceTitle": "https://www.daewoo-shop.com/upload/iblock/7c0/z0tp15qsv3085oc2mmpfdtffbrgqgcdv/Manual%20GDA%201400i_4400i_RU_2022.pdf",
+              "suppliedLength": 51357
+            }
+          ],
+          "selections": []
+        },
+        "acceptedFactCount": 0,
+        "remainingBudgetMs": 7497
+      },
+      "redacted": true,
+      "created_at": "2026-09-15T14:36:56.481Z"
+    },
+    {
+      "id": "a637e683-c713-4197-9781-1553b78c8a29",
+      "session_id": "f663e763-6ace-4358-8944-e00d1866b138",
+      "turn_id": "76ab31ce-1ecc-43ab-873e-eb4017f05211",
+      "phase": "tools",
+      "event_type": "product_research_stage",
+      "payload": {
+        "stage": "primary_web",
+        "tiers": [
+          "official_page"
+        ],
+        "outcome": "timed_out",
+        "elapsedMs": 17618,
+        "errorCode": "structured_json_deadline_exceeded",
+        "requestId": "research-generator-starting-1",
+        "sourceCount": 0,
+        "attemptNumber": 1,
+        "acceptedFactCount": 0,
+        "remainingBudgetMs": 7498
+      },
+      "redacted": true,
+      "created_at": "2026-09-15T14:36:56.48Z"
+    },
+    {
+      "id": "623cd38e-92ff-4d2e-aace-5caeae78c755",
+      "session_id": "f663e763-6ace-4358-8944-e00d1866b138",
+      "turn_id": "76ab31ce-1ecc-43ab-873e-eb4017f05211",
+      "phase": "tools",
+      "event_type": "product_research_stage",
+      "payload": {
+        "stage": "catalog_extraction",
+        "tiers": [
+          "catalog"
+        ],
+        "outcome": "skipped_budget",
+        "elapsedMs": 0,
+        "requestId": "research-generator-starting-1",
+        "sourceCount": 4,
+        "attemptNumber": 1,
+        "acceptedFactCount": 0,
+        "remainingBudgetMs": 25129
+      },
+      "redacted": true,
+      "created_at": "2026-09-15T14:36:38.848Z"
+    },
+    {
+      "id": "d360855d-88e9-4890-9040-c0006671c7e8",
+      "session_id": "f663e763-6ace-4358-8944-e00d1866b138",
+      "turn_id": "76ab31ce-1ecc-43ab-873e-eb4017f05211",
+      "phase": "tools",
+      "event_type": "evidence_broker_lookup",
+      "payload": {
+        "hit": false,
+        "products": [
+          {
+            "id": "010c9196-3ec9-4e4c-8e73-8f32bcc45329",
+            "technicalVersion": "ea1bbce77e9125950050d1af994d01c83c1b9f655b4ff0b8bdfa1b5ea66a6848"
+          },
+          {
+            "id": "6bcbd7fd-2013-4287-8266-a5f8da8ad8b0",
+            "technicalVersion": "59816aa45810e668c7e9b746f5133891d73040c9d94a4fa269d113d18cd3ae8f"
+          },
+          {
+            "id": "aa2fdac0-0fa3-407f-9fd2-e4467c05fd41",
+            "technicalVersion": "84fa1454df1ca614ddaf715a1df8d29d51b025c8185a96ae6f760996bf491feb"
+          },
+          {
+            "id": "3d244008-78bc-45ca-94f4-76fa2d89585f",
+            "technicalVersion": "b37b6d79c849200ab26706ce1f1a888cbb381aac14d6bfd99612911a195e7d9d"
+          }
+        ],
+        "requestId": "research-generator-starting-1",
+        "sourcePolicy": "web_required",
+        "freshRequested": false,
+        "requestedSlots": 16
+      },
+      "redacted": true,
+      "created_at": "2026-09-15T14:36:38.842Z"
+    },
+    {
+      "id": "2d2a00d8-986f-4127-a5e8-a6ce9dabadc9",
+      "session_id": "f663e763-6ace-4358-8944-e00d1866b138",
+      "turn_id": "76ab31ce-1ecc-43ab-873e-eb4017f05211",
+      "phase": "tools",
+      "event_type": "tool_started",
+      "payload": {
+        "tool": "web.researchProductFacts",
+        "attempt": 1,
+        "requestId": "research-generator-starting-1",
+        "timeoutMs": 30009,
+        "remainingTurnMs": 95009,
+        "configuredTimeoutMs": 60000,
+        "postWebAnswerReserveMs": 65000
+      },
+      "redacted": true,
+      "created_at": "2026-09-15T14:36:33.968Z"
+    },
+    {
+      "id": "e91bfa09-db34-4061-af1a-f5856e3208f2",
+      "session_id": "f663e763-6ace-4358-8944-e00d1866b138",
+      "turn_id": "76ab31ce-1ecc-43ab-873e-eb4017f05211",
+      "phase": "tools",
+      "event_type": "tool_completed",
+      "payload": {
+        "tool": "catalog.search",
+        "status": "ok",
+        "errorCode": null,
+        "requestId": "search-generators-workshop-1",
+        "timeoutMs": 10000,
+        "durationMs": 8571,
+        "attemptCount": 1,
+        "remainingTurnMs": 95016,
+        "observationStatus": "success",
+        "configuredTimeoutMs": 10000,
+        "retryDecisionWarnings": []
+      },
+      "redacted": true,
+      "created_at": "2026-09-15T14:36:33.962Z"
+    },
+    {
+      "id": "aabda15c-a42e-4b90-b385-b3b7fa8dace5",
+      "session_id": "f663e763-6ace-4358-8944-e00d1866b138",
+      "turn_id": "76ab31ce-1ecc-43ab-873e-eb4017f05211",
+      "phase": "tools",
+      "event_type": "tool_started",
+      "payload": {
+        "tool": "catalog.search",
+        "attempt": 1,
+        "requestId": "search-generators-workshop-1",
+        "timeoutMs": 10000,
+        "remainingTurnMs": 103587,
+        "configuredTimeoutMs": 10000,
+        "postWebAnswerReserveMs": 0
+      },
+      "redacted": true,
+      "created_at": "2026-09-15T14:36:25.39Z"
+    },
+    {
+      "id": "ea9e8ebf-4531-4b8c-b771-41879b58be66",
+      "session_id": "f663e763-6ace-4358-8944-e00d1866b138",
+      "turn_id": "76ab31ce-1ecc-43ab-873e-eb4017f05211",
+      "phase": "tools",
+      "event_type": "tool_completed",
+      "payload": {
+        "tool": "calculator.generatorLoad",
+        "status": "ok",
+        "errorCode": null,
+        "requestId": "calc-generator-workshop-1",
+        "timeoutMs": 2000,
+        "durationMs": 14,
+        "attemptCount": 1,
+        "remainingTurnMs": 103594,
+        "observationStatus": "success",
+        "configuredTimeoutMs": 2000,
+        "retryDecisionWarnings": []
+      },
+      "redacted": true,
+      "created_at": "2026-09-15T14:36:25.383Z"
+    },
+    {
+      "id": "b53ee65c-221f-4110-aea2-5c1ca7b63875",
+      "session_id": "f663e763-6ace-4358-8944-e00d1866b138",
+      "turn_id": "76ab31ce-1ecc-43ab-873e-eb4017f05211",
+      "phase": "tools",
+      "event_type": "tool_started",
+      "payload": {
+        "tool": "calculator.generatorLoad",
+        "attempt": 1,
+        "requestId": "calc-generator-workshop-1",
+        "timeoutMs": 2000,
+        "remainingTurnMs": 103608,
+        "configuredTimeoutMs": 2000,
+        "postWebAnswerReserveMs": 0
+      },
+      "redacted": true,
+      "created_at": "2026-09-15T14:36:25.371Z"
+    },
+    {
+      "id": "3e64a5c4-850d-4d81-81da-973c258acae5",
+      "session_id": "f663e763-6ace-4358-8944-e00d1866b138",
+      "turn_id": "76ab31ce-1ecc-43ab-873e-eb4017f05211",
+      "phase": "intent",
+      "event_type": "contract_created",
+      "payload": {
+        "toolRequests": [
+          {
+            "id": "calc-generator-workshop-1",
+            "tool": "calculator.generatorLoad",
+            "required": true,
+            "coversRequirementIds": [
+              "generator_load_scenario"
+            ]
+          },
+          {
+            "id": "search-generators-workshop-1",
+            "tool": "catalog.search",
+            "required": true,
+            "coversRequirementIds": []
+          },
+          {
+            "id": "research-generator-starting-1",
+            "tool": "web.researchProductFacts",
+            "required": true,
+            "coversRequirementIds": []
+          }
+        ],
+        "policyRuleIds": [
+          "cheap.preliminary_not_final"
+        ],
+        "requiresTools": true,
+        "policyPackHash": "d92d9c62e5d111427e7b8432392196ebd0ba74ffa54489b5068daffe89721df5",
+        "productMentions": [],
+        "policyPackVersion": "2026-09-10.1"
+      },
+      "redacted": true,
+      "created_at": "2026-09-15T14:36:25.362Z"
+    },
+    {
+      "id": "8e818173-2447-49ce-a6ba-d1694b01bc08",
+      "session_id": "f663e763-6ace-4358-8944-e00d1866b138",
+      "turn_id": "76ab31ce-1ecc-43ab-873e-eb4017f05211",
+      "phase": "intent",
+      "event_type": "policy_gate_evaluated",
+      "payload": {
+        "ok": true,
+        "warnings": [],
+        "catalogFirst": true,
+        "blockedReasons": [],
+        "requiredActions": [
+          "catalog.search",
+          "web.researchProductFacts"
+        ],
+        "webDeferredUntilCatalogGap": false
+      },
+      "redacted": true,
+      "created_at": "2026-09-15T14:36:25.34Z"
+    },
+    {
+      "id": "b02407a5-927e-4cd2-99b7-62b584556d67",
+      "session_id": "f663e763-6ace-4358-8944-e00d1866b138",
+      "turn_id": "76ab31ce-1ecc-43ab-873e-eb4017f05211",
+      "phase": "intent",
+      "event_type": "task_budget_classified",
+      "payload": {
+        "profile": "RESEARCH",
+        "taskType": "product_selection",
+        "transitions": []
+      },
+      "redacted": true,
+      "created_at": "2026-09-15T14:36:25.334Z"
+    },
+    {
+      "id": "23b0fa26-1395-409c-bf68-f69729f1fcb4",
+      "session_id": "f663e763-6ace-4358-8944-e00d1866b138",
+      "turn_id": "76ab31ce-1ecc-43ab-873e-eb4017f05211",
+      "phase": "ledger",
+      "event_type": "delta_applied",
+      "payload": {
+        "eventIds": [
+          "need.opened:ddbed0993718209eb56b4df5add2aa54",
+          "fact.confirmed:5ccb9b0dd5b056ddc8ba40895538e0a5",
+          "fact.confirmed:e92f27c523ec87aa00ca62d3134e8e88",
+          "fact.confirmed:50c1bfc5533eb4025fadd17748084c7a"
+        ]
+      },
+      "redacted": true,
+      "created_at": "2026-09-15T14:36:25.305Z"
+    },
+    {
+      "id": "eed25a43-3716-4f9e-8eb9-8c91f4744b26",
+      "session_id": "f663e763-6ace-4358-8944-e00d1866b138",
+      "turn_id": "76ab31ce-1ecc-43ab-873e-eb4017f05211",
+      "phase": "recovery",
+      "event_type": "checkpoint_reused",
+      "payload": {
+        "checkpoint": "ledger_delta_proposed"
+      },
+      "redacted": true,
+      "created_at": "2026-09-15T14:36:25.268Z"
+    },
+    {
+      "id": "cb70ff3b-982e-4d36-ac97-c44d7a9c7aff",
+      "session_id": "f663e763-6ace-4358-8944-e00d1866b138",
+      "turn_id": "76ab31ce-1ecc-43ab-873e-eb4017f05211",
+      "phase": "intent",
+      "event_type": "semantic_decision_completed",
+      "payload": {
+        "durationMs": 46246,
+        "remainingTurnMs": 103720
+      },
+      "redacted": true,
+      "created_at": "2026-09-15T14:36:25.259Z"
+    },
+    {
+      "id": "22bd2bb0-9ad9-4f3e-8ac6-5d6944686a2a",
+      "session_id": "f663e763-6ace-4358-8944-e00d1866b138",
+      "turn_id": "76ab31ce-1ecc-43ab-873e-eb4017f05211",
+      "phase": "intent",
+      "event_type": "semantic_decision_validated",
+      "payload": {
+        "valid": true,
+        "issues": [],
+        "attempt": 2,
+        "durationMs": 46216,
+        "remainingTurnMs": 103750
+      },
+      "redacted": true,
+      "created_at": "2026-09-15T14:36:25.229Z"
+    },
+    {
+      "id": "2aa4433f-de2e-4931-9d14-c569deda6d3c",
+      "session_id": "f663e763-6ace-4358-8944-e00d1866b138",
+      "turn_id": "76ab31ce-1ecc-43ab-873e-eb4017f05211",
+      "phase": "intent",
+      "event_type": "semantic_decision_validated",
+      "payload": {
+        "valid": false,
+        "issues": [
+          "required_web_tool_missing",
+          "active_requirement_mismatch:generator_load_scenario"
+        ],
+        "attempt": 1,
+        "durationMs": 22554,
+        "remainingTurnMs": 127412
+      },
+      "redacted": true,
+      "created_at": "2026-09-15T14:36:01.57Z"
+    },
+    {
+      "id": "95d8e304-4c91-4d82-9bea-b57b1c96657c",
+      "session_id": "f663e763-6ace-4358-8944-e00d1866b138",
+      "turn_id": "76ab31ce-1ecc-43ab-873e-eb4017f05211",
+      "phase": "intent",
+      "event_type": "semantic_decision_started",
+      "payload": {
+        "outputTokenCap": 9000,
+        "remainingTurnMs": 149966,
+        "pendingLeadCaptureDraft": false
+      },
+      "redacted": true,
+      "created_at": "2026-09-15T14:35:39.012Z"
+    },
+    {
+      "id": "103d916f-280a-4400-8f9c-c98d3e9d90e0",
+      "session_id": "f663e763-6ace-4358-8944-e00d1866b138",
+      "turn_id": "76ab31ce-1ecc-43ab-873e-eb4017f05211",
+      "phase": "turn",
+      "event_type": "started",
+      "payload": {
+        "recovered": false
+      },
+      "redacted": true,
+      "created_at": "2026-09-15T14:35:38.981Z"
+    }
+  ]
+}
