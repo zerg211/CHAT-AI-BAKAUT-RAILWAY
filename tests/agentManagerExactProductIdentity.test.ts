@@ -70,6 +70,35 @@ function product(input: Partial<Product> & Pick<Product, 'id' | 'name'>): Produc
 }
 
 describe('structured exact-product identity', () => {
+  it('keeps every unknown generator startup load while asking only one next question', () => {
+    const missingStartingLoads = [
+      'refrigerator:холодильник',
+      'pump:циркуляционный_насос',
+      'workshop_tool:инструмент'
+    ];
+    const result = {
+      requestId: 'generator-load',
+      tool: 'calculator.generatorLoad',
+      status: 'ok',
+      payload: {
+        profile: {
+          totalRunningKw: 2.9,
+          runningOnlyNominalFloorKw: 3,
+          missingStartingLoads
+        }
+      },
+      warnings: ['generator_load_startup_unconfirmed']
+    } as unknown as ToolResult;
+
+    const clause = requiredResponseClausesForToolResults([result])
+      .find((item) => item.code === 'generator_unconfirmed_load_stage_aware_selection');
+
+    expect(clause?.instruction).toContain(JSON.stringify(missingStartingLoads));
+    expect(clause?.instruction).toContain('Every listed load remains a blocker');
+    expect(clause?.instruction).toContain('describe it only as the next step');
+    expect(clause?.instruction).not.toContain('ask for the smallest fact needed before final_fit');
+  });
+
   it('does not turn an unexecuted availability research request into buyer-facing failure guidance', () => {
     const failedWebResult = {
       requestId: 'stale-web-request',
