@@ -1,8 +1,8 @@
 {
   "taskId": "2026-09-14-dialogue-adversarial",
   "baselineSha": "4a8edb186ad7086fb2a302782993ff3713141116",
-  "branch": "codex/dialogue-adversarial-correctness",
-  "verdict": "FOURTH_CORRECTIVE_PRE_PUBLICATION_IN_PROGRESS",
+  "branch": "codex/atomic-answer-evidence",
+  "verdict": "SIXTH_CORRECTIVE_PRE_PUBLICATION_IN_PROGRESS",
   "acceptance": {
     "AC1": "PASS",
     "AC2": "PASS",
@@ -16,8 +16,13 @@
     "AC10": "IN_PROGRESS"
   },
   "checks": {
-    "typecheck": { "status": "PASS" },
-    "noNewRegex": { "status": "PASS", "legacyBaseline": 203 },
+    "typecheck": {
+      "status": "PASS"
+    },
+    "noNewRegex": {
+      "status": "PASS",
+      "legacyBaseline": 203
+    },
     "fullSerialTests": {
       "status": "PASS",
       "filesPassed": 126,
@@ -25,7 +30,9 @@
       "testsPassed": 1502,
       "testsSkipped": 1
     },
-    "build": { "status": "PASS" },
+    "build": {
+      "status": "PASS"
+    },
     "releaseGate": {
       "status": "PASS",
       "offlineOracleTestsPassed": 213,
@@ -41,49 +48,127 @@
   "transientVerification": {
     "parallelTimeouts": 3,
     "failedAssertions": 0,
-    "sequentialRetry": { "status": "PASS", "testsPassed": 20 }
+    "sequentialRetry": {
+      "status": "PASS",
+      "testsPassed": 20
+    }
   },
   "correctiveChecks": {
-    "focusedTests": { "status": "PASS", "testsPassed": 205 },
-    "typecheck": { "status": "PASS" },
-    "noNewRegex": { "status": "PASS", "legacyBaseline": 203 },
-    "build": { "status": "PASS" },
-    "criticReview": { "status": "PASS" },
+    "focusedTests": {
+      "status": "PASS",
+      "testsPassed": 205
+    },
+    "typecheck": {
+      "status": "PASS"
+    },
+    "noNewRegex": {
+      "status": "PASS",
+      "legacyBaseline": 203
+    },
+    "build": {
+      "status": "PASS"
+    },
+    "criticReview": {
+      "status": "PASS"
+    },
     "fullSuite": {
       "status": "FAIL_EXTERNAL_AND_TIMEOUT",
       "testsPassed": 1501,
       "testsFailed": 2,
       "testsSkipped": 1,
-      "failed": ["firstPartyPdf live fixture HTTP 404", "dialogue ledger generated seed 22 timeout"]
+      "failed": [
+        "firstPartyPdf live fixture HTTP 404",
+        "dialogue ledger generated seed 22 timeout"
+      ]
     },
-    "isolatedDialogueLedgerRetry": { "status": "PASS", "testsPassed": 24 },
-    "releaseGate": { "status": "BLOCKED_FULL_SUITE", "otherPhases": "PASS" }
+    "isolatedDialogueLedgerRetry": {
+      "status": "PASS",
+      "testsPassed": 24
+    },
+    "releaseGate": {
+      "status": "BLOCKED_FULL_SUITE",
+      "otherPhases": "PASS"
+    }
   },
   "secondCorrectiveChecks": {
-    "focusedTests": { "status": "PASS", "testsPassed": 196 },
-    "typecheck": { "status": "PASS" },
-    "noNewRegex": { "status": "PASS", "legacyBaseline": 203 },
-    "build": { "status": "PASS" },
-    "criticReview": { "status": "PASS", "independentTestsPassed": 196 }
+    "focusedTests": {
+      "status": "PASS",
+      "testsPassed": 196
+    },
+    "typecheck": {
+      "status": "PASS"
+    },
+    "noNewRegex": {
+      "status": "PASS",
+      "legacyBaseline": 203
+    },
+    "build": {
+      "status": "PASS"
+    },
+    "criticReview": {
+      "status": "PASS",
+      "independentTestsPassed": 196
+    }
   },
   "thirdCorrectiveChecks": {
-    "focusedTests": { "status": "PASS", "testsPassed": 285 },
-    "finalDirectTests": { "status": "PASS", "testsPassed": 40 },
-    "typecheck": { "status": "PASS" },
-    "noNewRegex": { "status": "PASS", "legacyBaseline": 203 },
-    "build": { "status": "PASS" },
-    "criticReview": { "status": "PASS", "independentTestsPassed": 285 },
-    "isolatedDialogueLedgerRetry": { "status": "PASS", "testsPassed": 24 },
-    "realPostgresIntegration": { "status": "NOT_RUN", "reason": "no isolated DATABASE_URL configured" }
+    "focusedTests": {
+      "status": "PASS",
+      "testsPassed": 285
+    },
+    "finalDirectTests": {
+      "status": "PASS",
+      "testsPassed": 40
+    },
+    "typecheck": {
+      "status": "PASS"
+    },
+    "noNewRegex": {
+      "status": "PASS",
+      "legacyBaseline": 203
+    },
+    "build": {
+      "status": "PASS"
+    },
+    "criticReview": {
+      "status": "PASS",
+      "independentTestsPassed": 285
+    },
+    "isolatedDialogueLedgerRetry": {
+      "status": "PASS",
+      "testsPassed": 24
+    },
+    "realPostgresIntegration": {
+      "status": "NOT_RUN",
+      "reason": "no isolated DATABASE_URL configured"
+    }
   },
   "fourthCorrectiveChecks": {
-    "focusedTests": { "status": "PASS", "testsPassed": 33 },
-    "broaderRelevantTests": { "status": "PASS", "testsPassed": 232 },
-    "typecheck": { "status": "PASS" },
-    "noNewRegex": { "status": "PASS", "legacyBaseline": 203 },
-    "build": { "status": "PASS" },
-    "criticReview": { "status": "PASS", "independentTestsPassed": 33 },
-    "repairBoundaryUnchanged": { "status": "PASS", "boundaryMs": 47000 }
+    "focusedTests": {
+      "status": "PASS",
+      "testsPassed": 33
+    },
+    "broaderRelevantTests": {
+      "status": "PASS",
+      "testsPassed": 232
+    },
+    "typecheck": {
+      "status": "PASS"
+    },
+    "noNewRegex": {
+      "status": "PASS",
+      "legacyBaseline": 203
+    },
+    "build": {
+      "status": "PASS"
+    },
+    "criticReview": {
+      "status": "PASS",
+      "independentTestsPassed": 33
+    },
+    "repairBoundaryUnchanged": {
+      "status": "PASS",
+      "boundaryMs": 47000
+    }
   },
   "production": {
     "githubPr": 26,
@@ -149,6 +234,65 @@
       "errorCode": "agent_manager_generation_failed",
       "cause": "writer described one prioritized buyer question as the only fact needed for exact selection while three startup loads remained unknown"
     },
-    "fourthCorrectiveBranch": "codex/generator-missing-startup-guidance"
+    "fourthCorrectiveBranch": "codex/generator-missing-startup-guidance",
+    "fourthCorrectivePr": 30,
+    "fourthCorrectiveMergedSha": "b19b2dfa7055c05ae152b73324e38d02c6962565",
+    "fourthCorrectiveRailway": {
+      "status": "SUCCESS",
+      "deploymentId": "b7d67533-23a7-4113-b4f7-c39e665c184e",
+      "codeSha": "b19b2dfa7055c05ae152b73324e38d02c6962565"
+    },
+    "fifthLiveDialogue": {
+      "status": "FAIL",
+      "conversationId": 2190,
+      "sessionId": "2d79d260-0e79-41dc-b9d2-1a1c94a50657",
+      "turnId": "2b42863f-031f-417e-9ce6-264d04b97b83",
+      "errorCode": "agent_manager_generation_failed",
+      "cause": "repair mixed canonical calculator evidence IDs with display-path separators"
+    },
+    "fifthCorrectiveBranch": "codex/calculator-evidence-addresses",
+    "fifthCorrectivePr": 31,
+    "fifthCorrectiveMergedSha": "be7a6b43a900342802f3338312f61ad6c8034253",
+    "fifthCorrectiveRailway": {
+      "status": "SUCCESS",
+      "deploymentId": "d4e1ff15-1b22-4cc9-9eb9-10e33b254028",
+      "codeSha": "be7a6b43a900342802f3338312f61ad6c8034253"
+    },
+    "sixthLiveDialogue": {
+      "status": "FAIL",
+      "conversationId": 2191,
+      "sessionId": "f02ea0e8-a2b8-482b-b66a-b8a5200a4fec",
+      "turnId": "01feb77f-fc67-4c8f-88cc-509c2933226b",
+      "errorCode": "agent_manager_generation_failed",
+      "cause": "writer combined different attributes and values into three composite factsUsed entries"
+    },
+    "sixthCorrectiveBranch": "codex/atomic-answer-evidence"
+  },
+  "fifthCorrectiveChecks": {
+    "focusedTests": {
+      "status": "PASS",
+      "testsPassed": 228
+    },
+    "typecheck": {
+      "status": "PASS"
+    },
+    "noNewRegex": {
+      "status": "PASS",
+      "legacyBaseline": 203
+    },
+    "build": {
+      "status": "PASS"
+    },
+    "criticReview": {
+      "status": "PASS",
+      "independentTestsPassed": 228
+    },
+    "composite2191": {
+      "status": "BLOCKED_AS_EXPECTED"
+    },
+    "atomic2191": {
+      "status": "PASS",
+      "factsBound": 7
+    }
   }
 }

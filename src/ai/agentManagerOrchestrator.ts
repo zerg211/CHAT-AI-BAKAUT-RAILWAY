@@ -3389,7 +3389,9 @@ private async persistVerifiedResearchFacts(input: {
               productEvidenceRoles,
               requiredResponseClauses,
               semanticDecisionValidated,
-              reviewIssuesFeedback: review.issues.map((issue) => `${issue.code}: ${issue.message}`),
+              reviewIssuesFeedback: review.issues.map((issue) =>
+                JSON.stringify({ code: issue.code, message: issue.message, evidence: issue.evidence })
+              ),
               continuation,
               structuredDeadlineAtMs: turnBudget.deadlineForStage(
                 repairStageBudget.maxDurationMs,

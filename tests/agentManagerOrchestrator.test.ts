@@ -8043,6 +8043,9 @@ describe('AgentManagerOrchestrator', () => {
     expect(composeAnswer.mock.calls[1]?.[0].reviewIssuesFeedback).toEqual(expect.arrayContaining([
       expect.stringContaining('customer_output_research_process_disclosure')
     ]));
+    expect(composeAnswer.mock.calls[1]?.[0].reviewIssuesFeedback?.join(' ')).toContain(
+      '"evidence":"Я обращался к доступным источникам"'
+    );
     expect(reviewCustomerLanguage).toHaveBeenCalledTimes(2);
 
     // A fully fact-checked original must survive a wording-only repair failure.
