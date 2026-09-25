@@ -29,7 +29,8 @@
     "test:acceptance:host": "tsx evals/acceptance/app.ts",
     "test:acceptance:backend": "node evals/acceptance/backend.cjs",
     "test:acceptance:live": "node evals/acceptance/runner.cjs --run",
-    "test:acceptance:release": "node evals/acceptance/runner.cjs --release"
+    "test:acceptance:release": "node evals/acceptance/runner.cjs --release",
+    "live:adaptive-buyer": "node tests/liveAdaptiveBuyer.production.mjs"
   },
   "dependencies": {
     "@fastify/cors": "^11.1.0",
