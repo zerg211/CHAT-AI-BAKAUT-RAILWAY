@@ -9,13 +9,15 @@ vi.mock('../src/ai/openaiUsageGuard.js', () => ({
 import { createOpenAIClient } from '../src/ai/openaiClient.js';
 import { releaseOpenAIUsageReservation } from '../src/ai/openaiUsageGuard.js';
 import { AgentManagerTurnBudget, runWithAgentManagerTurnBudget } from '../src/ai/agentManagerTurnBudget.js';
+import {runWithTurnTiming, type TimingLog} from '../src/observability/turnTiming.js';
 
 describe('Responses transport turn reservation', () => {
   it('settles successful usage but retains the reserve of a failed attempt', async () => {
     const budget = new AgentManagerTurnBudget();
+    const timing: TimingLog[] = [];
     create.mockResolvedValueOnce({ usage: { input_tokens: 80, output_tokens: 20, total_tokens: 100 } })
       .mockRejectedValueOnce(new Error('connection lost'));
-    await runWithAgentManagerTurnBudget(budget, async () => {
+    await runWithTurnTiming({sessionId:'s',turnId:'t'}, () => runWithAgentManagerTurnBudget(budget, async () => {
       const client = createOpenAIClient()!;
       const request = { model: 'gpt-5.6-luna', input: 'test', max_output_tokens: 100 };
       await client.responses.create(request);
@@ -25,6 +27,13 @@ describe('Responses transport turn reservation', () => {
       expect(budget.snapshot().usage).toMatchObject({ providerCalls: 2, providerReconciledCalls: 1 });
       expect(budget.snapshot().usage.providerEstimatedTotalTokens).toBeGreaterThan(200);
       expect(releaseOpenAIUsageReservation).not.toHaveBeenCalled();
-    });
+    }), event => timing.push(event));
+    const providerAttempts=timing.filter(event=>event.kind==='provider');
+    expect(providerAttempts).toHaveLength(2);
+    expect(providerAttempts[0]).toMatchObject({outcome:'ok',inputTokens:80,outputTokens:20,totalTokens:100});
+    expect(providerAttempts[1]).toMatchObject({outcome:'error'});
+    expect(providerAttempts[1]).not.toHaveProperty('inputTokens');
+    expect(timing.filter(event=>event.kind==='budget')).toHaveLength(2);
+    expect(JSON.stringify(timing)).not.toContain('connection lost');
   });
 });

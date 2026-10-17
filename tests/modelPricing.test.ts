@@ -2,9 +2,9 @@ import { describe, expect, it } from 'vitest';
 import { estimateLunaStandardTokenCost, isPricingStale, lunaPricing } from '../src/ai/modelPricing.js';
 
 describe('versioned Luna standard pricing', () => {
-  it('records current rates with an official source and a fresh verification date', () => {
+  it('records versioned rates with an official source and a valid verification date', () => {
     expect(lunaPricing.source).toBe('https://developers.openai.com/api/docs/models/gpt-5.6-luna');
-    expect(isPricingStale(lunaPricing.verifiedAt)).toBe(false);
+    expect(isPricingStale(lunaPricing.verifiedAt, Date.parse(lunaPricing.verifiedAt))).toBe(false);
     expect(estimateLunaStandardTokenCost({inputTokens: 100_000, cachedInputTokens: 0, outputTokens: 100_000})).toBeCloseTo(0.14);
   });
   it('separates cache reads, writes and output', () => {

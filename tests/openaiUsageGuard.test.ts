@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { lunaPricing } from '../src/ai/modelPricing.js';
 import {
   extractOpenAIUsage,
   estimateRecordedUsageCost,
@@ -8,6 +9,8 @@ import {
 } from '../src/ai/openaiUsageGuard.js';
 
 describe('OpenAI usage guard', () => {
+  beforeEach(() => vi.spyOn(Date, 'now').mockReturnValue(Date.parse(lunaPricing.verifiedAt)));
+  afterEach(() => vi.restoreAllMocks());
   it('classifies production headless browser traffic as production live tests', () => {
     expect(requestSourceFromContext({
       pageUrl: 'https://bakautprof.ru/catalog/generatory/',
@@ -55,6 +58,14 @@ describe('OpenAI usage guard', () => {
       service_tier: 'default',
       usage: { input_tokens: 1000, input_tokens_details: { cached_tokens: 500 }, output_tokens: 100 }
     })).toMatchObject({ costUsd: 0.00023, costBasis: 'standard_token_rate_estimate', cachedInputTokens: 500 });
+  });
+
+  it('keeps usage but refuses a monetary estimate when the saved rates are stale', () => {
+    vi.mocked(Date.now).mockReturnValue(Date.parse(lunaPricing.verifiedAt) + 31 * 86_400_000);
+    expect(estimateRecordedUsageCost('gpt-5.6-luna', {
+      service_tier: 'default',
+      usage: { input_tokens: 1000, input_tokens_details: { cached_tokens: 500 }, output_tokens: 100 }
+    })).toMatchObject({ costUsd: null, costBasis: 'unavailable', cachedInputTokens: 500 });
   });
 
   it('does not invent standard prices for missing usage, missing cache or unsupported tiers', () => {

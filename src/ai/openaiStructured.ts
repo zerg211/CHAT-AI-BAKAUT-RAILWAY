@@ -3,6 +3,7 @@ import { recordCurrentAgentPromptShape } from './agentManagerTurnBudget.js';
 import { createOpenAIClient, withRetry } from './openaiClient.js';
 import { recordOpenAIUsageOnce } from './openaiUsageGuard.js';
 import { extractResponseText, safeError } from './responseUtils.js';
+import { timeOperation, withTimingStage } from '../observability/turnTiming.js';
 
 const JSON_RETRY_OUTPUT_TOKEN_MIN = 1800;
 
@@ -143,7 +144,7 @@ export async function createStructuredJsonResponse(input: {
   const sendWithinDeadline = async (body: Record<string, unknown>) => {
     recordCurrentAgentPromptShape(input.stage, body);
     try {
-      return await send(body);
+      return await withTimingStage(input.stage, () => timeOperation('model', input.stage, () => send(body)));
     } catch (error) {
       if (deadlineSignal?.aborted && !input.signal?.aborted) {
         throw new StructuredJsonDeadlineExceededError(input.deadlineAtMs!, { cause: error });

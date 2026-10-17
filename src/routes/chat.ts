@@ -266,6 +266,8 @@ export async function registerChatRoutes(
     const session = await restoreAuthorizedSession(request, reply, conversations, params.id);
     if (!session) return sessionNotFound(reply);
     const recorded = await conversations.recordAnswerDelivery({...params,sessionId:params.id,...input});
+    if (recorded) app.log.info({event:'answer_delivery',sessionId:params.id,messageId:params.messageId,
+      firstUsefulContentMs:input.firstUsefulContentMs,basis:'client_visible_render_opportunity'},'answer delivery');
     return recorded ? reply.send({ok:true}) : reply.code(404).send({error:'Message not found'});
   });
 
@@ -339,6 +341,7 @@ export async function registerChatRoutes(
            onStage: sendStageStatus,
            signal: controller.signal
         }));
+      app.log.info({event:'answer_ready',sessionId:params.id,turnId,messageId:payload.assistantMessageId},'answer ready');
       send('done', buildPublicCustomerResponse(payload));
     } catch (error) {
       const executionInProgress = error instanceof TurnExecutionInProgressError;
@@ -420,6 +423,7 @@ export async function registerChatRoutes(
         onStage: sendStageStatus,
         signal: controller.signal
       }));
+      app.log.info({event:'answer_ready',sessionId:params.id,turnId:params.turnId,messageId:payload.assistantMessageId},'answer ready');
       send('done', buildPublicCustomerResponse(payload));
     } catch (error) {
       const executionInProgress = error instanceof TurnExecutionInProgressError;
