@@ -1,4 +1,5 @@
 import OpenAI from 'openai';
+import { providerUsageFields, startTimingSpan, timeOperation } from '../observability/turnTiming.js';
 import { config } from '../config.js';
 import {
   assertOpenAIUsageBudget,
@@ -39,22 +40,41 @@ export function createOpenAIClient() {
   client.responses.create = async (body: Record<string, unknown>, options?: unknown) => {
     const maxOutputTokens = Number(body?.max_output_tokens ?? 0);
     const turnEstimate = reserveCurrentTurnProviderCall(() => estimateResponsesProviderCall(body));
-    const reservationId = await assertOpenAIUsageBudget(
+    const reservationId = await timeOperation('budget', 'openai_usage_reservation', () => assertOpenAIUsageBudget(
       'openai_response',
       String(body?.model ?? config.OPENAI_MODEL),
       turnEstimate?.estimatedTotalTokens ?? Math.max(0, maxOutputTokens) + 8000
-    );
+    ));
+    const providerSpan = startTimingSpan('provider', 'responses.create', {
+      model: String(body?.model ?? config.OPENAI_MODEL), maxOutputTokens,
+      reasoningEffort: typeof body.reasoning === 'object' && body.reasoning !== null
+        ? String((body.reasoning as Record<string, unknown>).effort ?? '') : undefined
+    });
     try {
-      const response = await createResponse(body, options);
+      const response = await providerSpan.run(() => createResponse(body, options));
+      providerSpan.finish('ok', providerUsageFields(response));
       turnEstimate?.reconcile?.(response?.usage);
       bindOpenAIUsageReservation(response, reservationId);
       return response;
     } catch (error) {
+      const status = (error as {status?: unknown} | null)?.status;
+      providerSpan.finish('error', typeof status === 'number' ? {statusCode: status} : {});
       // A transport failure does not prove the provider did no billable work.
       // Keep the durable daily reserve until usage is known or its window ends.
       throw error;
     }
   };
+  if (client.embeddings?.create) {
+    const create = client.embeddings.create.bind(client.embeddings);
+    client.embeddings.create = async (body: Record<string, unknown>, options?: unknown) => {
+      const span = startTimingSpan('provider', 'embeddings.create', {model: String(body.model ?? '')});
+      try {
+        const response = await span.run(() => create(body, options));
+        span.finish('ok', providerUsageFields(response));
+        return response;
+      } catch (error) { span.finish('error'); throw error; }
+    };
+  }
   return client;
 }
 
@@ -92,10 +112,10 @@ export async function withRetry<T>(fn: () => Promise<T>, maxRetries = 3, signal?
       if (!isRetryableError(error) || attempt === maxRetries) throw error;
       const delayMs = Math.min(1000 * Math.pow(2, attempt) + Math.random() * 500, 16000);
       console.warn(`[OpenAI] Retryable error (attempt ${attempt + 1}/${maxRetries}): ${error instanceof Error ? error.message : String(error)}. Retrying in ${Math.round(delayMs)}ms`);
-      await new Promise<void>((resolve) => {
+      await timeOperation('retry', 'openai_transport_backoff', () => new Promise<void>((resolve) => {
         const timer = setTimeout(resolve, delayMs);
         signal?.addEventListener('abort', () => { clearTimeout(timer); resolve(); }, { once: true });
-      });
+      }), {attempt: attempt + 1});
     }
   }
   throw lastError;

@@ -2,6 +2,7 @@ import { lookup as dnsLookup } from 'node:dns/promises';
 import { isIP } from 'node:net';
 import ipaddr from 'ipaddr.js';
 import { Agent, fetch } from 'undici';
+import { timeOperation } from '../observability/turnTiming.js';
 
 const redirectStatuses = new Set([301, 302, 303, 307, 308]);
 const localHostSuffixes = ['.localhost', '.local', '.internal', '.home.arpa'];
@@ -249,6 +250,10 @@ export async function readBoundedResponseBytes(
 }
 
 export async function safeFetchBytes(value: string, options: SafeOutboundFetchOptions): Promise<SafeOutboundFetchResult> {
+  return timeOperation('http', 'safe_fetch_bytes', () => fetchBytes(value, options));
+}
+
+async function fetchBytes(value: string, options: SafeOutboundFetchOptions): Promise<SafeOutboundFetchResult> {
   const timeoutMs = options.timeoutMs ?? 20_000;
   const maxRedirects = options.maxRedirects ?? 3;
   const timeoutSignal = AbortSignal.timeout(timeoutMs);

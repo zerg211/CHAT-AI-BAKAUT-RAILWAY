@@ -4,6 +4,7 @@ import { config } from '../config.js';
 import { pool } from '../db/pool.js';
 import { estimateProviderUsageCostUsd } from './openaiRequestBudget.js';
 import { estimateLunaStandardTokenCost, isPricingStale, lunaPricing } from './modelPricing.js';
+import { runWithTurnTiming } from '../observability/turnTiming.js';
 
 export type OpenAIUsageContext = {
   sessionId?: string | null;
@@ -35,7 +36,9 @@ export class OpenAIUsageBudgetExceededError extends Error {
 }
 
 export function runWithOpenAIUsageContext<T>(context: OpenAIUsageContext, fn: () => Promise<T>): Promise<T> {
-  return usageContext.run(context, fn);
+  return usageContext.run(context, () => context.sessionId && context.turnId
+    ? runWithTurnTiming({sessionId: context.sessionId, turnId: context.turnId}, fn)
+    : fn());
 }
 
 export function currentOpenAIUsageContext() {
