@@ -15,6 +15,20 @@ function sseEvent(event: string, data: unknown) {
 }
 
 describe('streamChatMessage watchdog and explicit continuation', () => {
+  it('exposes the turn ID and treats explicit server cancellation as a stopped turn', async () => {
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(sseEvent('turn', { turnId: 'turn-1' }) + sseEvent('cancelled', { turnId: 'turn-1' })));
+        controller.close();
+      }
+    });
+    const onTurn = vi.fn();
+    const fetcher = vi.fn(async () => new Response(stream, { status: 200 }));
+    await expect(streamChatMessage('', 'session-1', 'Запрос', { onDelta: () => undefined, onTurn }, undefined, { fetcher, visitorId }))
+      .rejects.toMatchObject({ name: 'AbortError' });
+    expect(onTurn).toHaveBeenCalledWith('turn-1');
+    expect(fetcher).toHaveBeenCalledOnce();
+  });
   it('preserves the session across reloads and same-tab catalog navigation', () => {
     const source = readFileSync('src/client/main.tsx', 'utf8');
 

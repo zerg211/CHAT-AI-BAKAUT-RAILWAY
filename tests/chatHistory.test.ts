@@ -13,6 +13,9 @@ import {
   runSessionCreationSingleFlight
 } from '../src/client/chatHistory.js';
 import { registerChatRoutes } from '../src/routes/chat.js';
+import { pool } from '../src/db/pool.js';
+import { config } from '../src/config.js';
+import { PlatformAgentClient } from '../src/ai/platformAgentClient.js';
 import {
   PUBLIC_HISTORY_MAX_RESPONSE_BYTES,
   limitPublicHistoryResponse
@@ -62,6 +65,37 @@ async function publicHistoryApp(
 }
 
 describe('public chat history API', () => {
+  it('authorizes and idempotently cancels only the identified active agent turn', async () => {
+    const { app } = await publicHistoryApp([]);
+    const originalKey = config.OPENAI_API_KEY;
+    const originalAgent = config.OPENAI_PLATFORM_AGENT_ID;
+    Object.assign(config, { OPENAI_API_KEY: 'test', OPENAI_PLATFORM_AGENT_ID: 'agent-test' });
+    let cancelled = false;
+    const query = vi.fn(async (sql: string) => {
+      if (sql.includes('SELECT id FROM conversation_sessions')) return { rowCount: 1, rows: [{ id: sessionId }] };
+      if (sql.includes('SELECT status,error_code')) return { rowCount: 1, rows: [{ status: cancelled ? 'failed' : 'answering', error_code: cancelled ? 'cancelled_by_user' : null }] };
+      if (sql.includes('SELECT payload FROM turn_checkpoints')) return { rowCount: 1, rows: [{ payload: { agentSessionId: 'agent-session', previousTurnId: 'previous' } }] };
+      if (sql.includes('UPDATE conversation_turns')) cancelled = true;
+      return { rowCount: 1, rows: [] };
+    });
+    const connect = vi.spyOn(pool, 'connect').mockResolvedValue({ query, release: vi.fn() } as never);
+    const latest = vi.spyOn(PlatformAgentClient.prototype, 'latestTurn').mockResolvedValue({ id: 'current', status: 'in_progress' });
+    const cancel = vi.spyOn(PlatformAgentClient.prototype, 'cancelTurn').mockResolvedValue(undefined);
+    try {
+      const unauthorized = await app.inject({ method: 'POST', url: `/api/chat/sessions/${sessionId}/messages/${turnId}/cancel`, headers: { 'x-bakaut-visitor-id': 'other' } });
+      expect(unauthorized.statusCode).toBe(404);
+      expect(connect).not.toHaveBeenCalled();
+      const first = await app.inject({ method: 'POST', url: `/api/chat/sessions/${sessionId}/messages/${turnId}/cancel`, headers: { 'x-bakaut-visitor-id': visitorId } });
+      const retry = await app.inject({ method: 'POST', url: `/api/chat/sessions/${sessionId}/messages/${turnId}/cancel`, headers: { 'x-bakaut-visitor-id': visitorId } });
+      expect(first.json()).toEqual({ status: 'cancelled' });
+      expect(retry.json()).toEqual({ status: 'cancelled' });
+      expect(cancel).toHaveBeenCalledOnce();
+      expect(cancel).toHaveBeenCalledWith('agent-session');
+    } finally {
+      connect.mockRestore(); latest.mockRestore(); cancel.mockRestore();
+      Object.assign(config, { OPENAI_API_KEY: originalKey, OPENAI_PLATFORM_AGENT_ID: originalAgent });
+    }
+  });
   it('replays public durable turn events and a persisted final result without internal payloads', async () => {
     const { app, conversations } = await publicHistoryApp([]);
     conversations.listTurnEvents.mockResolvedValueOnce([

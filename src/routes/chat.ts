@@ -2,12 +2,14 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { createHash, randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { AssistantService } from '../ai/assistant.js';
+import { PlatformAgentClient } from '../ai/platformAgentClient.js';
 import { RecoveryAttemptUnavailableError, TurnExecutionInProgressError } from '../ai/agentManagerOrchestrator.js';
 import { AgentManagerTurnBudgetExceededError } from '../ai/agentManagerTurnBudget.js';
 import { getAgentManagerRuntimeDecision } from '../ai/agentManagerRuntime.js';
 import { buildPublicCustomerResponse } from '../ai/agentManagerOutputGuard.js';
 import { runWithOpenAIUsageContext } from '../ai/openaiUsageGuard.js';
 import { config } from '../config.js';
+import { pool } from '../db/pool.js';
 import type { ChatResponsePayload } from '../shared/types.js';
 import {
   ActiveConversationTurnError,
@@ -26,8 +28,7 @@ const createSessionSchema = z.object({
 
 const messageSchema = z.object({
   message: z.string().trim().min(1).max(6000),
-  clientMessageId: z.string().uuid().optional(),
-  action: z.enum(['catalog_next_page']).optional()
+  clientMessageId: z.string().uuid().optional()
 }).strict();
 
 const feedbackSchema = z.object({
@@ -42,15 +43,15 @@ const turnEventsQuerySchema = z.object({
 // Must exceed the turn budget wall time (150s) plus SSE delivery headroom.
 const TURN_DEADLINE_MS = 160_000;
 
-function remainingTurnDeadlineMs(deadlineAt: string | null | undefined) {
+function remainingTurnDeadlineMs(deadlineAt: string | null | undefined, graceMs = 0) {
   const parsed = deadlineAt ? Date.parse(deadlineAt) : Number.NaN;
   return Number.isFinite(parsed)
-    ? Math.max(1, parsed - Date.now())
+    ? Math.max(1, parsed + graceMs - Date.now())
     : TURN_DEADLINE_MS;
 }
 
-function requestHash(sessionId: string, message: string, action?: string) {
-  return createHash('sha256').update(`${sessionId}\n${message.trim()}${action ? `\n${action}` : ''}`).digest('hex');
+function requestHash(sessionId: string, message: string) {
+  return createHash('sha256').update(`${sessionId}\n${message.trim()}`).digest('hex');
 }
 
 function safeErrorMessage(error: unknown) {
@@ -151,6 +152,13 @@ export async function registerChatRoutes(
 ) {
   const conversations = dependencies.conversations ?? new ConversationRepository();
   const assistant = dependencies.assistant ?? new AssistantService(conversations);
+  const activeControllers = new Map<string, Set<AbortController>>();
+  const registerController = (turnId: string, controller: AbortController) => {
+    const set = activeControllers.get(turnId) ?? new Set<AbortController>();
+    set.add(controller);
+    activeControllers.set(turnId, set);
+    return () => { set.delete(controller); if (!set.size) activeControllers.delete(turnId); };
+  };
 
   app.post('/api/chat/sessions', async (request, reply) => {
     const input = createSessionSchema.parse(request.body ?? {});
@@ -272,6 +280,51 @@ export async function registerChatRoutes(
     return recorded ? reply.send({ok:true}) : reply.code(404).send({error:'Message not found'});
   });
 
+  app.post('/api/chat/sessions/:id/messages/:turnId/cancel', async (request, reply) => {
+    const params = z.object({ id: z.string().uuid(), turnId: z.string().uuid() }).parse(request.params);
+    const session = await restoreAuthorizedSession(request, reply, conversations, params.id);
+    if (!session) return sessionNotFound(reply);
+    const db = await pool.connect();
+    try {
+      await db.query('BEGIN');
+      // Lock the session so the old turn cannot finish and a new one cannot be
+      // started between identifying the remote turn and issuing its cancel.
+      const locked = await db.query("SELECT id FROM conversation_sessions WHERE id=$1 AND status='active' FOR UPDATE", [params.id]);
+      if (!locked.rowCount) { await db.query('ROLLBACK'); return sessionNotFound(reply); }
+      const local = await db.query('SELECT status,error_code FROM conversation_turns WHERE session_id=$1 AND id=$2 FOR UPDATE', [params.id, params.turnId]);
+      const turn = local.rows[0];
+      if (!turn) { await db.query('ROLLBACK'); return reply.code(404).send({ error: 'Turn not found' }); }
+      if (turn.error_code === 'cancelled_by_user') { await db.query('COMMIT'); return reply.send({ status: 'cancelled' }); }
+      if (turn.status === 'completed' || turn.status === 'recovered') { await db.query('COMMIT'); return reply.send({ status: 'completed' }); }
+      if (turn.status === 'failed') { await db.query('COMMIT'); return reply.send({ status: 'failed' }); }
+      const checkpoints = await db.query("SELECT payload FROM turn_checkpoints WHERE session_id=$1 AND turn_id=$2 AND checkpoint='platform_agent_submission'", [params.id, params.turnId]);
+      const data = checkpoints.rows[0]?.payload as Record<string, unknown> | undefined;
+      if (!data || typeof data.agentSessionId !== 'string' || !(data.previousTurnId === null || typeof data.previousTurnId === 'string') ||
+          !config.OPENAI_API_KEY || !config.OPENAI_PLATFORM_AGENT_ID) {
+        await db.query('ROLLBACK');
+        return reply.code(409).send({ error: 'turn_identity_not_ready' });
+      }
+      const client = new PlatformAgentClient(config.OPENAI_API_KEY, config.OPENAI_PLATFORM_AGENT_ID,
+        config.OPENAI_PLATFORM_AGENT_VAULT_ID ? [config.OPENAI_PLATFORM_AGENT_VAULT_ID] : []);
+      const remote = await client.latestTurn(data.agentSessionId);
+      if (!remote || remote.id === data.previousTurnId) {
+        await db.query('ROLLBACK');
+        return reply.code(409).send({ error: 'turn_identity_not_ready' });
+      }
+      if (remote.status === 'completed') { await db.query('COMMIT'); return reply.send({ status: 'completed' }); }
+      if (remote.status === 'failed') { await db.query('COMMIT'); return reply.send({ status: 'failed' }); }
+      if (remote.status !== 'cancelled') await client.cancelTurn(data.agentSessionId);
+      await db.query("UPDATE conversation_turns SET status='failed',stage='cancelled_by_user',error_code='cancelled_by_user',error_message=NULL,execution_owner=NULL,execution_lease_expires_at=NULL,updated_at=now() WHERE session_id=$1 AND id=$2", [params.id, params.turnId]);
+      await db.query('COMMIT');
+      for (const controller of activeControllers.get(params.turnId) ?? []) controller.abort('platform_agent_explicit_cancel');
+      return reply.send({ status: 'cancelled' });
+    } catch (error) {
+      await db.query('ROLLBACK').catch(() => undefined);
+      app.log.warn({ error: safeErrorMessage(error) }, 'chat cancellation failed');
+      return reply.code(503).send({ error: 'cancellation_unavailable' });
+    } finally { db.release(); }
+  });
+
   app.post('/api/chat/sessions/:id/messages', async (request, reply) => {
     const params = z.object({ id: z.string().uuid() }).parse(request.params);
     const input = messageSchema.parse(request.body ?? {});
@@ -289,7 +342,7 @@ export async function registerChatRoutes(
         sessionId: params.id,
         visitorCapability,
         clientMessageId,
-        requestHash: requestHash(params.id, input.message, input.action),
+        requestHash: requestHash(params.id, input.message),
         content: input.message,
         activeNeedsBefore: session.needState.activeNeeds ?? [],
         deadlineAt: new Date(Date.now() + TURN_DEADLINE_MS).toISOString()
@@ -312,6 +365,7 @@ export async function registerChatRoutes(
     }
     const turnId = turn.id;
     const controller = new AbortController();
+    const unregisterController = registerController(turnId, controller);
     const timeout = setTimeout(() => controller.abort(), remainingTurnDeadlineMs(turn.deadlineAt));
     timeout.unref?.();
 
@@ -337,7 +391,6 @@ export async function registerChatRoutes(
         }, () => assistant.generateAnswer({
           sessionId: params.id,
           userMessage: input.message,
-          catalogPage: input.action === 'catalog_next_page',
            turnId,
            onDelta: (delta) => send('delta', { delta }),
            onStage: sendStageStatus,
@@ -348,7 +401,13 @@ export async function registerChatRoutes(
     } catch (error) {
       const executionInProgress = error instanceof TurnExecutionInProgressError;
       const budgetStopped = error instanceof AgentManagerTurnBudgetExceededError;
-      if (!executionInProgress) {
+      const explicitlyCancelled = controller.signal.reason === 'platform_agent_explicit_cancel' ||
+        (typeof conversations.getTurn === 'function' && (await conversations.getTurn(params.id, turnId).catch(() => null))?.errorCode === 'cancelled_by_user');
+      const checkpoints = !executionInProgress && !explicitlyCancelled && Boolean(config.OPENAI_PLATFORM_AGENT_ID) &&
+        typeof conversations.listTurnCheckpoints === 'function'
+        ? await conversations.listTurnCheckpoints(params.id, turnId).catch(() => []) : [];
+      const checkpointAvailable = checkpoints.some((row) => row.checkpoint === 'platform_agent_submission');
+      if (!executionInProgress && !checkpointAvailable && !explicitlyCancelled) {
         await conversations.updateTurn({
           sessionId: params.id,
           turnId,
@@ -376,13 +435,15 @@ export async function registerChatRoutes(
           error: error instanceof Error ? error.message : String(error)
         }, 'chat generation failed');
       }
-      send('error', {
+      if (explicitlyCancelled) send('cancelled', { turnId });
+      else send('error', {
         error: message,
         turnId,
-        recoverable: false
+        recoverable: checkpointAvailable
       });
     } finally {
       clearTimeout(timeout);
+      unregisterController();
       closeSseReply(reply);
     }
   });
@@ -397,7 +458,12 @@ export async function registerChatRoutes(
     const persistedTurn = await conversations.getTurn(params.id, params.turnId);
     if (!persistedTurn) return reply.code(404).send({ error: 'Turn not found' });
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), remainingTurnDeadlineMs(persistedTurn?.deadlineAt));
+    const unregisterController = registerController(params.turnId, controller);
+    // A recovery already past the deadline may reconcile the known remote turn
+    // during grace; one started earlier must still stop remote work at deadline.
+    const recoveryGraceMs = config.OPENAI_PLATFORM_AGENT_ID && persistedTurn.deadlineAt &&
+      Date.parse(persistedTurn.deadlineAt) <= Date.now() ? 30_000 : 0;
+    const timeout = setTimeout(() => controller.abort(), remainingTurnDeadlineMs(persistedTurn.deadlineAt, recoveryGraceMs));
     timeout.unref?.();
 
     const send = openSseReply(reply, {
@@ -429,7 +495,13 @@ export async function registerChatRoutes(
       send('done', buildPublicCustomerResponse(payload));
     } catch (error) {
       const executionInProgress = error instanceof TurnExecutionInProgressError;
-      if (!executionInProgress) {
+      const explicitlyCancelled = controller.signal.reason === 'platform_agent_explicit_cancel' ||
+        (typeof conversations.getTurn === 'function' && (await conversations.getTurn(params.id, params.turnId).catch(() => null))?.errorCode === 'cancelled_by_user');
+      const recoveryCheckpoints = !executionInProgress && !explicitlyCancelled && Boolean(config.OPENAI_PLATFORM_AGENT_ID) &&
+        typeof conversations.listTurnCheckpoints === 'function' && remainingTurnDeadlineMs(persistedTurn.deadlineAt, 30_000) > 1
+        ? await conversations.listTurnCheckpoints(params.id, params.turnId).catch(() => []) : [];
+      const checkpointAvailable = recoveryCheckpoints.some((row) => row.checkpoint === 'platform_agent_submission');
+      if (!executionInProgress && !explicitlyCancelled && !checkpointAvailable) {
         await conversations.updateTurn({
           sessionId: params.id,
           turnId: params.turnId,
@@ -449,15 +521,17 @@ export async function registerChatRoutes(
         runtimeModeReason: runtimeDecision.reason,
         error: safeErrorMessage(error)
       }, 'chat recovery failed');
-      send('error', {
+      if (explicitlyCancelled) send('cancelled', { turnId: params.turnId });
+      else send('error', {
         turnId: params.turnId,
-        recoverable: false,
+        recoverable: checkpointAvailable,
         error: executionInProgress
           ? 'Этот ответ уже формируется в другом запросе. Дождитесь завершения — повторно выполнять ход не нужно.'
           : 'Не удалось завершить ответ. Ваш вопрос сохранён в истории чата.'
       });
     } finally {
       clearTimeout(timeout);
+      unregisterController();
       closeSseReply(reply);
     }
   });

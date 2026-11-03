@@ -1094,7 +1094,7 @@ export class ConversationRepository {
            WHERE session_id = $2
              AND EXISTS (SELECT 1 FROM authorized_session)
              AND status IN ('received', 'need_extracted', 'planned', 'answering')
-             AND deadline_at <= now()
+             AND (deadline_at + interval '30 seconds' <= now() OR (deadline_at <= now() AND NOT EXISTS (SELECT 1 FROM turn_checkpoints cp WHERE cp.session_id = conversation_turns.session_id AND cp.turn_id = conversation_turns.id AND cp.checkpoint = 'platform_agent_submission')))
            RETURNING id
          ), expiry_barrier AS (
            SELECT authorized_session.id AS session_id, count(expired_turns.id) AS expired_count
@@ -1269,7 +1269,8 @@ export class ConversationRepository {
        WHERE turn.session_id = active_session.id
          AND turn.id = $2
          AND turn.status IN ('received', 'need_extracted', 'planned', 'answering', 'failed')
-         AND turn.deadline_at > now()
+         AND coalesce(turn.error_code, '') <> 'cancelled_by_user'
+         AND (turn.deadline_at > now() OR (turn.deadline_at + interval '30 seconds' > now() AND EXISTS (SELECT 1 FROM turn_checkpoints cp WHERE cp.session_id = turn.session_id AND cp.turn_id = turn.id AND cp.checkpoint = 'platform_agent_submission')))
          AND (
            turn.status <> 'failed'
            OR NOT EXISTS (
@@ -1344,7 +1345,7 @@ export class ConversationRepository {
          AND turn.id = $2
          AND turn.execution_owner = $3::uuid
          AND turn.execution_lease_expires_at > now()
-         AND turn.deadline_at > now()
+         AND (turn.deadline_at > now() OR (turn.deadline_at + interval '30 seconds' > now() AND EXISTS (SELECT 1 FROM turn_checkpoints cp WHERE cp.session_id = turn.session_id AND cp.turn_id = turn.id AND cp.checkpoint = 'platform_agent_submission')))
          AND turn.status IN ('received', 'need_extracted', 'planned', 'answering')
        RETURNING turn.*`,
       [input.sessionId, input.turnId, input.ownerId, leaseMs]
@@ -1399,7 +1400,7 @@ export class ConversationRepository {
              updated_at = now()
          WHERE session_id = $1
            AND status IN ('received', 'need_extracted', 'planned', 'answering')
-           AND deadline_at <= now()
+           AND (deadline_at + interval '30 seconds' <= now() OR (deadline_at <= now() AND NOT EXISTS (SELECT 1 FROM turn_checkpoints cp WHERE cp.session_id = conversation_turns.session_id AND cp.turn_id = conversation_turns.id AND cp.checkpoint = 'platform_agent_submission')))
          RETURNING conversation_turns.*
        ), current_turns AS (
          SELECT conversation_turn.*
@@ -1450,7 +1451,7 @@ export class ConversationRepository {
              updated_at = now()
          WHERE session_id = $1
            AND status IN ('received', 'need_extracted', 'planned', 'answering')
-           AND deadline_at <= now()
+           AND (deadline_at + interval '30 seconds' <= now() OR (deadline_at <= now() AND NOT EXISTS (SELECT 1 FROM turn_checkpoints cp WHERE cp.session_id = conversation_turns.session_id AND cp.turn_id = conversation_turns.id AND cp.checkpoint = 'platform_agent_submission')))
          RETURNING conversation_turns.*
        ), current_turns AS (
          SELECT conversation_turn.*
@@ -2004,7 +2005,7 @@ export class ConversationRepository {
          WHERE turn.id = $2
            AND turn.execution_owner = $3::uuid
            AND turn.execution_lease_expires_at > now()
-           AND turn.deadline_at > now()
+           AND (turn.deadline_at > now() OR (turn.deadline_at + interval '30 seconds' > now() AND $5::jsonb->>'source' = 'platform_agent' AND EXISTS (SELECT 1 FROM turn_checkpoints cp WHERE cp.session_id = turn.session_id AND cp.turn_id = turn.id AND cp.checkpoint = 'platform_agent_submission')))
            AND turn.status IN ('received', 'need_extracted', 'planned', 'answering')
            AND turn.assistant_message_id IS NULL
          FOR UPDATE OF turn
@@ -2059,7 +2060,7 @@ export class ConversationRepository {
            AND turn.id = $2
            AND turn.execution_owner = $3::uuid
            AND turn.execution_lease_expires_at > now()
-           AND turn.deadline_at > now()
+           AND (turn.deadline_at > now() OR (turn.deadline_at + interval '30 seconds' > now() AND $5::jsonb->>'source' = 'platform_agent' AND EXISTS (SELECT 1 FROM turn_checkpoints cp WHERE cp.session_id = turn.session_id AND cp.turn_id = turn.id AND cp.checkpoint = 'platform_agent_submission')))
            AND turn.status IN ('received', 'need_extracted', 'planned', 'answering')
          RETURNING turn.*
        ), committed_checkpoint AS (

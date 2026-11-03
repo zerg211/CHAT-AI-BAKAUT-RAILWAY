@@ -3,6 +3,7 @@ import type { ChatResponsePayload } from '../shared/types';
 export type ChatStreamHandlers = {
   onDelta: (delta: string) => void;
   onStatus?: (status: string) => void;
+  onTurn?: (turnId: string) => void;
 };
 
 type FetchLike = typeof fetch;
@@ -12,7 +13,6 @@ export type ChatStreamOptions = {
   fetcher?: FetchLike;
   idleTimeoutMs?: number;
   clientMessageId?: string;
-  action?: 'catalog_next_page';
 };
 
 const DEFAULT_STREAM_IDLE_TIMEOUT_MS = 150_000;
@@ -121,9 +121,11 @@ async function consumeSse(
       if (!parsed) continue;
       const delegated = await onEvent?.(parsed.event, parsed.data);
       if (delegated) return delegated;
+      if (parsed.event === 'turn' && typeof parsed.data.turnId === 'string') handlers.onTurn?.(parsed.data.turnId);
       if (parsed.event === 'delta') handlers.onDelta(parsed.data.delta ?? '');
       if (parsed.event === 'status') handlers.onStatus?.(parsed.data.status ?? '');
       if (parsed.event === 'done') donePayload = parsed.data as ChatResponsePayload;
+      if (parsed.event === 'cancelled') throw new DOMException('The turn was cancelled.', 'AbortError');
       if (parsed.event === 'error') {
         throw new ServerSseError(
           String(parsed.data.error ?? FRIENDLY_FINAL_ERROR),
@@ -282,7 +284,7 @@ export async function streamChatMessage(
       'content-type': 'application/json',
       'x-bakaut-visitor-id': options.visitorId
     },
-    body: JSON.stringify({ message, clientMessageId, ...(options.action ? { action: options.action } : {}) }),
+    body: JSON.stringify({ message, clientMessageId }),
     signal
   });
   if (!response.ok) {

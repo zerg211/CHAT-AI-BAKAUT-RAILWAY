@@ -104,6 +104,7 @@ export function normalizePublicProductCard(value: unknown): ProductCard | null {
   if (typeof source.price === 'number' && Number.isFinite(source.price) && source.price >= 0 && source.price <= 1_000_000_000_000) {
     card.price = source.price;
   }
+  if (source.priceOnRequest === true && card.price == null) card.priceOnRequest = true;
   if (currency) card.currency = currency;
   if (imageUrl) card.imageUrl = imageUrl;
   if (sourceUrl) card.sourceUrl = sourceUrl;

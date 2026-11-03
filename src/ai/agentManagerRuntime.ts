@@ -1,4 +1,4 @@
-export type AgentManagerRuntimeMode = 'agent_manager';
+export type AgentManagerRuntimeMode = 'openai_platform_agent';
 export type AgentManagerRuntimeReason = 'sole_runtime';
 
 export interface AgentManagerRuntimeDecision {
@@ -7,7 +7,7 @@ export interface AgentManagerRuntimeDecision {
 }
 
 const SOLE_RUNTIME_DECISION: AgentManagerRuntimeDecision = Object.freeze({
-  runtimeMode: 'agent_manager',
+  runtimeMode: 'openai_platform_agent',
   reason: 'sole_runtime'
 });
 

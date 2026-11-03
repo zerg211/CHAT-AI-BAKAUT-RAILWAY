@@ -11,6 +11,6 @@ describe('chat route SSE abort policy', () => {
     expect(source).toContain('const TURN_DEADLINE_MS = 160_000');
     expect(source).toContain('deadlineAt: new Date(Date.now() + TURN_DEADLINE_MS).toISOString()');
     expect(source).toContain('remainingTurnDeadlineMs(turn.deadlineAt)');
-    expect(source).toContain('remainingTurnDeadlineMs(persistedTurn?.deadlineAt)');
+    expect(source).toContain('remainingTurnDeadlineMs(persistedTurn.deadlineAt, recoveryGraceMs)');
   });
 });

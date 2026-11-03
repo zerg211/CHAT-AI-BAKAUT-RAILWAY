@@ -28,7 +28,7 @@ export function adminRuntimeFlags(metadata?: ChatResponsePayload['metadata']): A
   if (!metadata) return [];
   const flags: AdminDiagnosticFlag[] = [];
   const runtimeMode = metadata.runtimeMode ?? (metadata.agentManager ? 'agent_manager' : undefined);
-  if (runtimeMode === 'agent_manager') {
+  if (runtimeMode === 'agent_manager' || runtimeMode === 'openai_platform_agent') {
     const runtimeReason = metadata.runtimeModeReason ?? metadata.agentManagerRuntime?.reason ?? 'unknown';
     flags.push({ label: `mode: ${runtimeMode} (${shortReason(runtimeReason)})` });
   }

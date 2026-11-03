@@ -19,9 +19,9 @@ describe('app', () => {
     expect(response.json()).toMatchObject({
       ok: true,
       runtime: {
-        version: '2026-09-08.final-hardening-v23',
-        contractVersion: '2026-08-11.manager-contract-v2',
-        productionRuntime: 'agent_manager'
+        version: '2026-11-03.platform-agent-v1',
+        contractVersion: '2026-11-03.catalog-snapshot-v1',
+        productionRuntime: 'openai_platform_agent'
       }
     });
     expect(response.json()).not.toHaveProperty('answerModel');
