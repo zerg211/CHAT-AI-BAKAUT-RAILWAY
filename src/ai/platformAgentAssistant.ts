@@ -94,7 +94,7 @@ function reconcileCitations(answer: string, candidates: ProductCard[]) {
   }).join('\n');
 }
 
-function classifyPage(raw: string, candidates: ProductCard[], allowPartial = false) {
+function classifyPage(raw: string, candidates: ProductCard[], history: ProductCard[], hasSearch: boolean) {
   let result: Record<string, unknown>;
   try { result = JSON.parse(raw) as Record<string, unknown>; } catch { throw new Error('Agent classification is not valid JSON'); }
   if (!result || typeof result !== 'object' || typeof result.answer !== 'string' || !result.answer.trim()) throw new Error('Agent answer is invalid');
@@ -103,11 +103,17 @@ function classifyPage(raw: string, candidates: ProductCard[], allowPartial = fal
   if (selectsAllCatalogMatches(raw)) return { answer: reconcileCitations(result.answer, candidates), cards: candidates };
   const classified = (groups as string[][]).flat();
   const pageIds = new Set(candidates.map((card) => card.id));
-  if ((!allowPartial && classified.length !== pageIds.size) || new Set(classified).size !== classified.length || classified.some((id) => !pageIds.has(id))) {
+  const historicalIds = new Set(history.map((card) => card.id));
+  const selected = new Set(result.selected as string[]);
+  // A new search is authoritative for suitability: older IDs can be mentioned as
+  // rejected or uncertain but cannot become matches outside the new snapshot.
+  if (new Set(classified).size !== classified.length ||
+      classified.some((id) => !pageIds.has(id) && !historicalIds.has(id)) ||
+      (hasSearch && ([...pageIds].some((id) => !classified.includes(id)) ||
+        [...selected].some((id) => !pageIds.has(id))))) {
     throw new Error('Agent classification does not account for the catalog page');
   }
-  const selected = new Set(result.selected as string[]);
-  const cards = candidates.filter((card) => selected.has(card.id));
+  const cards = (hasSearch ? candidates : history).filter((card) => selected.has(card.id));
   return { answer: reconcileCitations(result.answer, cards), cards };
 }
 
@@ -146,20 +152,28 @@ export class PlatformAgentAssistant {
     const page = selectsAllCatalogMatches(result.answer)
       ? await readFullCatalogSnapshot(result.page ?? {}, input.signal)
       : result.page;
-    let candidates = cardsFromPage(page);
-    const continuing = !page && !selectsAllCatalogMatches(result.answer);
-    if (continuing) {
-      // A follow-up may select a previously shown product without a new search.
-      // Only trust IDs in the latest saved result from this conversation.
-      const parsed = JSON.parse(result.answer) as { selected?: unknown; rejected?: unknown; uncertain?: unknown };
-      const hasIds = [parsed.selected, parsed.rejected, parsed.uncertain].some((value) => Array.isArray(value) && value.length > 0);
-      if (hasIds) {
-        const messages = await this.conversations.listMessages(input.sessionId, 80);
-        const previous = [...messages].reverse().find((message) => Array.isArray(message.metadata?.productCards) && message.metadata.productCards.length > 0);
-        candidates = (previous?.metadata.productCards as ProductCard[] | undefined) ?? [];
+    const candidates = cardsFromPage(page);
+    const parsed = JSON.parse(result.answer) as { selected?: unknown; rejected?: unknown; uncertain?: unknown };
+    const classifiedIds = [parsed.selected, parsed.rejected, parsed.uncertain].flatMap((value) => Array.isArray(value) ? value : []);
+    const currentIds = new Set(candidates.map((card) => card.id));
+    let history: ProductCard[] = [];
+    if (!selectsAllCatalogMatches(result.answer) && classifiedIds.some((id) => !currentIds.has(id))) {
+      // All previously delivered results belong to this session. Use the most
+      // recent copy of each card, while never inventing unknown identities.
+      const messages = await this.conversations.listMessages(input.sessionId, 80);
+      const byId = new Map<string, ProductCard>();
+      for (const message of [...messages].reverse()) {
+        const savedGroups = [message.metadata?.productCards, message.metadata?.catalogCandidates];
+        for (const saved of savedGroups) {
+          if (!Array.isArray(saved)) continue;
+          for (const card of saved as ProductCard[]) {
+            if (card && typeof card.id === 'string' && !byId.has(card.id)) byId.set(card.id, card);
+          }
+        }
       }
+      history = [...byId.values()];
     }
-    const classified = classifyPage(result.answer, candidates, continuing);
+    const classified = classifyPage(result.answer, candidates, history, Boolean(page));
     let answer = classified.answer;
     let cards = await enrichMissingPrices(classified.cards, input.signal);
     const pendingPage = page && Array.isArray(page.pending_price_items) ? { items: page.pending_price_items } : undefined;
@@ -187,7 +201,8 @@ export class PlatformAgentAssistant {
       return { productId: checked.id, status: checked.priceSource === 'site' ? (checked.priceOnRequest ? 'on_request' : 'priced') : checked.priceSource === 'catalog' ? 'catalog' : 'unknown',
         sourceUrl: checked.priceSource === 'site' ? checked.sourceUrl : undefined, observedAt: checked.priceObservedAt };
     });
-    const metadata = { runtimeMode: 'openai_platform_agent' as const, runtimeModeReason: 'sole_runtime', productCards: cards, priceAudit, cardDisplay, needStateSnapshot: input.needState,
+    const metadata = { runtimeMode: 'openai_platform_agent' as const, runtimeModeReason: 'sole_runtime', productCards: cards,
+      catalogCandidates: page && !selectsAllCatalogMatches(result.answer) ? candidates : undefined, priceAudit, cardDisplay, needStateSnapshot: input.needState,
       platformAgentUsage: result.usage, platformAgentTurnId: result.turnId, usedWebSearch: result.usedWebSearch };
     const responsePayload: ChatResponsePayload = { turnId: input.turnId, answer, needState: input.needState,
       productCards: cards, cardDisplay, usedWebSearch: result.usedWebSearch, metadata };
