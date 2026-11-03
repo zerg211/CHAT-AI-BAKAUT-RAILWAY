@@ -1,7 +1,7 @@
 import pg from 'pg';
 
 /** One bounded, shared dependency probe per app instance. Never calls a model. */
-export function createReadinessProbe(connectionString: string, capabilitiesReady: () => boolean) {
+export function createReadinessProbe(connectionString: string, capabilitiesReady: () => boolean, platformAgentEnabled = false) {
   const db = new pg.Pool({ connectionString, max: 1, connectionTimeoutMillis: 1500,
     idleTimeoutMillis: 5000, query_timeout: 1500, statement_timeout: 1500 });
   let inFlight: Promise<boolean> | undefined;
@@ -31,7 +31,8 @@ export function createReadinessProbe(connectionString: string, capabilitiesReady
         AND (SELECT count(*)=3 FROM information_schema.columns WHERE table_schema='public'
           AND table_name='products' AND column_name IN ('price_observed_at','price_on_request','price_observation_source_type'))
         AND (SELECT count(*)=2 FROM pg_trigger WHERE tgrelid=to_regclass('public.products')
-          AND tgname IN ('a_product_price_observation','product_price_fact_mirror') AND tgenabled IN ('O','A')) AS ready`)
+          AND tgname IN ('a_product_price_observation','product_price_fact_mirror') AND tgenabled IN ('O','A'))
+        AND (NOT $1::boolean OR to_regclass('public.platform_agent_sessions') IS NOT NULL) AS ready`, [platformAgentEnabled])
         .then(result => result.rows[0]?.ready === true)
         .catch(() => false)
         .then(ready => { cached = { ready, until: Date.now() + 2000 }; return ready; })

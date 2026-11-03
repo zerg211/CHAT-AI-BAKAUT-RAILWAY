@@ -68,7 +68,7 @@ export async function buildApp() {
         commitSha: process.env.RAILWAY_GIT_COMMIT_SHA ?? process.env.GIT_COMMIT_SHA ?? null,
         version: AI_MANAGER_RUNTIME_MANIFEST.version,
         contractVersion: AI_MANAGER_RUNTIME_MANIFEST.contractVersion,
-        productionRuntime: AI_MANAGER_RUNTIME_MANIFEST.productionRuntime
+        productionRuntime: config.OPENAI_PLATFORM_AGENT_ID ? 'openai_platform_agent' : AI_MANAGER_RUNTIME_MANIFEST.productionRuntime
       }
     };
   });
@@ -95,7 +95,7 @@ export async function buildApp() {
     await maintenanceInFlight;
   });
 
-  const readiness = createReadinessProbe(config.DATABASE_URL, () => Boolean(config.OPENAI_API_KEY?.trim()));
+  const readiness = createReadinessProbe(config.DATABASE_URL, () => Boolean(config.OPENAI_API_KEY?.trim()), Boolean(config.OPENAI_PLATFORM_AGENT_ID));
   app.get('/api/ready', async (_request, reply) => {
     const ready = await readiness.check();
     return reply.code(ready ? 200 : 503).send({ ready });
@@ -106,7 +106,7 @@ export async function buildApp() {
     const stopOutbox = startLeadOutboxWorker({ log: app.log });
     app.addHook('onClose', stopOutbox);
   }
-  if (config.NODE_ENV !== 'test') {
+  if (config.NODE_ENV !== 'test' && !config.OPENAI_PLATFORM_AGENT_ID) {
     const stopEnrichment = startKnowledgeEnrichmentWorker();
     app.addHook('onClose', stopEnrichment);
   }
