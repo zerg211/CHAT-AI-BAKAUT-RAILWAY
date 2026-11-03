@@ -94,7 +94,7 @@ function reconcileCitations(answer: string, candidates: ProductCard[]) {
   }).join('\n');
 }
 
-function classifyPage(raw: string, candidates: ProductCard[]) {
+function classifyPage(raw: string, candidates: ProductCard[], allowPartial = false) {
   let result: Record<string, unknown>;
   try { result = JSON.parse(raw) as Record<string, unknown>; } catch { throw new Error('Agent classification is not valid JSON'); }
   if (!result || typeof result !== 'object' || typeof result.answer !== 'string' || !result.answer.trim()) throw new Error('Agent answer is invalid');
@@ -103,7 +103,7 @@ function classifyPage(raw: string, candidates: ProductCard[]) {
   if (selectsAllCatalogMatches(raw)) return { answer: reconcileCitations(result.answer, candidates), cards: candidates };
   const classified = (groups as string[][]).flat();
   const pageIds = new Set(candidates.map((card) => card.id));
-  if (classified.length !== pageIds.size || new Set(classified).size !== classified.length || classified.some((id) => !pageIds.has(id))) {
+  if ((!allowPartial && classified.length !== pageIds.size) || new Set(classified).size !== classified.length || classified.some((id) => !pageIds.has(id))) {
     throw new Error('Agent classification does not account for the catalog page');
   }
   const selected = new Set(result.selected as string[]);
@@ -146,8 +146,20 @@ export class PlatformAgentAssistant {
     const page = selectsAllCatalogMatches(result.answer)
       ? await readFullCatalogSnapshot(result.page ?? {}, input.signal)
       : result.page;
-    const candidates = cardsFromPage(page);
-    const classified = classifyPage(result.answer, candidates);
+    let candidates = cardsFromPage(page);
+    const continuing = !page && !selectsAllCatalogMatches(result.answer);
+    if (continuing) {
+      // A follow-up may select a previously shown product without a new search.
+      // Only trust IDs in the latest saved result from this conversation.
+      const parsed = JSON.parse(result.answer) as { selected?: unknown; rejected?: unknown; uncertain?: unknown };
+      const hasIds = [parsed.selected, parsed.rejected, parsed.uncertain].some((value) => Array.isArray(value) && value.length > 0);
+      if (hasIds) {
+        const messages = await this.conversations.listMessages(input.sessionId, 80);
+        const previous = [...messages].reverse().find((message) => Array.isArray(message.metadata?.productCards) && message.metadata.productCards.length > 0);
+        candidates = (previous?.metadata.productCards as ProductCard[] | undefined) ?? [];
+      }
+    }
+    const classified = classifyPage(result.answer, candidates, continuing);
     let answer = classified.answer;
     let cards = await enrichMissingPrices(classified.cards, input.signal);
     const pendingPage = page && Array.isArray(page.pending_price_items) ? { items: page.pending_price_items } : undefined;
@@ -158,9 +170,10 @@ export class PlatformAgentAssistant {
       const additional = pending.filter((card) => typeof card.price === 'number' && card.price <= budget);
       cards = [...cards, ...additional];
       if (additional.length) answer += `\n\nПосле проверки цен на сайте дополнительно подходят товаров: ${additional.length}.`;
-      const onRequest = pending.filter((card) => card.priceOnRequest).length;
+      const onRequest = pending.filter((card) => card.priceOnRequest);
+      cards = [...cards, ...onRequest];
       const unknown = pending.filter((card) => !card.priceOnRequest && card.price == null).length;
-      if (onRequest) answer += `\n\nТовары под заказ: ${onRequest}. Сроки уточнит менеджер; предлагаем оформить заявку.`;
+      if (onRequest.length) answer += `\n\nТовары под заказ: ${onRequest.length}. Их цена и соответствие бюджету не подтверждены; сроки уточнит менеджер. Предлагаем оформить заявку.`;
       if (unknown) answer += `\n\nНе удалось проверить цену ещё ${unknown} товаров, поэтому их соответствие бюджету неизвестно.`;
     }
     const ids = [...candidates, ...pending].map((card) => card.id);
