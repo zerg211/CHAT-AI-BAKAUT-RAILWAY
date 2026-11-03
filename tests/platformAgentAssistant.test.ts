@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const state = vi.hoisted(() => ({
   price: vi.fn(), run: vi.fn(), wait: vi.fn(), settle: vi.fn(), submit: vi.fn(), full: vi.fn(), checkpoints: vi.fn(), renew: vi.fn(), query: vi.fn(), transactionQuery: vi.fn(), release: vi.fn(),
-  commitMessage: vi.fn(), claim: vi.fn(), releaseLease: vi.fn(), getTurn: vi.fn(), getSession: vi.fn()
+  commitMessage: vi.fn(), listMessages: vi.fn(), claim: vi.fn(), releaseLease: vi.fn(), getTurn: vi.fn(), getSession: vi.fn()
 }));
 vi.mock('../src/config.js', () => ({ config: { OPENAI_API_KEY: 'test', OPENAI_PLATFORM_AGENT_ID: 'agent-test' } }));
 vi.mock('../src/db/pool.js', () => ({ pool: { query: state.query, connect: vi.fn(async () => ({ query: state.transactionQuery, release: state.release })) } }));
@@ -18,10 +18,11 @@ import { PlatformAgentAssistant } from '../src/ai/platformAgentAssistant.js';
 import type { ConversationRepository } from '../src/db/repositories.js';
 
 describe('site chat and platform agent', () => {
-  const repo = { getTurn: state.getTurn, getSession: state.getSession, claimTurnExecution: state.claim, releaseTurnExecution: state.releaseLease, upsertTurnCheckpoint: vi.fn(async () => undefined), listTurnCheckpoints: state.checkpoints, renewTurnExecution: state.renew } as unknown as ConversationRepository;
+  const repo = { listMessages: state.listMessages, getTurn: state.getTurn, getSession: state.getSession, claimTurnExecution: state.claim, releaseTurnExecution: state.releaseLease, upsertTurnCheckpoint: vi.fn(async () => undefined), listTurnCheckpoints: state.checkpoints, renewTurnExecution: state.renew } as unknown as ConversationRepository;
   beforeEach(() => {
     vi.clearAllMocks();
     state.price.mockImplementation(async (product: { id: string }) => ({ status: 'unknown', productId: product.id }));
+    state.listMessages.mockResolvedValue([]);
     state.getTurn.mockResolvedValue(null);
     state.getSession.mockResolvedValue({ id: 'chat', status: 'active', needState: {} });
     state.claim.mockResolvedValue({ id: 'turn' });
@@ -96,6 +97,19 @@ describe('site chat and platform agent', () => {
       page: { items: [{ product_id: 'new', name: 'Виброплита 5100024696', sku: '5100024696', url }] } });
     const answer = await new PlatformAgentAssistant(repo).generateAnswer({ sessionId: 'chat', turnId: 'turn', userMessage: 'ещё' });
     expect(answer.productCards).toEqual([]);
+  });
+  it('accepts only previously shown product identities in a follow-up without a new search', async () => {
+    state.listMessages.mockResolvedValue([{ metadata: { productCards: [
+      { id: 'first', name: 'Первая', price: 100, specs: {}, currency: 'RUB' },
+      { id: 'second', name: 'Вторая', price: 200, specs: {}, currency: 'RUB' }
+    ] } }]);
+    state.run.mockResolvedValue({ sessionId: 'agent-session', turnId: 'agent-turn',
+      answer: JSON.stringify({ answer: 'Самая лёгкая — первая.', selected: ['first'], rejected: [], uncertain: [] }) });
+    const result = await new PlatformAgentAssistant(repo).generateAnswer({ sessionId: 'chat', turnId: 'turn', userMessage: 'Какая из них самая лёгкая?' });
+    expect(result.productCards.map((card) => card.id)).toEqual(['first']);
+    state.run.mockResolvedValue({ sessionId: 'agent-session', turnId: 'agent-turn',
+      answer: JSON.stringify({ answer: 'Ответ', selected: ['not-shown'], rejected: [], uncertain: [] }) });
+    await expect(new PlatformAgentAssistant(repo).generateAnswer({ sessionId: 'chat', turnId: 'turn', userMessage: 'Какая?' })).rejects.toThrow('does not account');
   });
   it('refuses an incomplete classification without advancing the cursor', async () => {
     state.run.mockResolvedValue({ sessionId: 'agent-session', turnId: 'agent-turn', pageCursor: 'cursor-1',
