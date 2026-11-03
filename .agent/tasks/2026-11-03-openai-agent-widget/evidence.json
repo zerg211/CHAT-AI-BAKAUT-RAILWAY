@@ -1,0 +1,11 @@
+{
+  "status": "in_progress",
+  "build": "pass",
+  "typecheck": "pass",
+  "focused_test_files": 8,
+  "focused_tests_passed": 66,
+  "railway_postgres": "online_new_empty_persistent_volume",
+  "agent_live": "pending",
+  "pagination_live": "pending",
+  "site_widget": "pending"
+}

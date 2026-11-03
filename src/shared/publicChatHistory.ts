@@ -130,7 +130,7 @@ export function normalizePublicCardDisplay(value: unknown): CardDisplayOptions |
     1,
     Math.min(PUBLIC_HISTORY_MAX_CARDS, Math.floor(source.initialVisibleCount))
   );
-  return { initialVisibleCount };
+  return { initialVisibleCount, ...(source.hasMore === true ? { hasMore: true } : {}) };
 }
 
 export function normalizePublicHistoryMessage(value: unknown): PublicChatHistoryMessage | null {

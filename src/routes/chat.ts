@@ -26,7 +26,8 @@ const createSessionSchema = z.object({
 
 const messageSchema = z.object({
   message: z.string().trim().min(1).max(6000),
-  clientMessageId: z.string().uuid().optional()
+  clientMessageId: z.string().uuid().optional(),
+  action: z.enum(['catalog_next_page']).optional()
 }).strict();
 
 const feedbackSchema = z.object({
@@ -48,8 +49,8 @@ function remainingTurnDeadlineMs(deadlineAt: string | null | undefined) {
     : TURN_DEADLINE_MS;
 }
 
-function requestHash(sessionId: string, message: string) {
-  return createHash('sha256').update(`${sessionId}\n${message.trim()}`).digest('hex');
+function requestHash(sessionId: string, message: string, action?: string) {
+  return createHash('sha256').update(`${sessionId}\n${message.trim()}${action ? `\n${action}` : ''}`).digest('hex');
 }
 
 function safeErrorMessage(error: unknown) {
@@ -288,7 +289,7 @@ export async function registerChatRoutes(
         sessionId: params.id,
         visitorCapability,
         clientMessageId,
-        requestHash: requestHash(params.id, input.message),
+        requestHash: requestHash(params.id, input.message, input.action),
         content: input.message,
         activeNeedsBefore: session.needState.activeNeeds ?? [],
         deadlineAt: new Date(Date.now() + TURN_DEADLINE_MS).toISOString()
@@ -336,6 +337,7 @@ export async function registerChatRoutes(
         }, () => assistant.generateAnswer({
           sessionId: params.id,
           userMessage: input.message,
+          catalogPage: input.action === 'catalog_next_page',
            turnId,
            onDelta: (delta) => send('delta', { delta }),
            onStage: sendStageStatus,

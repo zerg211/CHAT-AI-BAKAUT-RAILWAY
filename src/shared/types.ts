@@ -913,6 +913,7 @@ export interface ConversationTurn {
 
 export interface CardDisplayOptions {
   initialVisibleCount?: number;
+  hasMore?: boolean;
 }
 
 export interface ChatResponsePayload {

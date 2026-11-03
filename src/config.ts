@@ -70,6 +70,8 @@ const schema = z.object({
   EVAL_SERVICE_TOKEN: optionalSecret,
   MODEL: z.string().optional(),
   OPENAI_API_KEY: z.string().optional(),
+  OPENAI_PLATFORM_AGENT_ID: z.string().optional(),
+  OPENAI_PLATFORM_AGENT_VAULT_ID: z.string().optional(),
   OPENAI_MODEL: z.string().optional(),
   OPENAI_ANSWER_MODEL: z.string().optional(),
   OPENAI_PLANNER_MODEL: z.string().optional(),
