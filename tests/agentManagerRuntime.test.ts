@@ -7,7 +7,7 @@ import {
 describe('sole agent manager runtime', () => {
   it('has one runtime decision in every environment and session', () => {
     expect(getAgentManagerRuntimeDecision()).toEqual({
-      runtimeMode: 'agent_manager',
+      runtimeMode: 'openai_platform_agent',
       reason: 'sole_runtime'
     });
   });
@@ -15,7 +15,7 @@ describe('sole agent manager runtime', () => {
   it('publishes metadata without feature flags, URL opt-in, or legacy state', () => {
     const decision = getAgentManagerRuntimeDecision();
     expect(runtimeResponseMetadata(decision)).toEqual({
-      runtimeMode: 'agent_manager',
+      runtimeMode: 'openai_platform_agent',
       runtimeModeReason: 'sole_runtime',
       agentManagerRuntime: decision
     });

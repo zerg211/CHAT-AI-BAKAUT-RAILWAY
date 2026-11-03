@@ -34,8 +34,8 @@ function buildDependencies() {
         : null
     )),
     createTurnWithUserMessage: vi.fn(),
-    getTurn: vi.fn(),
-    updateTurn: vi.fn(),
+    getTurn: vi.fn().mockResolvedValue(null),
+    updateTurn: vi.fn().mockResolvedValue(null),
     recordAnswerDelivery: vi.fn(async () => true)
   };
   const assistant = {

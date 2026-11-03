@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { extractCurrentSitePrice, sitePriceErrorCode } from '../src/catalog/currentSitePrice.js';
+import { extractCurrentSitePrice, extractSitePriceObservation, sitePriceErrorCode } from '../src/catalog/currentSitePrice.js';
 import type { Product } from '../src/shared/types.js';
 
 const product: Product = { id:'price-product',name:'Wacker Neuson BPS 1550 Gw-c CE',price:160000,
@@ -31,4 +31,16 @@ describe('authoritative company product price',()=>{
   ])('rejects ambiguous, unconfirmed or mismatched data',html=>expect(parse(html)).toBeNull());
   it.each(['https://other.example/catalog/exact-model/','https://bakautprof.ru/catalog/another-model/'])(
     'rejects a different page or origin',url=>expect(parse(page(),url)).toBeNull());
+  it('distinguishes an explicit on-request offer from an inaccessible or ambiguous price', () => {
+    const onRequest = page('<div class="card__prices" itemprop="offers"><span class="card__current-price">По запросу</span></div>');
+    const observe = (html: string, url = product.sourceUrl!) => extractSitePriceObservation(html, product, url, 'https://bakautprof.ru');
+    expect(observe(onRequest)).toMatchObject({ status: 'on_request', productId: product.id, sourceUrl: product.sourceUrl });
+    expect(observe(page('<div class="card__prices" itemprop="offers"></div>')).status).toBe('unknown');
+    expect(observe(`<main><h1>${product.name}</h1><div class="card"><div class="card__side"><button class="card__btn--request">Запрос</button></div></div></main>`).status).toBe('on_request');
+    expect(observe(`<main><h1>${product.name}</h1><div class="card"><div class="card__side"><span class="other-price">123</span></div></div></main>`).status).toBe('unknown');
+    expect(observe(onRequest, 'https://bakautprof.ru/catalog/wrong/').status).toBe('unknown');
+    expect(observe(page(offer())).status).toBe('priced');
+    expect(observe(page(offer(), 'Другая модель')).status).toBe('unknown');
+  });
+
 });

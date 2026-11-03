@@ -1,0 +1,7 @@
+knowledge.sqlite
+knowledge.sqlite-*
+*.sqlite
+*.sqlite3
+__pycache__/
+.env
+.env.*

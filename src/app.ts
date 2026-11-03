@@ -68,7 +68,7 @@ export async function buildApp() {
         commitSha: process.env.RAILWAY_GIT_COMMIT_SHA ?? process.env.GIT_COMMIT_SHA ?? null,
         version: AI_MANAGER_RUNTIME_MANIFEST.version,
         contractVersion: AI_MANAGER_RUNTIME_MANIFEST.contractVersion,
-        productionRuntime: config.OPENAI_PLATFORM_AGENT_ID ? 'openai_platform_agent' : AI_MANAGER_RUNTIME_MANIFEST.productionRuntime
+        productionRuntime: AI_MANAGER_RUNTIME_MANIFEST.productionRuntime
       }
     };
   });

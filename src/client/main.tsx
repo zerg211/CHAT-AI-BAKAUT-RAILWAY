@@ -634,18 +634,13 @@ async function sendAssistantFeedback(sessionId: string, messageId: string, ratin
   if (!response.ok) throw new Error('feedback failed');
 }
 
-const INITIAL_VISIBLE_CARDS = 7;
-const SHOW_ALL_CARD_COUNT = 10;
+const CARDS_PER_PAGE = 10;
 
-function ProductCards({ cards, initialVisibleCount }: {
-  cards: ProductCard[]; initialVisibleCount?: number;
-}) {
+function ProductCards({ cards }: { cards: ProductCard[] }) {
   const [visibleCount, setVisibleCount] = useState<number | null>(null);
   if (!cards.length) return null;
 
-  const initialCount = initialVisibleCount
-    ? Math.max(1, Math.min(cards.length, Math.floor(initialVisibleCount)))
-    : cards.length <= SHOW_ALL_CARD_COUNT ? cards.length : INITIAL_VISIBLE_CARDS;
+  const initialCount = Math.min(cards.length, CARDS_PER_PAGE);
   const visibleCards = cards.slice(0, visibleCount ?? initialCount);
   const hiddenCount = Math.max(0, cards.length - visibleCards.length);
   const countLabel = `${visibleCards.length} из ${cards.length}`;
@@ -668,7 +663,7 @@ function ProductCards({ cards, initialVisibleCount }: {
               {card.price ? (
                 <p className="product-price">{card.price.toLocaleString('ru-RU')} {card.currency ?? 'RUB'}</p>
               ) : (
-                <p className="product-price muted">Цена требует уточнения</p>
+                <p className="product-price muted">{card.priceOnRequest ? 'Товар под заказ, сроки уточнит менеджер. Можем передать заявку.' : 'Цена требует уточнения'}</p>
               )}
               <ul>
                 {card.reasons.slice(0, 2).map((reason) => <li key={reason}>{reason}</li>)}
@@ -679,8 +674,8 @@ function ProductCards({ cards, initialVisibleCount }: {
         ))}
       </div>
       {hiddenCount > 0 ? (
-        <button className="product-more" type="button" onClick={() => setVisibleCount(visibleCards.length + 10)}>
-          Показать ещё {Math.min(10, hiddenCount)}
+        <button className="product-more" type="button" onClick={() => setVisibleCount(visibleCards.length + CARDS_PER_PAGE)}>
+          Показать ещё {Math.min(CARDS_PER_PAGE, hiddenCount)}
         </button>
       ) : null}
     </div>
@@ -1147,7 +1142,7 @@ function AdminApp() {
                           ))}
                         </div>
                       ) : null}
-                      {metadata.productCards?.length ? <ProductCards cards={metadata.productCards} initialVisibleCount={metadata.cardDisplay?.initialVisibleCount} /> : null}
+                      {metadata.productCards?.length ? <ProductCards cards={metadata.productCards} /> : null}
                     </article>
                   );
                 })}
@@ -1199,6 +1194,8 @@ function App() {
   const [archivedChats, setArchivedChats] = useState<ChatMessage[][]>([]);
   const [sessionUnavailable, setSessionUnavailable] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [activeTurn, setActiveTurn] = useState<{ sessionId: string; turnId: string } | null>(null);
+  const [stopping, setStopping] = useState(false);
   const [error, setError] = useState('');
   const [leadAutoOpenKey, setLeadAutoOpenKey] = useState(0);
   const endRef = useRef<HTMLDivElement | null>(null);
@@ -1264,6 +1261,7 @@ function App() {
           return;
         }
         if (restoration.pendingTurn) {
+          setActiveTurn({ sessionId: restoration.sessionId, turnId: restoration.pendingTurn.turnId });
           const assistantId = id();
           pendingController = new AbortController();
           releasePendingController = registerChatAbortController(abortRef, pendingController);
@@ -1325,7 +1323,7 @@ function App() {
           } finally {
             releasePendingController?.();
             releasePendingController = null;
-            if (!cancelled) setBusy(false);
+            if (!cancelled) { setBusy(false); setActiveTurn(null); }
           }
         }
         setChatHydrationState('ready');
@@ -1354,6 +1352,7 @@ function App() {
   function retryChatRestoration() {
     if (busy || sessionUnavailable) return;
     setError('');
+    setActiveTurn(null);
     setChatHydrationState('restoring');
     setChatRestoreAttempt((value) => value + 1);
   }
@@ -1428,8 +1427,9 @@ function App() {
     endRef.current?.scrollIntoView({ block: 'end' });
   }, [messages, busy]);
 
-  async function submitText(text: string, options: { clearInput?: boolean; action?: 'catalog_next_page' } = { clearInput: true }) {
+  async function submitText(text: string, options: { clearInput?: boolean } = { clearInput: true }) {
     if (!text.trim() || busy || chatInteractionDisabled) return;
+    setActiveTurn(null);
     const deliveryMetric = createAnswerDeliveryMetric();
     const userText = text.trim();
     if (options.clearInput !== false) setInput('');
@@ -1464,6 +1464,7 @@ function App() {
       const visitorId = safeStorageGet(safeBrowserStorage('localStorage'), 'bakaut_visitor_id');
       if (!visitorId) throw new Error('Не удалось подтвердить сессию чата');
       const payload = await streamChatMessage(apiBase, activeSessionId, userText, {
+        onTurn: (turnId) => setActiveTurn({ sessionId: activeSessionId, turnId }),
         onDelta: (delta) => {
           deliveryMetric.observe(delta);
           setMessages((current) => current.map((message) => (
@@ -1478,7 +1479,7 @@ function App() {
               : message
           )));
         }
-      }, controller.signal, { clientMessageId, visitorId, action: options.action });
+      }, controller.signal, { clientMessageId, visitorId });
       if (payload?.leadRequested) setLeadAutoOpenKey((value) => value + 1);
       const committedAnswer = typeof payload?.answer === 'string' && payload.answer.trim()
         ? payload.answer
@@ -1514,6 +1515,7 @@ function App() {
         const activeSessionId = attemptedSessionId ?? sessionId ?? safeStorageGet(safeBrowserStorage('sessionStorage'), 'bakaut_session_id');
         const visitorId = safeStorageGet(safeBrowserStorage('localStorage'), 'bakaut_visitor_id');
         if (submitError.activeTurnId && activeSessionId && visitorId) {
+          setActiveTurn({ sessionId: activeSessionId, turnId: submitError.activeTurnId });
           await recoverChatTurn(
             apiBase,
             activeSessionId,
@@ -1564,6 +1566,7 @@ function App() {
           return;
         }
         if (recovered.kind === 'running' && attemptedSessionId && visitorId) {
+          setActiveTurn({ sessionId: attemptedSessionId, turnId: recovered.turnId });
           setMessages((current) => current.map((message) => (
             message.id === assistantId
               ? { ...message, progress: 'Ответ готовится, жду...' }
@@ -1637,6 +1640,7 @@ function App() {
     } finally {
       window.clearTimeout(turnTimeout);
       setBusy(false);
+      setActiveTurn(null);
       releaseController();
     }
   }
@@ -1646,8 +1650,23 @@ function App() {
     await submitText(input);
   }
 
-  function stopGeneration() {
-    abortRef.current?.abort();
+  async function stopGeneration() {
+    if (!activeTurn || stopping) return;
+    const visitorId = safeStorageGet(safeBrowserStorage('localStorage'), 'bakaut_visitor_id');
+    if (!visitorId) { setError('Не удалось подтвердить сессию чата.'); return; }
+    setStopping(true);
+    try {
+      const response = await fetch(`${apiBase}/api/chat/sessions/${activeTurn.sessionId}/messages/${activeTurn.turnId}/cancel`, {
+        method: 'POST', headers: { 'x-bakaut-visitor-id': visitorId }
+      });
+      if (!response.ok) throw new Error('cancel failed');
+      const result = await response.json() as { status?: string };
+      if (result.status === 'cancelled') abortRef.current?.abort();
+      else if (result.status === 'failed') setError('Этот запрос уже завершился с ошибкой.');
+      else if (result.status !== 'completed') throw new Error('unknown cancel status');
+    } catch {
+      setError('Не удалось остановить ответ. Попробуйте ещё раз.');
+    } finally { setStopping(false); }
   }
 
   function editMessage(text: string) {
@@ -1698,7 +1717,7 @@ function App() {
               <div className={`message ${message.role}`} key={message.id}>
                 <div className="message-meta">{message.role === 'user' ? 'Вы' : 'Консультант'}</div>
                 <div>{renderMarkdownText(message.content)}</div>
-                {message.cards ? <ProductCards cards={message.cards} initialVisibleCount={message.cardDisplay?.initialVisibleCount} /> : null}
+                {message.cards ? <ProductCards cards={message.cards} /> : null}
               </div>
             ))}
           </details>
@@ -1747,7 +1766,7 @@ function App() {
                 ) : null}
               </div>
             ) : null}
-            {message.cards?.length ? <ProductCards cards={message.cards} initialVisibleCount={message.cardDisplay?.initialVisibleCount} /> : null}
+            {message.cards?.length ? <ProductCards cards={message.cards} /> : null}
           </div>
         ))}
         <div ref={endRef} />
@@ -1787,8 +1806,8 @@ function App() {
           disabled={busy || chatInteractionDisabled}
         />
         {busy ? (
-          <button className="stop-button" type="button" onClick={stopGeneration}>
-            Остановить
+          <button className="stop-button" type="button" onClick={() => void stopGeneration()} disabled={!activeTurn || stopping}>
+            {stopping ? 'Останавливаю...' : 'Остановить'}
           </button>
         ) : null}
         <button type="submit" disabled={busy || chatInteractionDisabled || !input.trim()}>

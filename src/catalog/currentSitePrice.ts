@@ -58,3 +58,55 @@ async function fetchCurrentSitePrice(product: Product): Promise<VerifiedSitePric
 }
 
 export const readCurrentSitePrice=singleflightPriceReader(fetchCurrentSitePrice,()=>config.CATALOG_BASE_URL,{ttlMs:10_000});
+
+export type SitePriceObservation =
+  | { status: 'priced'; productId: string; price: number; sourceUrl: string; observedAt: string }
+  | { status: 'on_request'; productId: string; sourceUrl: string; observedAt: string }
+  | { status: 'unknown'; productId: string };
+
+/** Verify the exact catalog URL and product heading before interpreting its own offer. */
+export function extractSitePriceObservation(html: string, product: Product, pageUrl: string, baseUrl: string): SitePriceObservation {
+  const unknown: SitePriceObservation = { status: 'unknown', productId: product.id };
+  if (!product.id || !product.sourceUrl) return unknown;
+  let actual: URL, expected: URL, base: URL;
+  try { actual = new URL(pageUrl); expected = new URL(product.sourceUrl); base = new URL(baseUrl); } catch { return unknown; }
+  if (actual.protocol !== 'https:' || actual.origin !== base.origin || expected.origin !== base.origin || actual.pathname !== expected.pathname || actual.search || expected.search) return unknown;
+  const $ = cheerio.load(html);
+  if (compactModelText(cleanText($('h1').first().text())) !== compactModelText(product.name)) return unknown;
+  const blocks = $('.card__prices[itemprop="offers"]');
+  if (!blocks.length) {
+    // A complete primary product card without any price markup is distinguishable
+    // from a partial page or an unrecognised price layout.
+    const primary = $('main .card');
+    const side = primary.find('.card__side');
+    if (primary.length === 1 && side.length === 1 && side.find('.card__btn--request').length === 1 && !side.find('[itemprop="price"], [class*="price"]').length) {
+      return { status: 'on_request', productId: product.id, sourceUrl: actual.toString(), observedAt: new Date().toISOString() };
+    }
+    return unknown;
+  }
+  if (blocks.length !== 1) return unknown;
+  const verified = extractCurrentSitePrice(html, product, pageUrl, baseUrl);
+  if (verified) return { status: 'priced', productId: product.id, price: verified.price, sourceUrl: verified.sourceUrl, observedAt: verified.observedAt };
+  const block = blocks.first();
+  const visible = cleanText(block.find('.card__current-price').first().text()).toLocaleLowerCase('ru');
+  const machine = block.find('[itemprop="price"]').attr('content');
+  // An explicit on-request label is required; a blank, hidden or malformed price is unknown.
+  if (!machine && block.find('.card__current-price').length === 1 &&
+      (visible === '' || visible === 'по запросу' || visible === 'цена по запросу' || visible === 'под заказ')) {
+    return { status: 'on_request', productId: product.id, sourceUrl: actual.toString(), observedAt: new Date().toISOString() };
+  }
+  return unknown;
+}
+
+export async function readSitePriceObservation(product: Product, signal?: AbortSignal): Promise<SitePriceObservation> {
+  const unknown: SitePriceObservation = { status: 'unknown', productId: product.id };
+  if (!product.sourceUrl) return unknown;
+  try {
+    const expected = new URL(product.sourceUrl);
+    if (expected.protocol !== 'https:' || expected.origin !== 'https://bakautprof.ru') return unknown;
+    const result = await safeFetchBytes(product.sourceUrl, { allowedOrigin: 'https://bakautprof.ru',
+      timeoutMs: 5000, maxBytes: config.CATALOG_MAX_RESPONSE_BYTES, maxRedirects: 2, signal,
+      headers: { 'user-agent': 'Bakaut catalog price verification' } });
+    return result.status === 200 ? extractSitePriceObservation(outboundText(result), product, result.url, 'https://bakautprof.ru') : unknown;
+  } catch { return unknown; }
+}

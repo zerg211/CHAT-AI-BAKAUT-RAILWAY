@@ -113,9 +113,8 @@ export async function registerAdminRoutes(app: FastifyInstance) {
         })();
     return {
       ok: true,
-      answerModel: config.OPENAI_ANSWER_MODEL,
-      plannerModel: config.OPENAI_PLANNER_MODEL,
-      factModel: config.OPENAI_FACT_MODEL,
+      platformAgentConfigured: Boolean(config.OPENAI_PLATFORM_AGENT_ID),
+      modelSource: 'saved_platform_agent',
       runtime: {
         commitSha: process.env.RAILWAY_GIT_COMMIT_SHA ?? process.env.GIT_COMMIT_SHA ?? null,
         branch: process.env.RAILWAY_GIT_BRANCH ?? process.env.GIT_BRANCH ?? null,

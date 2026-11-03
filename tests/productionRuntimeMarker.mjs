@@ -1,10 +1,10 @@
 export const expectedAiManagerContractVersion =
   process.env.EXPECTED_AI_MANAGER_CONTRACT_VERSION ||
-  '2026-08-11.manager-contract-v2';
+  '2026-11-03.catalog-snapshot-v1';
 
 export const expectedAiManagerRuntimeVersion =
   process.env.EXPECTED_AI_MANAGER_RUNTIME_VERSION ||
-  '2026-09-08.final-hardening-v23';
+  '2026-11-03.platform-agent-v1';
 
 export async function fetchProductionHealth(productionApiBase, timeoutMs = 30_000) {
   const controller = new AbortController();
@@ -31,7 +31,7 @@ export async function assertProductionRuntimeMarker(productionApiBase) {
     !health.ok ||
     runtime?.contractVersion !== expectedAiManagerContractVersion ||
     runtime?.version !== expectedAiManagerRuntimeVersion ||
-    runtime?.productionRuntime !== 'agent_manager'
+    runtime?.productionRuntime !== 'openai_platform_agent'
   ) {
     const error = new Error(
       `Production runtime marker mismatch: expected ${expectedAiManagerRuntimeVersion}/${expectedAiManagerContractVersion}`

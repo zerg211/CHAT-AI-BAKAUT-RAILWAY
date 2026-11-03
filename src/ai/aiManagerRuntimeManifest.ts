@@ -1,35 +1,18 @@
-import {
-  SALES_MANAGER_POLICY_PACK_HASH,
-  SALES_MANAGER_POLICY_PACK_VERSION
-} from './salesManagerBehaviorPolicy.js';
-
-export const AI_MANAGER_RUNTIME_VERSION = '2026-09-08.final-hardening-v23';
-export const AI_MANAGER_CONTRACT_VERSION = '2026-08-11.manager-contract-v2';
+export const AI_MANAGER_RUNTIME_VERSION = '2026-11-03.platform-agent-v1';
+export const AI_MANAGER_CONTRACT_VERSION = '2026-11-03.catalog-snapshot-v1';
 
 export const AI_MANAGER_RUNTIME_MANIFEST = Object.freeze({
   version: AI_MANAGER_RUNTIME_VERSION,
   contractVersion: AI_MANAGER_CONTRACT_VERSION,
-  productionRuntime: 'agent_manager' as const,
-  orchestrator: 'AgentManagerOrchestrator',
-  responseWriter: 'AgentManagerOrchestrator.executeClaimedTurn',
-  policyPackVersion: SALES_MANAGER_POLICY_PACK_VERSION,
-  policyPackHash: SALES_MANAGER_POLICY_PACK_HASH,
-  stateModel: 'dialogue_ledger_snapshot_plus_tail',
-  recoveryModel: 'leased_checkpoint_and_tool_artifact_replay',
-  reviewPolicy: 'grounded factual and action gates required; editorial-only issues nonblocking after bounded repair',
+  productionRuntime: 'openai_platform_agent' as const,
+  orchestrator: 'PlatformAgentAssistant',
+  responseWriter: 'PlatformAgentAssistant.saveResult',
+  stateModel: 'platform_agent_session_and_conversation_turns',
+  recoveryModel: 'leased_platform_turn_checkpoint',
   runtimeArtifacts: [
     'conversation_turns.client_message_id',
     'conversation_turns.execution_lease',
-    'dialogue_ledger_events',
-    'dialogue_ledger_snapshots',
     'turn_checkpoints',
-    'tool_artifacts',
-    'answer_contracts.response_payload',
-    'leads.origin_tool_request_id',
-    'agent_traces',
-    'turn_events.seq',
-    'assistant_feedback_events',
-    'catalog_sync_runs',
-    'products.is_active'
+    'turn_events.seq'
   ]
 });

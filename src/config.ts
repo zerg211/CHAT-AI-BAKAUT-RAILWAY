@@ -72,6 +72,8 @@ const schema = z.object({
   OPENAI_API_KEY: z.string().optional(),
   OPENAI_PLATFORM_AGENT_ID: z.string().optional(),
   OPENAI_PLATFORM_AGENT_VAULT_ID: z.string().optional(),
+  BAKAUT_MCP_TOKEN: optionalSecret,
+  BAKAUT_CATALOG_URL: z.string().url().default('https://catalog-search-production.up.railway.app'),
   OPENAI_MODEL: z.string().optional(),
   OPENAI_ANSWER_MODEL: z.string().optional(),
   OPENAI_PLANNER_MODEL: z.string().optional(),

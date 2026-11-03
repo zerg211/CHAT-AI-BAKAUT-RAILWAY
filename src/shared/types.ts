@@ -75,6 +75,9 @@ export interface ProductCard {
   brand?: string | null;
   category?: string | null;
   price?: number | null;
+  priceSource?: 'catalog' | 'site';
+  priceObservedAt?: string;
+  priceOnRequest?: boolean;
   currency?: string | null;
   imageUrl?: string | null;
   sourceUrl?: string | null;
@@ -927,10 +930,10 @@ export interface ChatResponsePayload {
   leadCreated?: boolean;
   assistantMessageId?: string;
   metadata?: {
-    runtimeMode?: 'agent_manager';
+    runtimeMode?: 'agent_manager' | 'openai_platform_agent';
     runtimeModeReason?: string;
     agentManagerRuntime?: {
-      runtimeMode?: 'agent_manager';
+      runtimeMode?: 'agent_manager' | 'openai_platform_agent';
       reason?: string;
     };
     selection?: ProductSelectionMetadata;
