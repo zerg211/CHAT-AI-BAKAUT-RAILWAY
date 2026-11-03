@@ -648,7 +648,7 @@ function ProductCards({ cards, initialVisibleCount }: {
     : cards.length <= SHOW_ALL_CARD_COUNT ? cards.length : INITIAL_VISIBLE_CARDS;
   const visibleCards = cards.slice(0, visibleCount ?? initialCount);
   const hiddenCount = Math.max(0, cards.length - visibleCards.length);
-  const countLabel = cards.length >= 50 ? `показано ${cards.length}` : `${cards.length} шт.`;
+  const countLabel = `${visibleCards.length} из ${cards.length}`;
 
   return (
     <div className="product-panel" aria-label="Подобранные товары">
