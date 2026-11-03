@@ -4,12 +4,14 @@ import { normalizePublicCardDisplay, normalizePublicProductCards } from '../src/
 
 describe('Platform agent result', () => {
   it('collects all pages of the current turn and ignores earlier turns', () => {
-    const first = { group: 'matches', count: 2, source_revision: 'r1', items: [{ product_id: 'p1' }], has_more: true, next_cursor: 'next' };
+    const cursor = Buffer.from(JSON.stringify({ snapshot: 's1', revision: 'r1', group: 'matches', offset: 1 })).toString('base64url');
+    const equivalentCursor = Buffer.from(JSON.stringify({ offset: 1, group: 'matches', revision: 'r1', snapshot: 's1' }, null, 2)).toString('base64url');
+    const first = { group: 'matches', count: 2, source_revision: 'r1', items: [{ product_id: 'p1' }], has_more: true, next_cursor: cursor };
     const last = { ...first, items: [{ product_id: 'p2' }], has_more: false, next_cursor: null };
     const call = (page: unknown, args: unknown) => ({ turn_id: 'new', type: 'mcp_call', name: 'search_products', arguments: args, status: 'completed', output: { content: [{ type: 'text', text: JSON.stringify(page) }] } });
     const result = extractAgentResult([
       { turn_id: 'old', role: 'assistant', phase: 'final_answer', content: [{ type: 'output_text', text: 'old' }] },
-      call(first, {}), call(last, { cursor: 'next' }),
+      call(last, { cursor: equivalentCursor }), call(first, {}),
       { turn_id: 'new', role: 'assistant', phase: 'final_answer', content: [{ type: 'output_text', text: 'Найдены товары' }] }
     ], 'new');
     expect(result.answer).toBe('Найдены товары');
@@ -17,7 +19,8 @@ describe('Platform agent result', () => {
     expect(result.page?.has_more).toBe(false);
   });
   it('fails instead of presenting an incomplete list as complete', () => {
-    const page = { group: 'matches', count: 20, items: [{ product_id: 'p1' }], has_more: true, next_cursor: 'next' };
+    const next = Buffer.from(JSON.stringify({ snapshot: 's1', revision: 'r1', group: 'matches', offset: 1 })).toString('base64url');
+    const page = { group: 'matches', count: 20, items: [{ product_id: 'p1' }], has_more: true, next_cursor: next };
     expect(() => extractAgentResult([{ turn_id: 'new', type: 'mcp_call', name: 'search_products', arguments: {}, status: 'completed', output: { structuredContent: page } }], 'new')).toThrow('incomplete');
   });
 
