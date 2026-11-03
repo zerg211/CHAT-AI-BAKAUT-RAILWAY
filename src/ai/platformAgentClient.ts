@@ -51,22 +51,41 @@ export function extractAgentResult(items: unknown[], turnId: string) {
     }
   }
   if (pages.length) {
-    const chain = [pages[pages.length - 1]];
-    while (typeof chain[0].cursor === 'string' && chain[0].cursor) {
-      const index = pages.lastIndexOf(chain[0]);
-      const previous = pages.slice(0, index).reverse().find((entry) => entry.page.next_cursor === chain[0].cursor);
-      if (!previous) throw new Error('Catalog pages are incomplete');
-      chain.unshift(previous);
+    const root = [...pages].reverse().find((entry) => !entry.cursor);
+    if (!root) throw new Error('Catalog pages are incomplete');
+    const first = root.page;
+    const decodeCursor = (cursor: unknown): JsonObject | undefined => {
+      if (typeof cursor !== 'string' || !cursor) return undefined;
+      try { return object(JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8'))); } catch { return undefined; }
+    };
+    const firstNext = decodeCursor(first.next_cursor);
+    if (first.has_more === true && !firstNext) throw new Error('Invalid catalog cursor');
+    const sequence = [{ entry: root, offset: 0 }, ...pages.flatMap((entry) => {
+      const token = decodeCursor(entry.cursor);
+      if (!token || !firstNext || token.snapshot !== firstNext.snapshot || token.revision !== firstNext.revision ||
+          token.group !== 'matches' || typeof token.offset !== 'number') return [];
+      return [{ entry, offset: token.offset }];
+    })].sort((a, b) => a.offset - b.offset);
+    let expectedOffset = 0;
+    for (const part of sequence) {
+      if (part.offset !== expectedOffset || part.entry.page.count !== first.count ||
+          part.entry.page.source_revision !== first.source_revision ||
+          JSON.stringify(part.entry.page.criteria) !== JSON.stringify(first.criteria)) {
+        throw new Error('Catalog pages are incomplete or inconsistent');
+      }
+      expectedOffset += (part.entry.page.items as unknown[]).length;
+      const next = decodeCursor(part.entry.page.next_cursor);
+      if (part.entry.page.has_more === true && (!next || next.snapshot !== firstNext?.snapshot || next.offset !== expectedOffset)) {
+        throw new Error('Catalog continuation is inconsistent');
+      }
     }
-    const first = chain[0].page;
-    const last = chain[chain.length - 1].page;
-    const all = chain.flatMap((entry) => entry.page.items as unknown[]);
-    if (last.has_more === true || typeof first.count !== 'number' || all.length !== first.count ||
-      chain.some((entry) => entry.page.count !== first.count || entry.page.source_revision !== first.source_revision)) {
+    const last = sequence[sequence.length - 1].entry.page;
+    const all = sequence.flatMap((part) => part.entry.page.items as unknown[]);
+    if (last.has_more === true || typeof first.count !== 'number' || all.length !== first.count) {
       throw new Error('Catalog result is incomplete or changed while loading');
     }
     page = { ...first, items: all, has_more: false, next_cursor: null };
-    pageCursor = chain[0].cursor;
+    pageCursor = root.cursor;
   }
   return { answer, page, pageCursor, usedWebSearch: own.some((item) => item.type === 'web_search_call') };
 }
