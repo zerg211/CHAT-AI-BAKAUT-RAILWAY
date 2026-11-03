@@ -79,6 +79,20 @@ describe('Platform agent result', () => {
     expect(() => extractAgentResult([{ turn_id: 'new', type: 'mcp_call', name: 'search_products', arguments: {}, status: 'completed', output: { structuredContent: page } }], 'new')).toThrow('incomplete');
   });
 
+  it('recovers candidates only from completed search calls in the same Platform session', async () => {
+    const replies = [
+      { data: [{ id: 'current', status: 'completed' }, { id: 'prior', status: 'completed' }], has_more: false },
+      { data: [
+        { turn_id: 'other', type: 'mcp_call', name: 'search_products', status: 'completed', output: { structuredContent: { status: 'ok', items: [{ product_id: 'forged' }] } } },
+        { turn_id: 'prior', type: 'mcp_call', name: 'search_products', status: 'completed', output: { structuredContent: { status: 'ok', items: [{ product_id: 'old', name: 'Old' }] } } }
+      ], has_more: false }
+    ];
+    const transport = vi.fn(async (_url: RequestInfo | URL) => new Response(JSON.stringify(replies.shift()), { status: 200 }));
+    const client = new PlatformAgentClient('key', 'agent', [], transport as typeof fetch);
+    const recovered = await client.findHistoricalCandidates('session', 'current', ['old', 'forged']);
+    expect(recovered).toEqual([{ product_id: 'old', name: 'Old' }]);
+    expect(transport.mock.calls.every((call) => String(call[0]).includes('/sessions/session/'))).toBe(true);
+  });
   it('continues the same agent session with an idempotency key', async () => {
     const replies = [
       {}, { data: [{ id: 'turn-old' }] }, {}, {},

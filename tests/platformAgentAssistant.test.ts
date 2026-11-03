@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const state = vi.hoisted(() => ({
-  price: vi.fn(), run: vi.fn(), wait: vi.fn(), settle: vi.fn(), submit: vi.fn(), full: vi.fn(), checkpoints: vi.fn(), renew: vi.fn(), query: vi.fn(), transactionQuery: vi.fn(), release: vi.fn(),
+  price: vi.fn(), history: vi.fn(), run: vi.fn(), wait: vi.fn(), settle: vi.fn(), submit: vi.fn(), full: vi.fn(), checkpoints: vi.fn(), renew: vi.fn(), query: vi.fn(), transactionQuery: vi.fn(), release: vi.fn(),
   commitMessage: vi.fn(), listMessages: vi.fn(), claim: vi.fn(), releaseLease: vi.fn(), getTurn: vi.fn(), getSession: vi.fn()
 }));
 vi.mock('../src/config.js', () => ({ config: { OPENAI_API_KEY: 'test', OPENAI_PLATFORM_AGENT_ID: 'agent-test' } }));
@@ -9,7 +9,7 @@ vi.mock('../src/db/pool.js', () => ({ pool: { query: state.query, connect: vi.fn
 vi.mock('../src/db/repositories.js', () => ({ ConversationRepository: class {
   addAssistantMessageForTurn = state.commitMessage;
 } }));
-vi.mock('../src/ai/platformAgentClient.js', () => ({ PlatformAgentClient: class { run = state.run; waitForTurn = state.wait; settleAtDeadline = state.settle; submitMessage = state.submit; } }));
+vi.mock('../src/ai/platformAgentClient.js', () => ({ PlatformAgentClient: class { run = state.run; findHistoricalCandidates = state.history; waitForTurn = state.wait; settleAtDeadline = state.settle; submitMessage = state.submit; } }));
 vi.mock('../src/catalog/currentSitePrice.js', () => ({ readSitePriceObservation: state.price }));
 vi.mock('../src/ai/fullCatalogClient.js', () => ({ readFullCatalogSnapshot: state.full }));
 vi.mock('../src/ai/openaiUsageGuard.js', () => ({ assertOpenAIUsageBudget: vi.fn(async () => 'reservation'), bindOpenAIUsageReservation: vi.fn(), recordOpenAIUsageOnce: vi.fn(async () => undefined) }));
@@ -23,6 +23,7 @@ describe('site chat and platform agent', () => {
     vi.clearAllMocks();
     state.price.mockImplementation(async (product: { id: string }) => ({ status: 'unknown', productId: product.id }));
     state.listMessages.mockResolvedValue([]);
+    state.history.mockResolvedValue([]);
     state.getTurn.mockResolvedValue(null);
     state.getSession.mockResolvedValue({ id: 'chat', status: 'active', needState: {} });
     state.claim.mockResolvedValue({ id: 'turn' });
@@ -121,6 +122,15 @@ describe('site chat and platform agent', () => {
     const result = await new PlatformAgentAssistant(repo).generateAnswer({ sessionId: 'chat', turnId: 'turn', userMessage: 'Какие были виброплиты?' });
     expect(state.listMessages).toHaveBeenCalledWith('chat', 80);
     expect(result.productCards.map((card) => card.id)).toEqual(['plate']);
+  });
+  it('recovers rejected candidates from the same Platform session when old chat messages did not save them', async () => {
+    state.listMessages.mockResolvedValue([{ metadata: { productCards: [{ id: 'selected', name: 'Виброплита', price: 100, specs: {}, currency: 'RUB' }] } }]);
+    state.history.mockResolvedValue([{ product_id: 'previously-rejected', name: 'Проверенная плита', price_rub: 100 }]);
+    state.run.mockResolvedValue({ sessionId: 'agent-session', turnId: 'agent-turn',
+      answer: JSON.stringify({ answer: 'Найдена одна', selected: ['selected'], rejected: ['previously-rejected'], uncertain: [] }) });
+    const result = await new PlatformAgentAssistant(repo).generateAnswer({ sessionId: 'chat', turnId: 'turn', userMessage: 'Какие были виброплиты?' });
+    expect(state.history).toHaveBeenCalledWith('agent-session', 'agent-turn', ['previously-rejected'], undefined);
+    expect(result.productCards.map((card) => card.id)).toEqual(['selected']);
   });
   it('requires complete new-search coverage and never selects an old product outside that search', async () => {
     state.listMessages.mockResolvedValue([{ metadata: { productCards: [{ id: 'old', name: 'Старый товар', price: 100, specs: {}, currency: 'RUB' }] } }]);

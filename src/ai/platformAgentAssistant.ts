@@ -171,6 +171,13 @@ export class PlatformAgentAssistant {
           }
         }
       }
+      const missing = classifiedIds.filter((id): id is string => typeof id === 'string' && !currentIds.has(id) && !byId.has(id));
+      if (missing.length && config.OPENAI_API_KEY && config.OPENAI_PLATFORM_AGENT_ID) {
+        const client = new PlatformAgentClient(config.OPENAI_API_KEY, config.OPENAI_PLATFORM_AGENT_ID,
+          config.OPENAI_PLATFORM_AGENT_VAULT_ID ? [config.OPENAI_PLATFORM_AGENT_VAULT_ID] : []);
+        const recovered = await client.findHistoricalCandidates(result.sessionId, result.turnId, missing, input.signal);
+        for (const card of cardsFromPage({ items: recovered })) if (!byId.has(card.id)) byId.set(card.id, card);
+      }
       history = [...byId.values()];
     }
     const classified = classifyPage(result.answer, candidates, history, Boolean(page));
