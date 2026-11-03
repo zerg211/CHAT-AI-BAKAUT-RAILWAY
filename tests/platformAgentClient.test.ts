@@ -39,15 +39,15 @@ describe('Platform agent result', () => {
 
   it('creates a session using the saved agent and stores its ID before polling', async () => {
     const replies = [
-      { id: 'new-session' }, {}, { data: [{ id: 'new-turn', status: 'completed' }] },
+      { instructions: 'Исходные инструкции агента' }, { id: 'new-session' }, {}, { data: [{ id: 'new-turn', status: 'completed' }] },
       { data: [{ turn_id: 'new-turn', role: 'assistant', phase: 'final_answer', content: [{ type: 'output_text', text: 'Ответ' }] }] }
     ];
     const transport = vi.fn(async () => new Response(JSON.stringify(replies.shift()), { status: 200, headers: { 'content-type': 'application/json' } }));
     const onSession = vi.fn(async () => undefined);
     const client = new PlatformAgentClient('test-key', 'saved-agent', ['vault-id'], transport as typeof fetch);
     const result = await client.run({ message: 'Подберите генератор', idempotencyKey: 'local-turn', onSession });
-    const [, options] = transport.mock.calls[0] as unknown as [string, RequestInit];
-    expect(JSON.parse(String(options.body))).toMatchObject({ agent_id: 'saved-agent', vault_ids: ['vault-id'], agent: { text: { format: { type: 'json_schema' } } } });
+    const [, options] = transport.mock.calls[1] as unknown as [string, RequestInit];
+    expect(JSON.parse(String(options.body))).toMatchObject({ agent_id: 'saved-agent', vault_ids: ['vault-id'], agent: { instructions: expect.stringContaining('Исходные инструкции агента'), text: { format: { type: 'json_schema' } } } });
     expect(onSession).toHaveBeenCalledWith('new-session');
     expect(result.answer).toBe('Ответ');
   });

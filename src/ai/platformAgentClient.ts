@@ -12,7 +12,7 @@ const outputFormat = { type: 'json_schema', schema: {
   }, required: ['answer', 'selected', 'rejected', 'uncertain']
 } };
 
-const contract = '\n\nСлужебная инструкция для виджета: перед ответом собери ВСЕ страницы группы matches search_products, последовательно вызывая инструмент с next_cursor до has_more=false. Каждый товар всех страниц отнеси ровно в один массив product_id: selected (подтверждённо подходит), rejected (не подходит), uncertain (соответствие не подтверждено). Верни JSON с полями answer, selected, rejected, uncertain. Не включай спорные и отклонённые товары в selected. Если поиска не было, верни пустые массивы. В answer кратко ответь покупателю, не перечисляй больше первых 10 товаров и не вставляй ссылки на карточки: виджет сам покажет все выбранные карточки по 10. Не проси покупателя ждать поиска по кнопке: весь список должен быть готов до ответа.';
+const contract = '\n\nСлужебная инструкция для виджета заменяет прежние указания о выдаче только текущей страницы: перед ответом собери ВСЕ страницы группы matches search_products, последовательно вызывая инструмент с next_cursor до has_more=false. Каждый товар всех страниц отнеси ровно в один массив product_id: selected (подтверждённо подходит), rejected (не подходит), uncertain (соответствие не подтверждено). Верни JSON с полями answer, selected, rejected, uncertain. Не включай спорные и отклонённые товары в selected. Если поиска не было, верни пустые массивы. В answer кратко ответь покупателю, не перечисляй больше первых 10 товаров и не вставляй ссылки на карточки: виджет сам покажет все выбранные карточки по 10. Не проси покупателя ждать поиска по кнопке: весь список должен быть готов до ответа.';
 
 function object(value: unknown): JsonObject | undefined {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as JsonObject : undefined;
@@ -99,8 +99,10 @@ export class PlatformAgentClient {
         events: [{ type: 'agent.session.input.message', input: [{ role: 'user', content: [{ type: 'input_text', text: input.message + contract }] }] }]
       }, input.idempotencyKey);
     } else {
+      const saved = await this.request(`/agents/${encodeURIComponent(this.agentId)}`, input.signal);
+      if (typeof saved.instructions !== 'string') throw new Error('Saved agent instructions are unavailable');
       const session = await this.request('/agents/sessions', input.signal, {
-        agent_id: this.agentId, agent: { text: { format: outputFormat } }, environment: { type: 'none' }, input: input.message + contract,
+        agent_id: this.agentId, agent: { instructions: `${saved.instructions}\n\n${contract}`, text: { format: outputFormat } }, environment: { type: 'none' }, input: input.message + contract,
         ...(this.vaultIds.length ? { vault_ids: this.vaultIds } : {})
       }, input.idempotencyKey);
       if (typeof session.id !== 'string' || !session.id) throw new Error('Platform agent session ID missing');
