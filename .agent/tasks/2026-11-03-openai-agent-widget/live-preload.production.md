@@ -1,0 +1,9 @@
+# Production widget verification — 2026-11-03
+
+Site: https://bakautprof.ru/, actual embedded buyer widget. Deployment c059fdcc8a26d3b54472b39a935e0072fcb631d4, Railway SUCCESS, /api/ready true and /api/health commit matched GitHub main.
+
+1. Buyer asked for generator nominal 5–6 kW up to 100,000 RUB. The agent answered 70 confirmed records, separately reporting 13 requiring review and 24 unknown. Server turn duration 120,532.5 ms. First display was 10 of 70. Six clicks showed 20, 30, 40, 50, 60 and 70, each within 378–422 ms as observed via UI automation. All 70 card titles were unique; all 70 card URLs matched the independently recorded catalog snapshot by SHA-256 4f8bf8588d69feb57d114c06f8de4385b00d617cf663c466d2bff5098ba4367a. A-iPower A5500 SKU 20105 appeared with its catalog URL. No more button remained after 70.
+2. In the same chat, buyer asked for remote-controlled plate compactors. Server turn duration 113,612.5 ms. Four cards were shown: 5100024698, 5100024699, 9678973-01, 5000610143. Model without remote control 5100024696 was not shown among suitable cards. Agent used an external website for one fact. This single scenario does not prove every possible selection is correct.
+3. Prices in indexed database are not guaranteed current. During test site homepage visibly showed SKU 5100024699 at 3,600,000 RUB and SKU 5000610143 at 4,800,000 RUB while chat showed 3,300,000 and 3,800,000 respectively. Site prices and availability need live synchronization before asserting current budget matches.
+
+Result: preloaded pagination and the two specific defects passed these test cases; initial response latency is unacceptable for a fast buyer chat and current-price completeness is not established. Old fallback code not removed while these issues remain. Prior failed attempt on deployment f0d227a had Catalog pages are incomplete; resolved by c059fdc after sorting concurrent pages by snapshot/offset.
