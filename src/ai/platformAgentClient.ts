@@ -2,6 +2,18 @@ import { setTimeout as delay } from 'node:timers/promises';
 
 type JsonObject = Record<string, unknown>;
 
+const outputFormat = { type: 'json_schema', schema: {
+  type: 'object', additionalProperties: false,
+  properties: {
+    answer: { type: 'string', description: 'Ответ покупателю, без ссылок на карточки каталога: ссылки будут показаны в виджете.' },
+    selected: { type: 'array', items: { type: 'string' }, description: 'product_id подтвержденно подходящих товаров текущей страницы search_products.' },
+    rejected: { type: 'array', items: { type: 'string' }, description: 'product_id неподходящих товаров текущей страницы.' },
+    uncertain: { type: 'array', items: { type: 'string' }, description: 'product_id товаров текущей страницы, соответствие которых не подтверждено.' }
+  }, required: ['answer', 'selected', 'rejected', 'uncertain']
+} };
+
+const contract = '\n\nСлужебный формат ответа: верни JSON с полями answer (текст для покупателя), selected, rejected, uncertain (массивы product_id). Каждый товар из последней страницы search_products отнеси ровно в один массив. В selected только товары, которые подходят запросу; спорные и исключённые туда не включай. Если поиска не было, верни пустые массивы. Не вставляй ссылки на товары каталога в answer: виджет покажет точные ссылки из каталога.';
+
 function object(value: unknown): JsonObject | undefined {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as JsonObject : undefined;
 }
@@ -66,11 +78,11 @@ export class PlatformAgentClient {
       const turns = await this.request(`/agents/sessions/${encodeURIComponent(sessionId)}/turns?limit=1&order=desc`, input.signal);
       previousTurnId = object(Array.isArray(turns.data) ? turns.data[0] : undefined)?.id;
       await this.request(`/agents/sessions/${encodeURIComponent(sessionId)}/events`, input.signal, {
-        events: [{ type: 'agent.session.input.message', input: [{ role: 'user', content: [{ type: 'input_text', text: input.message }] }] }]
+        events: [{ type: 'agent.session.input.message', input: [{ role: 'user', content: [{ type: 'input_text', text: input.message + contract }] }] }]
       }, input.idempotencyKey);
     } else {
       const session = await this.request('/agents/sessions', input.signal, {
-        agent_id: this.agentId, environment: { type: 'none' }, input: input.message,
+        agent_id: this.agentId, agent: { text: { format: outputFormat } }, environment: { type: 'none' }, input: input.message + contract,
         ...(this.vaultIds.length ? { vault_ids: this.vaultIds } : {})
       }, input.idempotencyKey);
       if (typeof session.id !== 'string' || !session.id) throw new Error('Platform agent session ID missing');

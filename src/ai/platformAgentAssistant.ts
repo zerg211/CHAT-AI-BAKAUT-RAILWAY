@@ -32,6 +32,62 @@ function cardsFromPage(page: Record<string, unknown> | undefined): ProductCard[]
   });
 }
 
+function isLetterOrDigit(character: string) {
+  return !!character && ((character >= '0' && character <= '9') || character.toLocaleLowerCase('ru') !== character.toLocaleUpperCase('ru'));
+}
+
+function containsExact(text: string, value: string) {
+  const source = text.normalize('NFKC').toLocaleLowerCase('ru');
+  const target = value.normalize('NFKC').toLocaleLowerCase('ru').trim();
+  if (!target) return false;
+  let offset = 0;
+  while (offset < source.length) {
+    const index = source.indexOf(target, offset);
+    if (index < 0) return false;
+    if (!isLetterOrDigit(source[index - 1] ?? '') && !isLetterOrDigit(source[index + target.length] ?? '')) return true;
+    offset = index + 1;
+  }
+  return false;
+}
+
+function citedByIdentity(line: string, card: ProductCard, candidates: ProductCard[]) {
+  const sku = typeof card.specs.article === 'string' ? card.specs.article.trim() : '';
+  if (sku.length < 3 || candidates.filter((item) => item.specs.article === sku).length !== 1 || !containsExact(line, sku)) return false;
+  return card.name.split(' ').some((part) => {
+    const token = Array.from(part).filter(isLetterOrDigit).join('');
+    const letters = Array.from(token).some((ch) => ch.toLocaleLowerCase('ru') !== ch.toLocaleUpperCase('ru'));
+    const digits = Array.from(token).some((ch) => ch >= '0' && ch <= '9');
+    return token.length >= 4 && letters && digits && token.toLocaleLowerCase('ru') !== sku.toLocaleLowerCase('ru') && containsExact(line, token);
+  });
+}
+
+function reconcileCitations(answer: string, candidates: ProductCard[]) {
+  return answer.split('\n').map((line) => {
+    const matching = candidates.filter((card) => citedByIdentity(line, card, candidates));
+    if (matching.length !== 1 || !matching[0].sourceUrl) return line;
+    const start = line.indexOf('](');
+    const end = start < 0 ? -1 : line.indexOf(')', start + 2);
+    if (start < 0 || end < 0 || !line.slice(start + 2, end).startsWith('https://bakautprof.ru/catalog/')) return line;
+    return line.slice(0, start + 2) + matching[0].sourceUrl + line.slice(end);
+  }).join('\n');
+}
+
+function classifyPage(raw: string, candidates: ProductCard[]) {
+  let result: Record<string, unknown>;
+  try { result = JSON.parse(raw) as Record<string, unknown>; } catch { throw new Error('Agent classification is not valid JSON'); }
+  if (!result || typeof result !== 'object' || typeof result.answer !== 'string' || !result.answer.trim()) throw new Error('Agent answer is invalid');
+  const groups = [result.selected, result.rejected, result.uncertain];
+  if (groups.some((group) => !Array.isArray(group) || group.some((id: unknown) => typeof id !== 'string'))) throw new Error('Agent classification is invalid');
+  const classified = (groups as string[][]).flat();
+  const pageIds = new Set(candidates.map((card) => card.id));
+  if (classified.length !== pageIds.size || new Set(classified).size !== classified.length || classified.some((id) => !pageIds.has(id))) {
+    throw new Error('Agent classification does not account for the catalog page');
+  }
+  const selected = new Set(result.selected as string[]);
+  const cards = candidates.filter((card) => selected.has(card.id));
+  return { answer: reconcileCitations(result.answer, cards), cards };
+}
+
 export class PlatformAgentAssistant {
   constructor(private readonly conversations: ConversationRepository) {}
 
@@ -73,9 +129,7 @@ export class PlatformAgentAssistant {
       await recordOpenAIUsageOnce('platform_agent', result.model, usageRecord);
       if (input.catalogPage && (!result.page || result.pageCursor !== cursor)) throw new Error('Agent did not use the requested catalog cursor');
       const candidates = cardsFromPage(result.page);
-      // The catalog search can return candidates requiring further verification.
-      // Only present cards the agent actually cited in its final answer.
-      const cards = candidates.filter((card) => card.sourceUrl && result.answer.includes(card.sourceUrl));
+      const { answer, cards } = classifyPage(result.answer, candidates);
       const prior = input.catalogPage && Array.isArray(row?.seen_product_ids) ? row.seen_product_ids as string[] : [];
       const ids = candidates.map((card) => card.id);
       if (new Set(ids).size !== ids.length || ids.some((id) => prior.includes(id))) throw new Error('Duplicate catalog product page');
@@ -84,7 +138,7 @@ export class PlatformAgentAssistant {
       const cardDisplay = cards.length || next ? { initialVisibleCount: Math.max(1, cards.length), hasMore: Boolean(next) } : undefined;
       const metadata = { productCards: cards, cardDisplay, needStateSnapshot: session.needState,
         platformAgentUsage: result.usage, platformAgentTurnId: result.turnId, usedWebSearch: result.usedWebSearch };
-      const responsePayload: ChatResponsePayload = { turnId: input.turnId, answer: result.answer,
+      const responsePayload: ChatResponsePayload = { turnId: input.turnId, answer,
         needState: session.needState, productCards: cards, cardDisplay, usedWebSearch: result.usedWebSearch, metadata };
       const db = await pool.connect();
       try {
@@ -93,9 +147,9 @@ export class PlatformAgentAssistant {
           [input.sessionId, next, JSON.stringify([...prior, ...ids])]);
         const repository = new ConversationRepository(db);
         const message = await repository.addAssistantMessageForTurn({ sessionId: input.sessionId, turnId: input.turnId,
-          executionOwner: ownerId, content: result.answer, metadata, answerContract: { source: 'platform_agent' }, responsePayload });
+          executionOwner: ownerId, content: answer, metadata, answerContract: { source: 'platform_agent' }, responsePayload });
         await db.query('COMMIT');
-        await input.onDelta?.(result.answer);
+        await input.onDelta?.(answer);
         return { ...responsePayload, assistantMessageId: message.id };
       } catch (error) { await db.query('ROLLBACK'); throw error; } finally { db.release(); }
     } finally {
