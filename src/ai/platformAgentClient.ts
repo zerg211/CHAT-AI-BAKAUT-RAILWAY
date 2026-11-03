@@ -179,6 +179,59 @@ export class PlatformAgentClient {
     });
   }
 
+  /** Recover previously searched candidates only from this Platform session's own tool outputs. */
+  async findHistoricalCandidates(sessionId: string, currentTurnId: string, identifiers: string[], signal?: AbortSignal) {
+    const wanted = new Set(identifiers);
+    const found = new Map<string, Record<string, unknown>>();
+    if (!wanted.size) return [];
+    const base = `/agents/sessions/${encodeURIComponent(sessionId)}`;
+    let after = '';
+    let checked = 0;
+    while (wanted.size && checked < 80) {
+      const turns = await this.request(`${base}/turns?limit=100&order=desc${after ? `&after=${encodeURIComponent(after)}` : ''}`, signal);
+      const entries = Array.isArray(turns.data) ? turns.data : [];
+      for (const entry of entries) {
+        const turn = object(entry);
+        if (typeof turn?.id !== 'string' || turn.id === currentTurnId || turn.status !== 'completed') continue;
+        if (++checked > 80) break;
+        let itemAfter = '';
+        do {
+          const response = await this.request(`${base}/turns/${encodeURIComponent(turn.id)}/items?limit=100&order=asc${itemAfter ? `&after=${encodeURIComponent(itemAfter)}` : ''}`, signal);
+          const items = Array.isArray(response.data) ? response.data : [];
+          for (const raw of items) {
+            const item = object(raw);
+            if (item?.turn_id !== turn.id || item.type !== 'mcp_call' || item.name !== 'search_products' || item.status !== 'completed') continue;
+            const output = object(item.output);
+            let page = object(output?.structuredContent);
+            if (!page && Array.isArray(output?.content)) for (const part of output.content) {
+              const value = object(part)?.text;
+              if (typeof value !== 'string') continue;
+              try { page = object(JSON.parse(value)); } catch { continue; }
+              if (page) break;
+            }
+            if (page?.status !== 'ok' || !Array.isArray(page.items)) continue;
+            for (const rawProduct of page.items) {
+              const product = object(rawProduct);
+              if (typeof product?.product_id !== 'string' || !wanted.has(product.product_id)) continue;
+              found.set(product.product_id, product);
+              wanted.delete(product.product_id);
+            }
+          }
+          if (response.has_more !== true) break;
+          const next = object(items[items.length - 1])?.id;
+          if (typeof next !== 'string' || !next || next === itemAfter) throw new Error('Agent historical items pagination failed');
+          itemAfter = next;
+        } while (wanted.size);
+        if (!wanted.size) break;
+      }
+      if (!wanted.size || turns.has_more !== true || checked >= 80) break;
+      const next = object(entries[entries.length - 1])?.id;
+      if (typeof next !== 'string' || !next || next === after) throw new Error('Agent historical turns pagination failed');
+      after = next;
+    }
+    return [...found.values()];
+  }
+
   async latestTurn(sessionId: string, signal: AbortSignal = AbortSignal.timeout(5000)) {
     const response = await this.request(`/agents/sessions/${encodeURIComponent(sessionId)}/turns?limit=1&order=desc`, signal);
     const turn = object(Array.isArray(response.data) ? response.data[0] : undefined);
