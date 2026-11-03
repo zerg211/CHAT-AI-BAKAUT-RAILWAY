@@ -637,17 +637,16 @@ async function sendAssistantFeedback(sessionId: string, messageId: string, ratin
 const INITIAL_VISIBLE_CARDS = 7;
 const SHOW_ALL_CARD_COUNT = 10;
 
-function ProductCards({ cards, initialVisibleCount, hasMore, onLoadMore, disabled }: {
-  cards: ProductCard[]; initialVisibleCount?: number; hasMore?: boolean;
-  onLoadMore?: () => void; disabled?: boolean;
+function ProductCards({ cards, initialVisibleCount }: {
+  cards: ProductCard[]; initialVisibleCount?: number;
 }) {
-  const [expanded, setExpanded] = useState(false);
-  if (!cards.length && !hasMore) return null;
+  const [visibleCount, setVisibleCount] = useState<number | null>(null);
+  if (!cards.length) return null;
 
   const initialCount = initialVisibleCount
     ? Math.max(1, Math.min(cards.length, Math.floor(initialVisibleCount)))
     : cards.length <= SHOW_ALL_CARD_COUNT ? cards.length : INITIAL_VISIBLE_CARDS;
-  const visibleCards = expanded ? cards : cards.slice(0, initialCount);
+  const visibleCards = cards.slice(0, visibleCount ?? initialCount);
   const hiddenCount = Math.max(0, cards.length - visibleCards.length);
   const countLabel = cards.length >= 50 ? `показано ${cards.length}` : `${cards.length} шт.`;
 
@@ -679,14 +678,9 @@ function ProductCards({ cards, initialVisibleCount, hasMore, onLoadMore, disable
           </article>
         ))}
       </div>
-      {cards.length > initialCount ? (
-        <button className="product-more" type="button" onClick={() => setExpanded((value) => !value)}>
-          {expanded ? 'Свернуть' : `Показать еще ${hiddenCount}`}
-        </button>
-      ) : null}
-      {hasMore && onLoadMore ? (
-        <button className="product-more" type="button" disabled={disabled} onClick={onLoadMore}>
-          Показать ещё 10
+      {hiddenCount > 0 ? (
+        <button className="product-more" type="button" onClick={() => setVisibleCount(visibleCards.length + 10)}>
+          Показать ещё {Math.min(10, hiddenCount)}
         </button>
       ) : null}
     </div>
@@ -1753,10 +1747,7 @@ function App() {
                 ) : null}
               </div>
             ) : null}
-            {message.cards?.length || message.cardDisplay?.hasMore ? <ProductCards cards={message.cards ?? []} initialVisibleCount={message.cardDisplay?.initialVisibleCount}
-              hasMore={message.cardDisplay?.hasMore && message.id === messages[messages.length - 1]?.id}
-              disabled={busy || chatInteractionDisabled}
-              onLoadMore={() => void submitText('Покажите следующие 10 вариантов из найденного списка с прежними условиями.', { clearInput: false, action: 'catalog_next_page' })} /> : null}
+            {message.cards?.length ? <ProductCards cards={message.cards} initialVisibleCount={message.cardDisplay?.initialVisibleCount} /> : null}
           </div>
         ))}
         <div ref={endRef} />

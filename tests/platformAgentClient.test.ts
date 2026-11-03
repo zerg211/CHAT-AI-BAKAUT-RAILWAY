@@ -1,18 +1,24 @@
 import { describe, expect, it, vi } from 'vitest';
 import { extractAgentResult, PlatformAgentClient } from '../src/ai/platformAgentClient.js';
-import { normalizePublicCardDisplay } from '../src/shared/publicChatHistory.js';
+import { normalizePublicCardDisplay, normalizePublicProductCards } from '../src/shared/publicChatHistory.js';
 
 describe('Platform agent result', () => {
-  it('returns the current turn answer and catalog page, ignoring earlier turns', () => {
-    const page = { group: 'matches', items: [{ product_id: 'p1' }], has_more: true, next_cursor: 'next' };
+  it('collects all pages of the current turn and ignores earlier turns', () => {
+    const first = { group: 'matches', count: 2, source_revision: 'r1', items: [{ product_id: 'p1' }], has_more: true, next_cursor: 'next' };
+    const last = { ...first, items: [{ product_id: 'p2' }], has_more: false, next_cursor: null };
+    const call = (page: unknown, args: unknown) => ({ turn_id: 'new', type: 'mcp_call', name: 'search_products', arguments: args, status: 'completed', output: { content: [{ type: 'text', text: JSON.stringify(page) }] } });
     const result = extractAgentResult([
       { turn_id: 'old', role: 'assistant', phase: 'final_answer', content: [{ type: 'output_text', text: 'old' }] },
-      { turn_id: 'new', type: 'mcp_call', name: 'search_products', arguments: { cursor: 'previous' }, status: 'completed', output: { content: [{ type: 'text', text: JSON.stringify(page) }] } },
+      call(first, {}), call(last, { cursor: 'next' }),
       { turn_id: 'new', role: 'assistant', phase: 'final_answer', content: [{ type: 'output_text', text: 'Найдены товары' }] }
     ], 'new');
     expect(result.answer).toBe('Найдены товары');
-    expect(result.page).toEqual(page);
-    expect(result.pageCursor).toBe('previous');
+    expect(result.page?.items).toEqual([{ product_id: 'p1' }, { product_id: 'p2' }]);
+    expect(result.page?.has_more).toBe(false);
+  });
+  it('fails instead of presenting an incomplete list as complete', () => {
+    const page = { group: 'matches', count: 20, items: [{ product_id: 'p1' }], has_more: true, next_cursor: 'next' };
+    expect(() => extractAgentResult([{ turn_id: 'new', type: 'mcp_call', name: 'search_products', arguments: {}, status: 'completed', output: { structuredContent: page } }], 'new')).toThrow('incomplete');
   });
 
   it('continues the same agent session with an idempotency key', async () => {
@@ -48,5 +54,10 @@ describe('Platform agent result', () => {
 
   it('keeps the next-page control when restoring chat history', () => {
     expect(normalizePublicCardDisplay({ initialVisibleCount: 10, hasMore: true })).toEqual({ initialVisibleCount: 10, hasMore: true });
+  });
+
+  it('preserves more than 50 preloaded cards in chat history', () => {
+    const cards = Array.from({ length: 70 }, (_, id) => ({ id: String(id), name: `Генератор ${id}`, specs: {}, reasons: [], caveats: [] }));
+    expect(normalizePublicProductCards(cards)).toHaveLength(70);
   });
 });

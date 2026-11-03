@@ -1,7 +1,7 @@
 import type { CardDisplayOptions, ProductCard } from './types.js';
 
-export const PUBLIC_HISTORY_MAX_CARDS = 50;
-export const PUBLIC_HISTORY_MAX_RESPONSE_BYTES = 512_000;
+export const PUBLIC_HISTORY_MAX_CARDS = 4324;
+export const PUBLIC_HISTORY_MAX_RESPONSE_BYTES = 8_000_000;
 const MAX_MESSAGE_CONTENT = 100_000;
 const MAX_CARD_ID = 200;
 const MAX_CARD_NAME = 500;
