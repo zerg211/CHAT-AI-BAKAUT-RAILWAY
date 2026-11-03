@@ -55,6 +55,29 @@ async function draft(text: string) {
 }
 
 describe('rendered widget session boundary', () => {
+  it('separates and paginates verified on-request products in restored history', async () => {
+    await act(async () => root.unmount());
+    const cards = [
+      ...Array.from({ length: 12 }, (_, i) => ({ id: `matched-${i}`, name: `Подходит ${i}`, price: 90000, specs: {}, reasons: [], caveats: [] })),
+      ...Array.from({ length: 12 }, (_, i) => ({ id: `order-${i}`, name: `Заказ ${i}`, price: null, priceOnRequest: true, specs: {}, reasons: [], caveats: [] }))
+    ];
+    fetcher.mockImplementation(async (url: string) => url.endsWith('/messages')
+      ? Response.json({ messages: [{ id: 'a1', role: 'assistant', content: 'Результаты', products: cards }] })
+      : new Response(null, { status: 200 }));
+    const actual = await vi.importActual<typeof import('react-dom/client')>('react-dom/client');
+    root = actual.createRoot(document.getElementById('root')!);
+    await act(async () => root.render(mounted.element as React.ReactNode));
+    const panels = [...document.querySelectorAll('.product-panel')];
+    expect(panels).toHaveLength(2);
+    expect(panels[0].textContent).toContain('Подходящие варианты');
+    expect(panels[0].textContent).not.toContain('Заказ 0');
+    expect(panels[1].textContent).toContain('Под заказ — цену и сроки уточнит менеджер');
+    expect(panels[1].textContent).toContain('Товар под заказ, сроки уточнит менеджер');
+    expect(panels.map((panel) => panel.querySelectorAll('.product-card').length)).toEqual([10, 10]);
+    await act(async () => (panels[1].querySelector('button') as HTMLButtonElement).click());
+    expect(panels.map((panel) => panel.querySelectorAll('.product-card').length)).toEqual([10, 12]);
+  });
+
   it('blocks silent continuation and preserves history and draft across explicit new chat', async () => {
     const field = await draft('А какие из них подходят?');
     heartbeatStatus = 404;

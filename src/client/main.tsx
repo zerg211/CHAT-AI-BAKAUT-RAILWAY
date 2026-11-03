@@ -637,6 +637,15 @@ async function sendAssistantFeedback(sessionId: string, messageId: string, ratin
 const CARDS_PER_PAGE = 10;
 
 function ProductCards({ cards }: { cards: ProductCard[] }) {
+  const confirmed = cards.filter((card) => !card.priceOnRequest);
+  const onRequest = cards.filter((card) => card.priceOnRequest);
+  return <>
+    {confirmed.length ? <ProductCardGroup cards={confirmed} title="Подходящие варианты" /> : null}
+    {onRequest.length ? <ProductCardGroup cards={onRequest} title="Под заказ — цену и сроки уточнит менеджер" /> : null}
+  </>;
+}
+
+function ProductCardGroup({ cards, title }: { cards: ProductCard[]; title: string }) {
   const [visibleCount, setVisibleCount] = useState<number | null>(null);
   if (!cards.length) return null;
 
@@ -646,9 +655,9 @@ function ProductCards({ cards }: { cards: ProductCard[] }) {
   const countLabel = `${visibleCards.length} из ${cards.length}`;
 
   return (
-    <div className="product-panel" aria-label="Подобранные товары">
+    <div className="product-panel" aria-label={title}>
       <div className="product-panel-head">
-        <span>Подходящие варианты</span>
+        <span>{title}</span>
         <span>{countLabel}</span>
       </div>
       <div className="product-grid">

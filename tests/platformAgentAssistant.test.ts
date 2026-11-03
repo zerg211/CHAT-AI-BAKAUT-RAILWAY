@@ -151,7 +151,8 @@ describe('site chat and platform agent', () => {
       : product.id === 'order' ? { status: 'on_request', productId: product.id, sourceUrl: url, observedAt: '2026-11-03T00:00:00Z' }
       : { status: 'unknown', productId: product.id });
     const answer = await new PlatformAgentAssistant(repo).generateAnswer({ sessionId: 'chat', turnId: 'turn', userMessage: 'До 1000 рублей' });
-    expect(answer.productCards.map((card) => card.id)).toEqual(['known', 'below']);
+    expect(answer.productCards.map((card) => card.id)).toEqual(['known', 'below', 'order']);
+    expect(answer.productCards[2]).toMatchObject({ priceOnRequest: true, price: null });
     expect(answer.productCards[1]).toMatchObject({ price: 900, priceSource: 'site', priceObservedAt: '2026-11-03T00:00:00Z' });
     expect(state.price).toHaveBeenCalledTimes(4);
     expect(answer.answer).toContain('под заказ');

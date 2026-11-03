@@ -170,9 +170,10 @@ export class PlatformAgentAssistant {
       const additional = pending.filter((card) => typeof card.price === 'number' && card.price <= budget);
       cards = [...cards, ...additional];
       if (additional.length) answer += `\n\nПосле проверки цен на сайте дополнительно подходят товаров: ${additional.length}.`;
-      const onRequest = pending.filter((card) => card.priceOnRequest).length;
+      const onRequest = pending.filter((card) => card.priceOnRequest);
+      cards = [...cards, ...onRequest];
       const unknown = pending.filter((card) => !card.priceOnRequest && card.price == null).length;
-      if (onRequest) answer += `\n\nТовары под заказ: ${onRequest}. Сроки уточнит менеджер; предлагаем оформить заявку.`;
+      if (onRequest.length) answer += `\n\nТовары под заказ: ${onRequest.length}. Их цена и соответствие бюджету не подтверждены; сроки уточнит менеджер. Предлагаем оформить заявку.`;
       if (unknown) answer += `\n\nНе удалось проверить цену ещё ${unknown} товаров, поэтому их соответствие бюджету неизвестно.`;
     }
     const ids = [...candidates, ...pending].map((card) => card.id);
