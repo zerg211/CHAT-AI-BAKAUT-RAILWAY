@@ -9,7 +9,7 @@ import { TurnExecutionInProgressError, type AgentManagerGenerateInput, type Agen
 
 function cardsFromPage(page: Record<string, unknown> | undefined): ProductCard[] {
   if (!page || !Array.isArray(page.items)) return [];
-  if (page.items.length > 10) throw new Error('Catalog page exceeds ten products');
+  if (page.items.length > 4324) throw new Error('Catalog result exceeds indexed catalog size');
   return page.items.map((raw): ProductCard => {
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('Invalid catalog product');
     const p = raw as Record<string, unknown>;
@@ -134,8 +134,9 @@ export class PlatformAgentAssistant {
       const ids = candidates.map((card) => card.id);
       if (new Set(ids).size !== ids.length || ids.some((id) => prior.includes(id))) throw new Error('Duplicate catalog product page');
       if (result.page?.has_more === true && typeof result.page.next_cursor !== 'string') throw new Error('Catalog continuation cursor missing');
-      const next = result.page?.has_more === true && typeof result.page.next_cursor === 'string' ? result.page.next_cursor : null;
-      const cardDisplay = cards.length || next ? { initialVisibleCount: Math.max(1, cards.length), hasMore: Boolean(next) } : undefined;
+      const next = null;
+      if (Buffer.byteLength(JSON.stringify(cards), 'utf8') > 4_000_000) throw new Error('Complete catalog result exceeds response size');
+      const cardDisplay = cards.length ? { initialVisibleCount: Math.min(10, cards.length), hasMore: false } : undefined;
       const metadata = { productCards: cards, cardDisplay, needStateSnapshot: session.needState,
         platformAgentUsage: result.usage, platformAgentTurnId: result.turnId, usedWebSearch: result.usedWebSearch };
       const responsePayload: ChatResponsePayload = { turnId: input.turnId, answer,

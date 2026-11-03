@@ -280,7 +280,7 @@ describe('public chat history API', () => {
     expect(assistant.products[0]).not.toHaveProperty('raw');
     expect((assistant.products[0].reasons as string[])).toHaveLength(2);
     expect((assistant.products[0].reasons as string[])[1]).toHaveLength(500);
-    expect(assistant.cardDisplay).toEqual({ initialVisibleCount: 50 });
+    expect(assistant.cardDisplay).toEqual({ initialVisibleCount: 999 });
     expect(assistant.leadRequested).toBe(true);
     for (const forbiddenTerm of [
       'toolResults',
@@ -295,7 +295,7 @@ describe('public chat history API', () => {
   });
 
   it('caps the complete serialized history response instead of only individual fields', async () => {
-    const hugeMessages = Array.from({ length: 10 }, (_, index) => ({
+    const hugeMessages = Array.from({ length: 50 }, (_, index) => ({
       id: `message-${index}`,
       sessionId,
       role: 'assistant',

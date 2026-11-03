@@ -6,13 +6,13 @@ const outputFormat = { type: 'json_schema', schema: {
   type: 'object', additionalProperties: false,
   properties: {
     answer: { type: 'string', description: 'Ответ покупателю, без ссылок на карточки каталога: ссылки будут показаны в виджете.' },
-    selected: { type: 'array', items: { type: 'string' }, description: 'product_id подтвержденно подходящих товаров текущей страницы search_products.' },
-    rejected: { type: 'array', items: { type: 'string' }, description: 'product_id неподходящих товаров текущей страницы.' },
-    uncertain: { type: 'array', items: { type: 'string' }, description: 'product_id товаров текущей страницы, соответствие которых не подтверждено.' }
+    selected: { type: 'array', items: { type: 'string' }, description: 'product_id всех подтвержденно подходящих товаров полного списка search_products.' },
+    rejected: { type: 'array', items: { type: 'string' }, description: 'product_id неподходящих товаров полного списка.' },
+    uncertain: { type: 'array', items: { type: 'string' }, description: 'product_id товаров полного списка, соответствие которых не подтверждено.' }
   }, required: ['answer', 'selected', 'rejected', 'uncertain']
 } };
 
-const contract = '\n\nСлужебный формат ответа: верни JSON с полями answer (текст для покупателя), selected, rejected, uncertain (массивы product_id). Каждый товар из последней страницы search_products отнеси ровно в один массив. В selected только товары, которые подходят запросу; спорные и исключённые туда не включай. Если поиска не было, верни пустые массивы. Не вставляй ссылки на товары каталога в answer: виджет покажет точные ссылки из каталога.';
+const contract = '\n\nСлужебная инструкция для виджета заменяет прежние указания о выдаче только текущей страницы: перед ответом собери ВСЕ страницы группы matches search_products, последовательно вызывая инструмент с next_cursor до has_more=false. Каждый товар всех страниц отнеси ровно в один массив product_id: selected (подтверждённо подходит), rejected (не подходит), uncertain (соответствие не подтверждено). Верни JSON с полями answer, selected, rejected, uncertain. Не включай спорные и отклонённые товары в selected. Если поиска не было, верни пустые массивы. В answer кратко ответь покупателю, не перечисляй больше первых 10 товаров и не вставляй ссылки на карточки: виджет сам покажет все выбранные карточки по 10. Не проси покупателя ждать поиска по кнопке: весь список должен быть готов до ответа.';
 
 function object(value: unknown): JsonObject | undefined {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as JsonObject : undefined;
@@ -29,6 +29,7 @@ export function extractAgentResult(items: unknown[], turnId: string) {
     .map((part) => typeof part.text === 'string' ? part.text : '').join('\n').trim();
   let page: JsonObject | undefined;
   let pageCursor: unknown;
+  const pages: Array<{ page: JsonObject; cursor: unknown }> = [];
   for (const item of own) {
     if (item.type !== 'mcp_call' || item.name !== 'search_products' || item.status !== 'completed') continue;
     const output = object(item.output);
@@ -42,13 +43,30 @@ export function extractAgentResult(items: unknown[], turnId: string) {
       }
     }
     if (candidate?.group === 'matches' && Array.isArray(candidate.items)) {
-      page = candidate;
       let args = object(item.arguments);
       if (!args && typeof item.arguments === 'string') {
         try { args = object(JSON.parse(item.arguments)); } catch { /* Invalid arguments are rejected by the caller. */ }
       }
-      pageCursor = args?.cursor;
+      pages.push({ page: candidate, cursor: args?.cursor });
     }
+  }
+  if (pages.length) {
+    const chain = [pages[pages.length - 1]];
+    while (typeof chain[0].cursor === 'string' && chain[0].cursor) {
+      const index = pages.lastIndexOf(chain[0]);
+      const previous = pages.slice(0, index).reverse().find((entry) => entry.page.next_cursor === chain[0].cursor);
+      if (!previous) throw new Error('Catalog pages are incomplete');
+      chain.unshift(previous);
+    }
+    const first = chain[0].page;
+    const last = chain[chain.length - 1].page;
+    const all = chain.flatMap((entry) => entry.page.items as unknown[]);
+    if (last.has_more === true || typeof first.count !== 'number' || all.length !== first.count ||
+      chain.some((entry) => entry.page.count !== first.count || entry.page.source_revision !== first.source_revision)) {
+      throw new Error('Catalog result is incomplete or changed while loading');
+    }
+    page = { ...first, items: all, has_more: false, next_cursor: null };
+    pageCursor = chain[0].cursor;
   }
   return { answer, page, pageCursor, usedWebSearch: own.some((item) => item.type === 'web_search_call') };
 }
@@ -81,8 +99,10 @@ export class PlatformAgentClient {
         events: [{ type: 'agent.session.input.message', input: [{ role: 'user', content: [{ type: 'input_text', text: input.message + contract }] }] }]
       }, input.idempotencyKey);
     } else {
+      const saved = await this.request(`/agents/${encodeURIComponent(this.agentId)}`, input.signal);
+      if (typeof saved.instructions !== 'string') throw new Error('Saved agent instructions are unavailable');
       const session = await this.request('/agents/sessions', input.signal, {
-        agent_id: this.agentId, agent: { text: { format: outputFormat } }, environment: { type: 'none' }, input: input.message + contract,
+        agent_id: this.agentId, agent: { instructions: `${saved.instructions}\n\n${contract}`, text: { format: outputFormat } }, environment: { type: 'none' }, input: input.message + contract,
         ...(this.vaultIds.length ? { vault_ids: this.vaultIds } : {})
       }, input.idempotencyKey);
       if (typeof session.id !== 'string' || !session.id) throw new Error('Platform agent session ID missing');
@@ -98,11 +118,18 @@ export class PlatformAgentClient {
       const turn = object(Array.isArray(turns.data) ? turns.data[0] : undefined);
       if (turn && turn.id !== previousTurnId && ['completed', 'failed', 'cancelled'].includes(String(turn.status))) {
         if (turn.status !== 'completed' || typeof turn.id !== 'string') throw new Error('Platform agent turn did not complete');
-        const result = await this.request(`${path}/items?limit=100&order=desc`, input.signal);
-        if (result.has_more === true && Array.isArray(result.data) && result.data.every((item) => object(item)?.turn_id === turn.id)) {
-          throw new Error('Platform agent turn contains too many items to read safely');
+        const collected: unknown[] = [];
+        let after = '';
+        for (;;) {
+          const result = await this.request(`${path}/turns/${encodeURIComponent(turn.id)}/items?limit=100&order=asc${after ? `&after=${encodeURIComponent(after)}` : ''}`, input.signal);
+          const entries = Array.isArray(result.data) ? result.data : [];
+          collected.push(...entries);
+          if (result.has_more !== true) break;
+          const lastId = object(entries[entries.length - 1])?.id;
+          if (typeof lastId !== 'string' || !lastId || lastId === after) throw new Error('Agent items pagination failed');
+          after = lastId;
         }
-        const parsed = extractAgentResult(Array.isArray(result.data) ? [...result.data].reverse() : [], turn.id);
+        const parsed = extractAgentResult(collected, turn.id);
         if (!parsed.answer) throw new Error('Platform agent returned an empty answer');
         const agent = object(session.agent);
         return { sessionId, turnId: turn.id, usage: turn.usage,

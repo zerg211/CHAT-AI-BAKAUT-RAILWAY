@@ -36,8 +36,8 @@ describe('site chat and platform agent', () => {
     expect(state.run.mock.calls[0][0]).toMatchObject({ sessionId: 'agent-session', idempotencyKey: 'turn' });
     expect(state.run.mock.calls[0][0].message).toContain('cursor-1');
     expect(answer.productCards.map((card) => card.id)).toEqual(['new']);
-    expect(answer.cardDisplay?.hasMore).toBe(true);
-    expect(state.transactionQuery).toHaveBeenCalledWith(expect.stringContaining('UPDATE platform_agent_sessions'), ['chat', 'cursor-2', '["old","new"]']);
+    expect(answer.cardDisplay?.hasMore).toBe(false);
+    expect(state.transactionQuery).toHaveBeenCalledWith(expect.stringContaining('UPDATE platform_agent_sessions'), ['chat', null, '["old","new"]']);
     expect(state.commitMessage).toHaveBeenCalledOnce();
   });
   it('rejects a page if the agent did not use the stored cursor', async () => {
@@ -74,5 +74,13 @@ describe('site chat and platform agent', () => {
       page: { items: [{ product_id: 'new', name: 'Товар', url: 'https://bakautprof.ru/catalog/item/' }] } });
     await expect(new PlatformAgentAssistant(repo).generateAnswer({ sessionId: 'chat', turnId: 'turn', userMessage: 'ещё', catalogPage: true })).rejects.toThrow('does not account');
     expect(state.transactionQuery).not.toHaveBeenCalled();
+  });
+  it('returns the full preloaded list while requesting the first ten to be shown', async () => {
+    const items = Array.from({ length: 70 }, (_, id) => ({ product_id: `p${id}`, name: `Генератор ${id}`, url: `https://bakautprof.ru/catalog/p${id}/` }));
+    state.run.mockResolvedValue({ sessionId: 'agent-session', turnId: 'agent-turn',
+      answer: JSON.stringify({ answer: 'Найдено 70 товаров', selected: items.map((item) => item.product_id), rejected: [], uncertain: [] }), page: { items } });
+    const answer = await new PlatformAgentAssistant(repo).generateAnswer({ sessionId: 'chat', turnId: 'turn', userMessage: 'Подберите генератор' });
+    expect(answer.productCards).toHaveLength(70);
+    expect(answer.cardDisplay).toEqual({ initialVisibleCount: 10, hasMore: false });
   });
 });
