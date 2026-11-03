@@ -87,7 +87,7 @@ describe('Platform agent result', () => {
         { turn_id: 'prior', type: 'mcp_call', name: 'search_products', status: 'completed', output: { structuredContent: { status: 'ok', items: [{ product_id: 'old', name: 'Old' }] } } }
       ], has_more: false }
     ];
-    const transport = vi.fn(async () => new Response(JSON.stringify(replies.shift()), { status: 200 }));
+    const transport = vi.fn(async (_url: RequestInfo | URL) => new Response(JSON.stringify(replies.shift()), { status: 200 }));
     const client = new PlatformAgentClient('key', 'agent', [], transport as typeof fetch);
     const recovered = await client.findHistoricalCandidates('session', 'current', ['old', 'forged']);
     expect(recovered).toEqual([{ product_id: 'old', name: 'Old' }]);
