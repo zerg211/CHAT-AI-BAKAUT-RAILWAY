@@ -637,9 +637,12 @@ async function sendAssistantFeedback(sessionId: string, messageId: string, ratin
 const INITIAL_VISIBLE_CARDS = 7;
 const SHOW_ALL_CARD_COUNT = 10;
 
-function ProductCards({ cards, initialVisibleCount }: { cards: ProductCard[]; initialVisibleCount?: number }) {
+function ProductCards({ cards, initialVisibleCount, hasMore, onLoadMore, disabled }: {
+  cards: ProductCard[]; initialVisibleCount?: number; hasMore?: boolean;
+  onLoadMore?: () => void; disabled?: boolean;
+}) {
   const [expanded, setExpanded] = useState(false);
-  if (!cards.length) return null;
+  if (!cards.length && !hasMore) return null;
 
   const initialCount = initialVisibleCount
     ? Math.max(1, Math.min(cards.length, Math.floor(initialVisibleCount)))
@@ -679,6 +682,11 @@ function ProductCards({ cards, initialVisibleCount }: { cards: ProductCard[]; in
       {cards.length > initialCount ? (
         <button className="product-more" type="button" onClick={() => setExpanded((value) => !value)}>
           {expanded ? 'Свернуть' : `Показать еще ${hiddenCount}`}
+        </button>
+      ) : null}
+      {hasMore && onLoadMore ? (
+        <button className="product-more" type="button" disabled={disabled} onClick={onLoadMore}>
+          Показать ещё 10
         </button>
       ) : null}
     </div>
@@ -1426,7 +1434,7 @@ function App() {
     endRef.current?.scrollIntoView({ block: 'end' });
   }, [messages, busy]);
 
-  async function submitText(text: string, options: { clearInput?: boolean } = { clearInput: true }) {
+  async function submitText(text: string, options: { clearInput?: boolean; action?: 'catalog_next_page' } = { clearInput: true }) {
     if (!text.trim() || busy || chatInteractionDisabled) return;
     const deliveryMetric = createAnswerDeliveryMetric();
     const userText = text.trim();
@@ -1476,7 +1484,7 @@ function App() {
               : message
           )));
         }
-      }, controller.signal, { clientMessageId, visitorId });
+      }, controller.signal, { clientMessageId, visitorId, action: options.action });
       if (payload?.leadRequested) setLeadAutoOpenKey((value) => value + 1);
       const committedAnswer = typeof payload?.answer === 'string' && payload.answer.trim()
         ? payload.answer
@@ -1745,7 +1753,10 @@ function App() {
                 ) : null}
               </div>
             ) : null}
-            {message.cards ? <ProductCards cards={message.cards} initialVisibleCount={message.cardDisplay?.initialVisibleCount} /> : null}
+            {message.cards?.length || message.cardDisplay?.hasMore ? <ProductCards cards={message.cards ?? []} initialVisibleCount={message.cardDisplay?.initialVisibleCount}
+              hasMore={message.cardDisplay?.hasMore && message.id === messages[messages.length - 1]?.id}
+              disabled={busy || chatInteractionDisabled}
+              onLoadMore={() => void submitText('Покажите следующие 10 вариантов из найденного списка с прежними условиями.', { clearInput: false, action: 'catalog_next_page' })} /> : null}
           </div>
         ))}
         <div ref={endRef} />

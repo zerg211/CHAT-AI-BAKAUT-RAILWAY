@@ -1,4 +1,6 @@
 import { ConversationRepository, LeadRepository, ProductRepository } from '../db/repositories.js';
+import { config } from '../config.js';
+import { PlatformAgentAssistant } from './platformAgentAssistant.js';
 import {
   AgentManagerOrchestrator,
   type AgentManagerGenerateInput,
@@ -12,6 +14,7 @@ import {
  */
 export class AssistantService {
   private readonly agentManager: AgentManagerOrchestrator;
+  private readonly platformAgent: PlatformAgentAssistant;
 
   constructor(
     conversations = new ConversationRepository(),
@@ -19,13 +22,14 @@ export class AssistantService {
     leads = new LeadRepository()
   ) {
     this.agentManager = new AgentManagerOrchestrator(conversations, products, leads);
+    this.platformAgent = new PlatformAgentAssistant(conversations);
   }
 
-  generateAnswer(input: AgentManagerGenerateInput) {
-    return this.agentManager.generateAnswer(input);
+  generateAnswer(input: AgentManagerGenerateInput & { catalogPage?: boolean }) {
+    return config.OPENAI_PLATFORM_AGENT_ID ? this.platformAgent.generateAnswer(input) : this.agentManager.generateAnswer(input);
   }
 
   recoverTurn(input: AgentManagerRecoverInput) {
-    return this.agentManager.recoverTurn(input);
+    return config.OPENAI_PLATFORM_AGENT_ID ? this.platformAgent.recoverTurn(input) : this.agentManager.recoverTurn(input);
   }
 }

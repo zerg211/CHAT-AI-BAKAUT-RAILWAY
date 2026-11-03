@@ -12,6 +12,7 @@ export type ChatStreamOptions = {
   fetcher?: FetchLike;
   idleTimeoutMs?: number;
   clientMessageId?: string;
+  action?: 'catalog_next_page';
 };
 
 const DEFAULT_STREAM_IDLE_TIMEOUT_MS = 150_000;
@@ -281,7 +282,7 @@ export async function streamChatMessage(
       'content-type': 'application/json',
       'x-bakaut-visitor-id': options.visitorId
     },
-    body: JSON.stringify({ message, clientMessageId }),
+    body: JSON.stringify({ message, clientMessageId, ...(options.action ? { action: options.action } : {}) }),
     signal
   });
   if (!response.ok) {
