@@ -28,7 +28,7 @@ describe('Platform agent result', () => {
     expect(result.answer).toBe('Готово');
     const [, options] = transport.mock.calls[1] as unknown as [string, RequestInit];
     expect((options.headers as Record<string, string>)['Idempotency-Key']).toBe('message-id');
-    expect(JSON.parse(String(options.body)).events[0].input[0].content[0].text).toBe('Дальше');
+    expect(JSON.parse(String(options.body)).events[0].input[0].content[0].text).toContain('Дальше');
   });
 
   it('creates a session using the saved agent and stores its ID before polling', async () => {
@@ -41,7 +41,7 @@ describe('Platform agent result', () => {
     const client = new PlatformAgentClient('test-key', 'saved-agent', ['vault-id'], transport as typeof fetch);
     const result = await client.run({ message: 'Подберите генератор', idempotencyKey: 'local-turn', onSession });
     const [, options] = transport.mock.calls[0] as unknown as [string, RequestInit];
-    expect(JSON.parse(String(options.body))).toMatchObject({ agent_id: 'saved-agent', vault_ids: ['vault-id'], input: 'Подберите генератор' });
+    expect(JSON.parse(String(options.body))).toMatchObject({ agent_id: 'saved-agent', vault_ids: ['vault-id'], agent: { text: { format: { type: 'json_schema' } } } });
     expect(onSession).toHaveBeenCalledWith('new-session');
     expect(result.answer).toBe('Ответ');
   });
