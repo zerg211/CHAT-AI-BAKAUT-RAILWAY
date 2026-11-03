@@ -111,6 +111,31 @@ describe('site chat and platform agent', () => {
       answer: JSON.stringify({ answer: 'Ответ', selected: ['not-shown'], rejected: [], uncertain: [] }) });
     await expect(new PlatformAgentAssistant(repo).generateAnswer({ sessionId: 'chat', turnId: 'turn', userMessage: 'Какая?' })).rejects.toThrow('does not account');
   });
+  it('resolves older product results across later selections in the same session', async () => {
+    state.listMessages.mockResolvedValue([
+      { metadata: { productCards: [{ id: 'plate', name: 'Виброплита', price: 100, specs: {}, currency: 'RUB' }], catalogCandidates: [{ id: 'reviewed', name: 'Проверенная', price: 150, specs: {}, currency: 'RUB' }] } },
+      { metadata: { productCards: [{ id: 'generator', name: 'Генератор', price: 200, specs: {}, currency: 'RUB' }] } }
+    ]);
+    state.run.mockResolvedValue({ sessionId: 'agent-session', turnId: 'agent-turn',
+      answer: JSON.stringify({ answer: 'Виброплита', selected: ['plate'], rejected: ['reviewed'], uncertain: [] }) });
+    const result = await new PlatformAgentAssistant(repo).generateAnswer({ sessionId: 'chat', turnId: 'turn', userMessage: 'Какие были виброплиты?' });
+    expect(state.listMessages).toHaveBeenCalledWith('chat', 80);
+    expect(result.productCards.map((card) => card.id)).toEqual(['plate']);
+  });
+  it('requires complete new-search coverage and never selects an old product outside that search', async () => {
+    state.listMessages.mockResolvedValue([{ metadata: { productCards: [{ id: 'old', name: 'Старый товар', price: 100, specs: {}, currency: 'RUB' }] } }]);
+    const page = { items: [{ product_id: 'new', name: 'Новый товар', price_rub: 100 }] };
+    state.run.mockResolvedValue({ sessionId: 'agent-session', turnId: 'agent-turn', page,
+      answer: JSON.stringify({ answer: 'Новый', selected: ['new'], rejected: ['old'], uncertain: [] }) });
+    const result = await new PlatformAgentAssistant(repo).generateAnswer({ sessionId: 'chat', turnId: 'turn', userMessage: 'Найди новый товар' });
+    expect(result.productCards.map((card) => card.id)).toEqual(['new']);
+    state.run.mockResolvedValue({ sessionId: 'agent-session', turnId: 'agent-turn', page,
+      answer: JSON.stringify({ answer: 'Старый', selected: ['old'], rejected: ['new'], uncertain: [] }) });
+    await expect(new PlatformAgentAssistant(repo).generateAnswer({ sessionId: 'chat', turnId: 'turn', userMessage: 'Найди новый товар' })).rejects.toThrow('does not account');
+    state.run.mockResolvedValue({ sessionId: 'agent-session', turnId: 'agent-turn', page,
+      answer: JSON.stringify({ answer: 'Старый', selected: [], rejected: ['old'], uncertain: [] }) });
+    await expect(new PlatformAgentAssistant(repo).generateAnswer({ sessionId: 'chat', turnId: 'turn', userMessage: 'Найди новый товар' })).rejects.toThrow('does not account');
+  });
   it('refuses an incomplete classification without advancing the cursor', async () => {
     state.run.mockResolvedValue({ sessionId: 'agent-session', turnId: 'agent-turn', pageCursor: 'cursor-1',
       answer: JSON.stringify({ answer: 'Ответ', selected: [], rejected: [], uncertain: [] }),
