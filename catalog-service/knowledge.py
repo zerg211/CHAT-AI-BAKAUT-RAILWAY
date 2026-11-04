@@ -47,7 +47,7 @@ class Knowledge:
         if len(matches)!=1:return {'status':'ambiguous' if matches else 'not_found','candidates':[self.compact(r) for r in matches[:10]]}
         r=matches[0];d=json.loads(r['raw'])
         # Full original attributes are returned for the exact product. Images never inflate model context.
-        result={'status':'found','product_id':r['id'],'name':r['title'],'sku':r['sku'],'url':r['url'],'category':r['category'],'source_file':r['source'],'source_sha256':r['sha'],'price_rub':r['price'],'price_current':False,'stock':'unknown'}
+        result={'status':'found','product_id':r['id'],'name':r['title'],'sku':r['sku'],'url':r['url'],'category':r['category'],'source_file':r['source'],'source_sha256':r['sha'],'price_rub':r['price'],'price_source':'catalog' if r['price'] is not None else 'unknown','stock':'unknown'}
         if fields:
             aliases={**result,'nominal_electrical_power':json.loads(r['powers']),'conditions':[],'attributes':d.get('характеристики',{}),'description':d.get('описание',''),'documents':d.get('документы',[]),'brand':d.get('бренд')}
             result['fields']={k:aliases.get(k,d.get(k,(d.get('характеристики') or {}).get(k))) for k in fields}
@@ -130,21 +130,19 @@ class Knowledge:
                     terms=[w for w in re.findall(r'\w+',norm(query)) if len(w)>2 and w not in stop]
                     terms=[w[:5] if re.fullmatch(r'[а-я]+',w) and len(w)>5 else w for w in terms]
                     expression=' OR '.join('"'+w+'"*' for w in dict.fromkeys(terms))
-                    ids=[h['id'] for h in self.db.execute('SELECT id FROM docs WHERE docs MATCH ? ORDER BY bm25(docs,0,20,1) LIMIT 100',(expression,))] if expression else []
+                    ids=[h['id'] for h in self.db.execute('SELECT id FROM docs WHERE docs MATCH ? ORDER BY bm25(docs,0,20,1)',(expression,))] if expression else []
                     for ident in ids:
                         if ident in allowed and ident not in seen:
                             seen.add(ident);matches.append(self.row(ident))
-                            if len(matches)>=30:break
                 elif not query.strip():matches=allrows
                 groups['matches']=[self.compact(r,evidence=self.source_evidence(r,query)) for r in matches];complete=bool(exact) or not query.strip();universe=len(allrows)
             criteria={'query':query,'category':category,'min_nominal_kw':min_nominal_kw,'max_nominal_kw':max_nominal_kw,'max_price_rub':max_price_rub}
             sid=hashlib.sha256(json.dumps([self.revision,criteria],sort_keys=True,ensure_ascii=False).encode()).hexdigest()[:24]
             snapshot={'groups':groups,'criteria':criteria,'snapshot':sid,'complete':complete,'universe':universe,'excluded':excluded,'source_scan_complete':source_scan_complete,'candidate_basis':candidate_basis};self.snapshots[sid]=snapshot;offset=0
         if group not in snapshot['groups']:raise ValueError('invalid group')
-        # The widget paginates for people. For text searches return the small
-        # ranked candidate set in one MCP call, avoiding three model round trips.
+        # This is a transport page size, not a cap on the number of candidates.
         items=snapshot['groups'][group]
-        next_offset=offset+(30 if snapshot['criteria']['query'].strip() and not snapshot['complete'] else 10)
+        next_offset=len(items) if snapshot['criteria']['query'].strip() and not snapshot['complete'] else offset+10
         next_cursor=base64.urlsafe_b64encode(json.dumps({'snapshot':snapshot['snapshot'],'revision':self.revision,'criteria':snapshot['criteria'],'offset':next_offset,'group':group}).encode()).decode().rstrip('=') if next_offset<len(items) else None
         criteria=snapshot['criteria']
         applied={key:value for key,value in criteria.items() if key!='query' and value is not None}
@@ -155,7 +153,7 @@ class Knowledge:
             else:
                 applied['query']=criteria['query']
                 if not snapshot['complete']:unsupported.append('semantic_query_completeness')
-        result={'status':'ok','criteria':criteria,'applied_filters':applied,'unsupported_filters':unsupported,'snapshot':snapshot['snapshot'],'group':group,'count':len(items),'counts':{k:len(v) for k,v in snapshot['groups'].items()},'candidates_checked':snapshot['universe'],'numeric_scan_complete':snapshot['complete'],'source_scan_complete':snapshot['source_scan_complete'],'candidate_basis':snapshot['candidate_basis'],'items':items[offset:next_offset],'next_cursor':next_cursor,'remaining':max(0,len(items)-next_offset),'price_current':False,'stock':'unknown','source_revision':self.revision,'retrieval_ms':round((time.perf_counter()-start_time)*1000,2)}
+        result={'status':'ok','criteria':criteria,'applied_filters':applied,'unsupported_filters':unsupported,'snapshot':snapshot['snapshot'],'group':group,'count':len(items),'counts':{k:len(v) for k,v in snapshot['groups'].items()},'candidates_checked':snapshot['universe'],'numeric_scan_complete':snapshot['complete'],'source_scan_complete':snapshot['source_scan_complete'],'candidate_basis':snapshot['candidate_basis'],'items':items[offset:next_offset],'next_cursor':next_cursor,'remaining':max(0,len(items)-next_offset),'price_source':'catalog','stock':'unknown','source_revision':self.revision,'retrieval_ms':round((time.perf_counter()-start_time)*1000,2)}
         result['has_more']=next_cursor is not None
         result['review_examples']=snapshot['groups']['needs_check'][:4] if group=='matches' and offset==0 else []
         self.log.append({'tool':'search_products','criteria':snapshot['criteria'],'count':len(items),'ms':result['retrieval_ms']});return result
