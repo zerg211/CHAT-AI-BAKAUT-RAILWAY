@@ -42,13 +42,13 @@ assert 'price_current' not in k.get_product('0')
     const cards = normalizePublicProductCards([{ id: 'a', name: 'A', matchStatus: 'uncertain' }]);
     expect(cards[0].matchStatus).toBe('uncertain');
   });
-  it('adds batch access only to the saved catalog MCP while preserving web search and credentials', () => {
+  it('adds catalog batch and semantic ranking tools while preserving web search and credentials', () => {
     const tools = [{ type: 'web_search', context_size: 'medium' }, { type: 'mcp', server_label: 'bakaut_catalog',
       credential_id: 'vault-credential', transport: { type: 'http', server_url: 'https://catalog.example/mcp' }, allowed_tools: ['search_products', 'get_product'] }];
     const updated = enableCatalogBatchTool(tools);
     expect(updated?.[0]).toEqual(tools[0]);
     expect(updated?.[1]).toMatchObject({ credential_id: 'vault-credential', transport: tools[1].transport,
-      allowed_tools: ['search_products', 'get_product', 'get_products_batch', 'semantic_concepts'] });
+      allowed_tools: ['search_products', 'get_product', 'get_products_batch', 'semantic_concepts', 'semantic_rank_products'] });
     expect(tools[1].allowed_tools).toEqual(['search_products', 'get_product']);
   });
   it('keeps the first catalog page when the agent delegates all matching results to the catalog', () => {
