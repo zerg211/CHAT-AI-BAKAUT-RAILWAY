@@ -128,6 +128,24 @@ function object(value: unknown): JsonObject | undefined {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as JsonObject : undefined;
 }
 
+function catalogToolPayload(value: unknown, depth = 0): JsonObject | undefined {
+  const output = object(value);
+  if (!output || depth > 4 || output.isError === true) return undefined;
+  if (Array.isArray(output.items)) return output;
+  const structured = catalogToolPayload(output.structuredContent, depth + 1);
+  if (structured) return structured;
+  if (!Array.isArray(output.content)) return undefined;
+  for (const part of output.content) {
+    const text = object(part)?.text;
+    if (typeof text !== 'string') continue;
+    try {
+      const payload = catalogToolPayload(JSON.parse(text), depth + 1);
+      if (payload) return payload;
+    } catch { /* Ignore non-JSON MCP content. */ }
+  }
+  return undefined;
+}
+
 /** Preserve every saved tool and widen only the existing catalog MCP allowlist. */
 export function enableCatalogBatchTool(value: unknown): unknown[] | undefined {
   if (!Array.isArray(value)) return undefined;
@@ -159,17 +177,9 @@ export function extractAgentResult(items: unknown[], turnId: string) {
   const pages: Array<{ page: JsonObject; cursor: unknown }> = [];
   for (const item of own) {
     if (item.type !== 'mcp_call' || item.name !== 'search_products' || item.status !== 'completed') continue;
-    const output = object(item.output);
-    let candidate = object(output?.structuredContent);
-    if (!candidate && Array.isArray(output?.content)) {
-      for (const part of output.content) {
-        const text = object(part)?.text;
-        if (typeof text !== 'string') continue;
-        try { candidate = object(JSON.parse(text)); } catch { /* Ignore non-JSON MCP content. */ }
-        if (candidate) break;
-      }
-    }
-    if (candidate?.group === 'matches' && Array.isArray(candidate.items)) {
+    const candidate = catalogToolPayload(item.output);
+    if (!candidate) throw new Error('Catalog tool output is malformed');
+    if (candidate.group === 'matches' && Array.isArray(candidate.items)) {
       let args = object(item.arguments);
       if (!args && typeof item.arguments === 'string') {
         try { args = object(JSON.parse(item.arguments)); } catch { /* Invalid arguments are rejected by the caller. */ }
@@ -421,14 +431,7 @@ export class PlatformAgentClient {
           for (const raw of items) {
             const item = object(raw);
             if (item?.turn_id !== turn.id || item.type !== 'mcp_call' || item.name !== 'search_products' || item.status !== 'completed') continue;
-            const output = object(item.output);
-            let page = object(output?.structuredContent);
-            if (!page && Array.isArray(output?.content)) for (const part of output.content) {
-              const value = object(part)?.text;
-              if (typeof value !== 'string') continue;
-              try { page = object(JSON.parse(value)); } catch { continue; }
-              if (page) break;
-            }
+            const page = catalogToolPayload(item.output);
             if (page?.status !== 'ok' || !Array.isArray(page.items)) continue;
             for (const rawProduct of page.items) {
               const product = object(rawProduct);

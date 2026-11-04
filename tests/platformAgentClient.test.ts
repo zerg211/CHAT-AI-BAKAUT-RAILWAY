@@ -117,6 +117,13 @@ assert 'price_current' not in k.get_product('0')
       { turn_id: 't', role: 'assistant', phase: 'final_answer', content: [{ type: 'output_text', text: answer }] }], 't');
     expect(result.page?.items).toEqual([{ product_id: 'a' }, { product_id: 'b' }]);
   });
+  it('rejects a truncated nested catalog page instead of treating its products as complete', () => {
+    const output = { content: [{ type: 'text', text: JSON.stringify({ content: [{ type: 'text',
+      text: '{"status":"ok","group":"matches","items":[{"product_id":"a"},truncated…' }],
+      structuredContent: null, isError: false }) }] };
+    expect(() => extractAgentResult([{ turn_id: 't', type: 'mcp_call', name: 'search_products',
+      arguments: {}, status: 'completed', output }], 't')).toThrow('malformed');
+  });
   it('fails instead of presenting an incomplete list as complete', () => {
     const next = Buffer.from(JSON.stringify({ snapshot: 's1', revision: 'r1', group: 'matches', offset: 1 })).toString('base64url');
     const page = { group: 'matches', count: 20, items: [{ product_id: 'p1' }], has_more: true, next_cursor: next };
