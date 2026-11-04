@@ -8,7 +8,7 @@ import { spawnSync } from 'node:child_process';
 vi.mock('../src/config.js', () => ({ config: { BAKAUT_MCP_TOKEN: 'mock-catalog-token', BAKAUT_CATALOG_URL: 'https://catalog-search-production.up.railway.app' } }));
 
 describe('Platform agent result', () => {
-  it('marks ranked catalog text search incomplete and returns its first 30 results in one call', () => {
+  it('returns text matches beyond 30 and 100 without claiming semantic completeness', () => {
     const script = `
 import sys,sqlite3,json
 sys.path.insert(0,'catalog-service')
@@ -19,13 +19,15 @@ k.db.row_factory=sqlite3.Row
 k.revision='rev';k.snapshots={};k.log=[]
 k.db.execute('CREATE TABLE products (id TEXT,sku TEXT,title TEXT,category TEXT,url TEXT,price REAL,powers TEXT,source TEXT,sha TEXT,raw TEXT)')
 k.db.execute('CREATE VIRTUAL TABLE docs USING fts5(id UNINDEXED,title,body)')
-for n in range(35):
+for n in range(135):
     key=str(n)
     k.db.execute('INSERT INTO products VALUES (?,?,?,?,?,?,?,?,?,?)',(key,key,'pump '+key,'category','https://example.test/'+key,1,'[]','s','h','{}'))
     k.db.execute('INSERT INTO docs VALUES (?,?,?)',(key,'pump '+key,''))
 r=k.search_products(query='pump')
-assert len(r['items'])==30 and r['count']==30 and not r['has_more']
+assert len(r['items'])==135 and r['count']==135 and not r['has_more']
 assert 'semantic_query_completeness' in r['unsupported_filters'] and not r['numeric_scan_complete']
+assert 'price_current' not in r
+assert 'price_current' not in k.get_product('0')
 `;
     const run = spawnSync(process.platform === 'win32' ? 'python' : 'python3', ['-c', script], { encoding: 'utf8' });
     expect(run.stderr).toBe('');
@@ -175,7 +177,9 @@ assert 'semantic_query_completeness' in r['unsupported_filters'] and not r['nume
     const client = new PlatformAgentClient('test-key', 'saved-agent', ['vault-id'], transport as typeof fetch);
     const result = await client.run({ message: 'Подберите генератор', idempotencyKey: 'local-turn', onSession });
     const [, options] = transport.mock.calls[1] as unknown as [string, RequestInit];
-    expect(JSON.parse(String(options.body))).toMatchObject({ agent_id: 'saved-agent', vault_ids: ['vault-id'], agent: { instructions: expect.stringContaining('Исходные инструкции агента'), text: { format: { type: 'json_schema' } } } });
+    const request = JSON.parse(String(options.body));
+    expect(request).toMatchObject({ agent_id: 'saved-agent', vault_ids: ['vault-id'], agent: { instructions: expect.stringContaining('Исходные инструкции агента'), text: { format: { type: 'json_schema' } } } });
+    expect(request.agent.instructions).toContain('без общих оговорок о возможной неактуальности');
     expect(onSession).toHaveBeenCalledWith('new-session');
     expect(result.answer).toBe('Ответ');
   });
