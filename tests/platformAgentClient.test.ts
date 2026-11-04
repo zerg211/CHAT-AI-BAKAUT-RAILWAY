@@ -28,6 +28,15 @@ assert len(r['items'])==135 and r['count']==135 and not r['has_more']
 assert 'semantic_query_completeness' in r['unsupported_filters'] and not r['numeric_scan_complete']
 assert 'price_current' not in r
 assert 'price_current' not in k.get_product('0')
+k.db.execute('UPDATE products SET raw=? WHERE id=?',(json.dumps({'описание':'Not suitable for tile work.'}), '0'))
+first=k.search_products(category='category',relevance_query='tile')
+assert first['count']==135 and len(first['items'])==100 and first['has_more']
+assert 'relevance_query' in first['unsupported_filters'] and 'relevance_query' not in first['applied_filters']
+last=k.search_products(cursor=first['next_cursor'])
+assert len(last['items'])==35 and not last['has_more']
+assert len({item['product_id'] for item in first['items']+last['items']})==135
+negative=next(item for item in first['items'] if item['product_id']=='0')
+assert 'Not suitable' in negative['relevance_evidence']['description_excerpts'][0]
 `;
     const run = spawnSync(process.platform === 'win32' ? 'python' : 'python3', ['-c', script], { encoding: 'utf8' });
     expect(run.stderr).toBe('');
@@ -96,7 +105,8 @@ assert 'price_current' not in k.get_product('0')
     const call = (page: unknown, args: unknown) => ({ turn_id: 'new', type: 'mcp_call', name: 'search_products', arguments: args, status: 'completed', output: { content: [{ type: 'text', text: JSON.stringify(page) }] } });
     const result = extractAgentResult([
       { turn_id: 'old', role: 'assistant', phase: 'final_answer', content: [{ type: 'output_text', text: 'old' }] },
-      call(last, { cursor: equivalentCursor }), call(first, {}),
+      call({ ...last, retrieval_ms: 1 }, { cursor: equivalentCursor }),
+      call({ ...last, retrieval_ms: 2 }, { cursor: equivalentCursor }), call(first, {}),
       { turn_id: 'new', role: 'assistant', phase: 'final_answer', content: [{ type: 'output_text', text: 'Найдены товары' }] }
     ], 'new');
     expect(result.answer).toBe('Найдены товары');

@@ -58,6 +58,15 @@ describe('site chat and platform agent', () => {
     const answer = await new PlatformAgentAssistant(repo).generateAnswer({ sessionId: 'chat', turnId: 'turn', userMessage: 'Что подходит?' });
     expect(answer.productCards).toEqual([expect.objectContaining({ id: 'maybe', matchStatus: 'uncertain' })]);
   });
+  it('shows confirmed products before candidates needing review', async () => {
+    state.run.mockResolvedValue({ sessionId: 'agent-session', turnId: 'agent-turn',
+      page: { items: [{ product_id: 'maybe', name: 'Не проверен', price_rub: 100 },
+        { product_id: 'yes', name: 'Подходит', price_rub: 200 }] },
+      answer: JSON.stringify({ answer: 'Нашёл варианты', selected: ['yes'], rejected: [], uncertain: ['maybe'] }) });
+    const answer = await new PlatformAgentAssistant(repo).generateAnswer({ sessionId: 'chat', turnId: 'turn', userMessage: 'Подберите товар' });
+    expect(answer.productCards.map((card) => card.id)).toEqual(['yes', 'maybe']);
+    expect(answer.productCards[1].matchStatus).toBe('uncertain');
+  });
   it('refreshes a shown selection after the catalog revision changes', async () => {
     Object.assign(config, { BAKAUT_CATALOG_URL: 'https://catalog-search-production.up.railway.app' });
     vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => ({ status: 'ok', revision: 'new-revision' }) })));

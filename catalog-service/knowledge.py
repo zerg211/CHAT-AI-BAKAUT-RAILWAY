@@ -31,6 +31,32 @@ class Knowledge:
         result={'product_id':r['id'],'name':r['title'],'sku':r['sku'],'category':r['category'],'price_rub':r['price'],'url':r['url'],'nominal_electrical_power':json.loads(r['powers']),'conditions':notes or []}
         if evidence is not None:result['source_evidence']=evidence
         return result
+    def relevant_facts(self,r,question):
+        """Return source excerpts for review; never use them to exclude a product."""
+        if not question.strip():return None
+        raw=json.loads(self.row(r['id'])['raw'])
+        attributes=raw.get('характеристики') or {}
+        if not isinstance(attributes,dict):attributes={}
+        words=[word[:5] for word in re.findall(r'[a-zа-яё0-9]+',norm(question)) if len(word)>3]
+        words=list(dict.fromkeys(words))
+        def score(value):
+            value=norm(value)
+            return sum(word in value for word in words)
+        preferred=[];matching=[]
+        for key,value in attributes.items():
+            rendered=str(value)
+            fact={'field':str(key)[:80],'text':rendered[:180]}
+            if norm(key) in ('применение','назначение','совместимость','область применения'):
+                preferred.append(fact)
+            elif score(str(key)+' '+rendered):
+                matching.append((score(str(key)+' '+rendered),fact))
+        matching.sort(key=lambda item:-item[0])
+        facts=(preferred+ [fact for _,fact in matching])[:2]
+        description=str(raw.get('описание') or '')
+        sentences=[part.strip() for part in re.split(r'(?<=[.!?])\s+|[;\n]+',description) if part.strip()]
+        ranked=sorted(((score(part),index,part) for index,part in enumerate(sentences)),key=lambda item:(-item[0],item[1]))
+        excerpts=[part[:240] for overlap,_,part in ranked if overlap][:1]
+        return {'attributes':facts,'description_excerpts':excerpts}
     def exact(self,identifier):
         key=norm(identifier)
         if not key:return []
@@ -74,7 +100,7 @@ class Knowledge:
             if r['price'] is None:return 'needs_check',['нет цены для проверки бюджета']
             if r['price']>budget:return 'excluded',[]
         return 'matches',notes
-    def search_products(self,query='',category=None,min_nominal_kw=None,max_nominal_kw=None,max_price_rub=None,cursor=None,group='matches'):
+    def search_products(self,query='',category=None,min_nominal_kw=None,max_nominal_kw=None,max_price_rub=None,cursor=None,group='matches',relevance_query=''):
         start_time=time.perf_counter()
         if cursor:
             try:
@@ -110,13 +136,19 @@ class Knowledge:
                 for r in allrows:
                     status,notes=self.classify(r,min_nominal_kw,max_nominal_kw,max_price_rub)
                     if status=='excluded':excluded+=1
-                    else:groups[status].append(self.compact(r,notes))
+                    else:
+                        item=self.compact(r,notes)
+                        if relevance_query:item['relevance_evidence']=self.relevant_facts(r,relevance_query)
+                        groups[status].append(item)
                 complete=True;universe=len(allrows)
             elif category and re.search(r'дистанц|пульт|радиоуправ|инфракрас|bluetooth|remote',norm(query)):
                 # Feature questions scan every card in the chosen category for explicit source evidence.
                 for r in allrows:
                     ev=self.source_evidence(r,query)
-                    if ev and (ev['attributes'] or ev['description_excerpts']):groups['matches'].append(self.compact(r,evidence=ev))
+                    if ev and (ev['attributes'] or ev['description_excerpts']):
+                        item=self.compact(r,evidence=ev)
+                        if relevance_query:item['relevance_evidence']=self.relevant_facts(r,relevance_query)
+                        groups['matches'].append(item)
                 complete=False;universe=len(allrows);source_scan_complete=True;candidate_basis='full_category_keyword_scan'
             else:
                 exact=self.exact(query) if query.strip() else []
@@ -135,18 +167,23 @@ class Knowledge:
                         if ident in allowed and ident not in seen:
                             seen.add(ident);matches.append(self.row(ident))
                 elif not query.strip():matches=allrows
-                groups['matches']=[self.compact(r,evidence=self.source_evidence(r,query)) for r in matches];complete=bool(exact) or not query.strip();universe=len(allrows)
-            criteria={'query':query,'category':category,'min_nominal_kw':min_nominal_kw,'max_nominal_kw':max_nominal_kw,'max_price_rub':max_price_rub}
+                groups['matches']=[self.compact(r,evidence=self.source_evidence(r,query)) for r in matches]
+                if relevance_query:
+                    for item,r in zip(groups['matches'],matches):item['relevance_evidence']=self.relevant_facts(r,relevance_query)
+                complete=bool(exact) or not query.strip();universe=len(allrows)
+            criteria={'query':query,'category':category,'min_nominal_kw':min_nominal_kw,'max_nominal_kw':max_nominal_kw,'max_price_rub':max_price_rub,'relevance_query':relevance_query}
             sid=hashlib.sha256(json.dumps([self.revision,criteria],sort_keys=True,ensure_ascii=False).encode()).hexdigest()[:24]
             snapshot={'groups':groups,'criteria':criteria,'snapshot':sid,'complete':complete,'universe':universe,'excluded':excluded,'source_scan_complete':source_scan_complete,'candidate_basis':candidate_basis};self.snapshots[sid]=snapshot;offset=0
         if group not in snapshot['groups']:raise ValueError('invalid group')
         # This is a transport page size, not a cap on the number of candidates.
         items=snapshot['groups'][group]
-        next_offset=len(items) if snapshot['criteria']['query'].strip() and not snapshot['complete'] else offset+10
+        next_offset=len(items) if snapshot['criteria']['query'].strip() and not snapshot['complete'] else offset+100
         next_cursor=base64.urlsafe_b64encode(json.dumps({'snapshot':snapshot['snapshot'],'revision':self.revision,'criteria':snapshot['criteria'],'offset':next_offset,'group':group}).encode()).decode().rstrip('=') if next_offset<len(items) else None
         criteria=snapshot['criteria']
         applied={key:value for key,value in criteria.items() if key!='query' and value is not None}
         unsupported=[]
+        applied.pop('relevance_query',None)
+        if criteria['relevance_query']:unsupported.append('relevance_query')
         if criteria['query'].strip():
             if any(criteria[key] is not None for key in ('min_nominal_kw','max_nominal_kw','max_price_rub')):
                 unsupported.append('query')
