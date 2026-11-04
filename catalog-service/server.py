@@ -1,4 +1,5 @@
-import hmac,json,os,hashlib
+import hmac,json,os,hashlib,sqlite3
+from functools import lru_cache
 from pathlib import Path
 from starlette.responses import JSONResponse
 from mcp.server.fastmcp import FastMCP
@@ -6,6 +7,7 @@ from mcp.types import CallToolResult,TextContent
 from mcp.server.transport_security import TransportSecuritySettings
 from knowledge import Knowledge
 from get_products_batch import get_products_batch as read_product_batch
+from embedding_index import EmbeddingIndex,embed_query
 import uvicorn
 TOKEN=os.environ['BAKAUT_MCP_TOKEN']
 EXPECTED_REVISION=os.environ['BAKAUT_EXPECTED_REVISION']
@@ -19,6 +21,50 @@ hosts=['127.0.0.1:*','localhost:*','healthcheck.railway.app']
 if os.environ.get('RAILWAY_PUBLIC_DOMAIN'):hosts.append(os.environ['RAILWAY_PUBLIC_DOMAIN'])
 if os.environ.get('BAKAUT_PUBLIC_HOSTNAME'):hosts.append(os.environ['BAKAUT_PUBLIC_HOSTNAME'])
 server=FastMCP('BAKAUT indexed catalog',stateless_http=True,json_response=True,transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=True,allowed_hosts=hosts))
+
+@lru_cache(maxsize=2)
+def loaded_embedding_index(path,mtime_ns,revision):
+    index=EmbeddingIndex(os.environ['BAKAUT_DB_PATH'],path)
+    if index.info['source_revision']!=revision:raise ValueError('Embedding index has a different catalog revision')
+    return index
+
+def embedding_index():
+    path=os.environ.get('BAKAUT_EMBEDDING_DB_PATH')
+    if not path or not Path(path).is_file():raise ValueError('Embedding index is not configured')
+    kb=Knowledge('fts')
+    try:revision=kb.revision
+    finally:kb.db.close()
+    return loaded_embedding_index(path,Path(path).stat().st_mtime_ns,revision)
+
+@lru_cache(maxsize=32)
+def cached_ranking(query,path,mtime_ns,revision):
+    index=loaded_embedding_index(path,mtime_ns,revision)
+    vector,usage=embed_query(query,index.info['model'],index.info['dimensions'])
+    return tuple(index.rank(vector)),usage
+
+def ranked_products(query,offset=0,page_size=50):
+    if not isinstance(query,str) or not query.strip():raise ValueError('query must be a nonempty string')
+    if not isinstance(offset,int) or offset<0:raise ValueError('offset must be a nonnegative integer')
+    if not isinstance(page_size,int) or page_size<1 or page_size>200:raise ValueError('page_size must be 1..200')
+    index=embedding_index()
+    path=os.environ['BAKAUT_EMBEDDING_DB_PATH']
+    kb=Knowledge('fts')
+    try:
+        ranked,usage=cached_ranking(query,path,Path(path).stat().st_mtime_ns,kb.revision)
+        if len(ranked)!=kb.db.execute('SELECT COUNT(*) FROM products').fetchone()[0]:
+            raise ValueError('Embedding ranking lost a catalog product')
+        items=[]
+        for product_id,score in ranked[offset:offset+page_size]:
+            row=kb.row(product_id)
+            if row is None:raise ValueError('Embedding product is missing from the catalog')
+            items.append({**kb.compact(row),'similarity':round(score,5)})
+        return {'status':'ok','query':query,'items':items,'count':len(ranked),
+                'offset':offset,'next_offset':offset+len(items) if offset+len(items)<len(ranked) else None,
+                'source_revision':kb.revision,'index_model':index.info['model'],
+                'candidate_basis':'complete_catalog_embedding_ranking',
+                'selection_complete':False,'input_tokens':usage}
+    finally:kb.db.close()
+
 def compact_result(data):return CallToolResult(content=[TextContent(type='text',text=json.dumps(data,ensure_ascii=False,separators=(',',':')))])
 @server.tool(structured_output=False)
 def search_products(query:str='',category:str|None=None,min_nominal_kw:float|None=None,max_nominal_kw:float|None=None,max_price_rub:float|None=None,cursor:str|None=None,group:str='matches')->CallToolResult:
@@ -32,12 +78,23 @@ def get_product(identifier:str,fields:list[str]|None=None)->CallToolResult:
 def get_products_batch(identifiers:list[str],fields:list[str],expected_revision:str|None=None)->CallToolResult:
     """Read only requested missing fields for up to 100 exact product_id values. Pass source_revision as expected_revision. Null means unknown. Do not reread fields already supplied by search; use web for unresolved material facts."""
     return compact_result(read_product_batch(Knowledge('fts'),identifiers,fields,expected_revision))
+@server.tool(structured_output=False)
+def semantic_rank_products(query:str,offset:int=0,page_size:int=50)->CallToolResult:
+    """Rank ALL 4324 original cards by meaning. Pages are transport only: next_offset reaches every card. Ranking discovers candidates; it does not prove eligibility or complete selection. Check exact card data and structured filters before recommending."""
+    return compact_result(ranked_products(query,offset,page_size))
 @server.custom_route('/health',methods=['GET'])
 async def health(request):
     kb=Knowledge('fts');root=Path(__file__).parent
-    code_hash=hashlib.sha256(b''.join((root/name).read_bytes() for name in ('server.py','knowledge.py','get_products_batch.py'))).hexdigest()
+    code_hash=hashlib.sha256(b''.join((root/name).read_bytes() for name in ('server.py','knowledge.py','get_products_batch.py','embedding_index.py'))).hexdigest()
+    index_path=os.environ.get('BAKAUT_EMBEDDING_DB_PATH')
+    index_status='unavailable';index_cards=0
+    if index_path and Path(index_path).is_file():
+        try:
+            index=embedding_index();index_status='ready';index_cards=index.info['products']
+        except (ValueError,sqlite3.Error,KeyError):index_status='stale'
     return JSONResponse({'status':'ok','cards':kb.db.execute('select count(*) from products').fetchone()[0],
-        'revision':kb.revision,'code_sha256':code_hash,'commit_sha':os.environ.get('RAILWAY_GIT_COMMIT_SHA')})
+        'revision':kb.revision,'code_sha256':code_hash,'commit_sha':os.environ.get('RAILWAY_GIT_COMMIT_SHA'),
+        'embedding_status':index_status,'embedding_cards':index_cards})
 @server.custom_route('/search-full',methods=['POST'])
 async def search_full(request):
     """Server-side complete selection from one catalog revision, not model pagination."""
