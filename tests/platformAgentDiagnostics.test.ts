@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { diagnosticEventFailed, safeDiagnosticEvent } from '../src/client/DiagnosticTimeline.js';
 import { PlatformAgentClient, PlatformAgentRequestError } from '../src/ai/platformAgentClient.js';
 
 // Test the producer boundary independently from the journal's additional projection.
@@ -142,4 +143,48 @@ describe('safe Platform HTTP diagnostics', () => {
     balanced(1);
   });
 
+});
+
+
+describe('provider observation error evidence', () => {
+  const cases = [
+    { label: 'absent error', status: 'completed', reported: undefined, expected: undefined },
+    { label: 'null error', status: 'completed', reported: null, expected: undefined },
+    { label: 'failed state without an error envelope', status: 'failed', reported: undefined, expected: undefined },
+    { label: 'known reported error', status: 'failed', reported: { code: 'server_error', type: 'api_error', message: canary }, expected: { errorCode: 'server_error', errorType: 'api_error' } },
+    { label: 'unknown reported error', status: 'failed', reported: { code: canary, type: canary, message: canary }, expected: { errorCode: 'unknown', errorType: 'unknown' } },
+    { label: 'unstructured reported error', status: 'failed', reported: canary, expected: { errorCode: 'unknown', errorType: 'unknown' } }
+  ];
+  for (const route of ['list', 'single', 'items'] as const) {
+    it.each(cases)(`${route}: preserves $label without manufacturing missing errors`, async ({ status, reported, expected }) => {
+      const observed = { id: route === 'items' ? 'mcp_test' : 'turn_test', status,
+        ...(reported === undefined ? {} : { error: reported }),
+        type: 'mcp_call', name: 'get_product', turn_id: 'turn_test', arguments: canary, output: canary };
+      const responses = route === 'items' ? [json({}), json({ data: [{ id: 'turn_test', status: 'completed' }] }),
+        json({ data: [{ id: 'msg_test', turn_id: 'turn_test', role: 'assistant', content: [{ type: 'output_text', text: canary }] }, observed] })]
+        : [json(route === 'list' ? { data: [observed] } : observed)];
+      const { api, transport } = client(responses);
+      if (route === 'items') await expect(api.waitForTurn({ sessionId: 'sess_test', previousTurnId: null })).resolves.toMatchObject({ answer: canary });
+      else if (route === 'single') await expect(api.readTurn('sess_test', 'turn_test')).resolves.toMatchObject({ id: 'turn_test', status });
+      else await expect(api.latestTurn('sess_test')).resolves.toEqual({ id: 'turn_test', status });
+      const observation = find(route === 'items' ? 'provider.item.observed' : route === 'single' ? 'provider.http.response' : 'provider.turn.observed').at(-1);
+      expect(observation).toBeDefined();
+      if (route === 'single') expect(find('provider.turn.observed')).toHaveLength(0);
+      else expect(observation!.fields.remoteStatus).toBe(status);
+      if (expected && route !== 'single') expect(observation!.fields).toMatchObject(expected);
+      else {
+        expect(observation!.fields).not.toHaveProperty('errorCode');
+        expect(observation!.fields).not.toHaveProperty('errorType');
+      }
+      const { projectDiagnosticFields } = await vi.importActual<typeof import('../src/observability/diagnostics.js')>('../src/observability/diagnostics.js');
+      const projected = safeDiagnosticEvent(projectDiagnosticFields(observation!.fields));
+      expect(diagnosticEventFailed(projected)).toBe(route !== 'single' && status === 'failed');
+      if (!expected || route === 'single') {
+        expect(projected).not.toHaveProperty('errorCode');
+        expect(projected).not.toHaveProperty('errorType');
+      }
+      expect(transport).toHaveBeenCalledTimes(route === 'items' ? 3 : 1);
+      balanced(route === 'items' ? 3 : 1);
+    });
+  }
 });

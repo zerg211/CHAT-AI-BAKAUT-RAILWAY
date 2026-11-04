@@ -26,6 +26,12 @@ const toolNames = ['search_products', 'get_product', 'get_products_batch', 'sema
 function known(value: unknown, allowed: string[]): string {
   return typeof value === 'string' && allowed.includes(value) ? value : 'unknown';
 }
+/** Missing error data is not evidence of an error; reported values remain classified. */
+function reportedErrorFields(value: unknown): Record<string, string> {
+  if (value === undefined || value === null) return {};
+  const error = object(value);
+  return { errorCode: known(error?.code, providerCodes), errorType: known(error?.type, providerTypes) };
+}
 function digits(value: string): boolean {
   return value.length > 0 && [...value].every(c => c >= '0' && c <= '9');
 }
@@ -315,16 +321,14 @@ export class PlatformAgentClient {
           const turn = object(raw);
           diagnosticEvent('provider.turn.observed', { agentTurnId: providerId(turn?.id),
             remoteStatus: known(turn?.status, remoteStatuses),
-            errorCode: known(object(turn?.error)?.code, providerCodes),
-            errorType: known(object(turn?.error)?.type, providerTypes) });
+            ...reportedErrorFields(turn?.error) });
         }
         if (endpoint.endsWith('/items')) for (const raw of entries) {
           const item = object(raw);
           diagnosticEvent('provider.item.observed', { itemId: providerId(item?.id), callId: providerId(item?.call_id),
             agentTurnId: providerId(item?.turn_id), itemType: known(item?.type, itemTypes),
             tool: known(item?.name, toolNames), remoteStatus: known(item?.status, remoteStatuses),
-            errorCode: known(object(item?.error)?.code, providerCodes),
-            errorType: known(object(item?.error)?.type, providerTypes) });
+            ...reportedErrorFields(item?.error) });
         }
         metrics.outcome = 'success';
         return result;
