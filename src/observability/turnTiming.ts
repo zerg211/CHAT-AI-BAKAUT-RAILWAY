@@ -1,3 +1,4 @@
+import { diagnosticEvent, diagnosticError, runWithDiagnostics, projectDiagnosticFields, diagnosticCompleteness, bindDiagnosticCallback } from './diagnostics.js';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { randomUUID } from 'node:crypto';
 import { performance } from 'node:perf_hooks';
@@ -39,6 +40,7 @@ const maxEventsPerExecution = 400;
 // Only application labels and numeric counters enter this module. No payloads,
 // SQL, URLs, error text, user agents or conversation text belong in timing logs.
 function emit(run: TimingRun, event: TimingLog, terminal = false) {
+  diagnosticEvent(`timing.${event.type === 'complete' ? 'complete' : event.type === 'span' ? 'span.complete' : String(event.type)}`, {...event, ...projectDiagnosticFields(event), operation:event.name, spanNumber:event.spanId, parentSpanNumber:event.parentSpanId, ...(event.type === 'complete' ? {legacyDroppedEvents:event.droppedEvents,timingActiveSpans:event.activeSpans,...diagnosticCompleteness(),activeSpans:Number(event.activeSpans ?? 0)+diagnosticCompleteness().activeSpans} : {})});
   if (!terminal && run.emitted >= maxEventsPerExecution) { run.dropped += 1; return; }
   run.emitted += 1;
   try {
@@ -47,23 +49,24 @@ function emit(run: TimingRun, event: TimingLog, terminal = false) {
   } catch { /* Diagnostics must not alter the operation being measured. */ }
 }
 
-function defaultSink(event: TimingLog) { console.info(JSON.stringify(event)); }
+function defaultSink(event: TimingLog) { if (event.type === 'start' || event.type === 'complete') console.info(JSON.stringify(event)); }
 function elapsed(startedAt: number) { return Math.max(0, Math.round((performance.now() - startedAt) * 10) / 10); }
 
 export async function runWithTurnTiming<T>(identity: {sessionId: string; turnId: string},
   operation: () => Promise<T>, sink: TimingSink = defaultSink): Promise<T> {
   const run: TimingRun = { ...identity, executionId: randomUUID(), startedAt: performance.now(),
     sink, emitted: 0, dropped: 0, nextSpan: 0, activeSpans: 0, counts: {}, totalMs: {} };
-  return timingContext.run({run, stage: 'turn'}, async () => {
+  return runWithDiagnostics({...identity,executionId:run.executionId}, () => timingContext.run({run, stage: 'turn'}, async () => {
     let outcome: TimingOutcome = 'error';
     emit(run, {type: 'start', at: new Date().toISOString()});
     try { const result = await operation(); outcome = 'ok'; return result; }
+    catch (error) { diagnosticError('turn.execution.failed',error); throw error; }
     finally {
       emit(run, {type: 'complete', outcome, durationMs: elapsed(run.startedAt),
         counts: {...run.counts}, cumulativeMs: {...run.totalMs}, activeSpans: run.activeSpans,
         droppedEvents: run.dropped}, true);
     }
-  });
+  }));
 }
 
 export function withTimingStage<T>(stage: string, operation: () => T): T {
@@ -80,10 +83,11 @@ export function startTimingSpan(kind: TimingKind, name: string, fields: TimingFi
   const offsetMs = elapsed(run.startedAt);
   run.activeSpans += 1;
   run.counts[kind] = (run.counts[kind] ?? 0) + 1;
+  diagnosticEvent('timing.span.started', {kind,operation:name,stage:context.stage,spanNumber:spanId,parentSpanNumber:context.parentSpanId ?? 0,...fields});
   let finished = false;
   return {
     run: <T>(operation: () => T): T => timingContext.run({...context, parentSpanId: spanId}, operation),
-    finish(outcome: TimingOutcome, completionFields: TimingFields = {}) {
+    finish: bindDiagnosticCallback((outcome: TimingOutcome, completionFields: TimingFields = {}) => {
       if (finished) return;
       finished = true;
       run.activeSpans -= 1;
@@ -91,7 +95,7 @@ export function startTimingSpan(kind: TimingKind, name: string, fields: TimingFi
       run.totalMs[kind] = Math.round(((run.totalMs[kind] ?? 0) + durationMs) * 10) / 10;
       emit(run, {type: 'span', spanId, parentSpanId: context.parentSpanId ?? null,
         kind, name, stage: context.stage, offsetMs, ...fields, ...completionFields, durationMs, outcome});
-    }
+    })
   };
 }
 
@@ -124,6 +128,6 @@ export function recordTimingStage(phase: string, eventType: string, payload: Rec
     const value = payload[key];
     if (typeof value === 'number' && Number.isFinite(value)) numeric[key] = value;
   }
-  const tool = typeof payload.tool === 'string' ? payload.tool : undefined;
+  const tool = projectDiagnosticFields({tool:payload.tool}).tool;
   emit(context.run, {type: 'stage', phase, eventType, offsetMs: elapsed(context.run.startedAt), tool, ...numeric});
 }

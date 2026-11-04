@@ -12,6 +12,7 @@ async function fixture() {
   const app=Fastify();const action=vi.fn(async()=>({ok:true}));
   registerAdminAuthorization(app);
   app.get('/api/admin/health',action);
+  app.get('/api/admin/diagnostics',action);
   app.get('/api/admin/leads',action);
   app.get('/api/admin/runtime/openai',action);
   app.get('/api/admin/not-authorized-by-default',action);
@@ -21,6 +22,14 @@ async function fixture() {
   await app.ready();return {app,action};
 }
 describe('scoped admin routes and durable mutation intent',()=>{
+  it('keeps diagnostics inside existing read scope',async()=>{
+    const {app}=await fixture();
+    try {
+      expect((await app.inject('/api/admin/diagnostics')).statusCode).toBe(401);
+      expect((await app.inject({url:'/api/admin/diagnostics',headers:{authorization:'Bearer catalog-token'}})).statusCode).toBe(403);
+      expect((await app.inject({url:'/api/admin/diagnostics',headers:{authorization:'Bearer debug-token'}})).statusCode).toBe(200);
+    } finally {await app.close();}
+  });
   beforeEach(()=>{vi.clearAllMocks();query.mockResolvedValue({rows:[]});});
   it.each(['evaluation-token','debug-token'])('read-only credential %s cannot mutate or probe a provider',async token=>{
     const {app,action}=await fixture();

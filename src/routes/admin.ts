@@ -1,3 +1,5 @@
+import { diagnosticEvent, projectDiagnosticFields } from '../observability/diagnostics.js';
+import { diagnosticJournalHealth } from '../observability/diagnosticJournal.js';
 import type { FastifyInstance } from 'fastify';
 import {registerAdminAuthorization,authorizeAdmin} from './adminAuthorization.js';
 import { z } from 'zod';
@@ -85,6 +87,26 @@ export async function registerAdminRoutes(app: FastifyInstance) {
   const leads = new LeadRepository();
 
   registerAdminAuthorization(app);
+
+  app.get('/api/admin/diagnostics', async (request,reply) => {
+    const query = z.object({turnId:z.string().uuid().optional(),executionId:z.string().uuid().optional(),
+      requestId:z.string().uuid().optional(),providerRequestId:z.string().min(1).max(200).refine(value=>projectDiagnosticFields({providerRequestId:value}).providerRequestId===value).optional(),
+      afterId:z.string().min(1).max(20).refine(value => [...value].every(c => c >= '0' && c <= '9')).default('0'),
+      limit:z.coerce.number().int().min(1).max(500).default(200)}).strict().parse(request.query);
+    if ([query.turnId,query.executionId,query.requestId,query.providerRequestId].filter(Boolean).length !== 1) return reply.code(400).send({error:'Exactly one technical ID is required'});
+    const principal = authorizeAdmin(request);
+    diagnosticEvent('diagnostics.read',{operation:'admin.diagnostics.read',turnId:query.turnId});
+    const column = query.turnId ? 'turn_id' : query.executionId ? 'execution_id' : query.requestId ? 'request_id' : "payload->>'providerRequestId'";
+    const identity = query.turnId ?? query.executionId ?? query.requestId ?? query.providerRequestId;
+    const result = await pool.query(`SELECT id::text,payload FROM diagnostic_events WHERE ${column}=$1 AND id>$2::bigint ORDER BY id LIMIT $3`,[identity,query.afterId,query.limit+1]);
+    const rows = result.rows.slice(0,query.limit);
+    const turnState = query.turnId ? (await pool.query('SELECT id,status,stage,created_at,updated_at,assistant_message_id FROM conversation_turns WHERE id=$1',[query.turnId])).rows[0] ?? null : null;
+    reply.header('cache-control','no-store');
+    return {events:rows.map(row=>({id:row.id,...row.payload})),nextId:rows.at(-1)?.id ?? query.afterId,
+      hasMore:result.rows.length>query.limit,turnState,scope:principal.scope,journal:diagnosticJournalHealth(),
+      completeness:'page_only_review_all_pages_and_execution_terminal_events',
+      deliveryEvidence:'server_writes_and_client_reports_are_not_read_receipts'};
+  });
 
   app.get('/api/admin/health', async () => {
     const operations = config.NODE_ENV === 'test'

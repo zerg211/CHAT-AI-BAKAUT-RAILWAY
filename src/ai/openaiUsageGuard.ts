@@ -1,3 +1,6 @@
+import { PlatformAgentClient } from './platformAgentClient.js';
+import { randomUUID } from 'node:crypto';
+import { diagnosticEvent, diagnosticError, diagnosticSpan, runWithDiagnostics } from '../observability/diagnostics.js';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import type { PoolClient } from 'pg';
 import { config } from '../config.js';
@@ -310,15 +313,15 @@ export async function reconcilePlatformAgentUsage(transport: typeof fetch = fetc
        AND (e.total_tokens IS NULL OR e.created_at > now() - interval '15 minutes')
      ORDER BY (e.total_tokens IS NULL) DESC, e.created_at DESC LIMIT 25`
   );
+  diagnosticEvent('usage.reconciliation.candidates',{candidateCount:pending.rows.length});
   for (const row of pending.rows) {
+    await runWithDiagnostics({jobType:'platform_usage_item',jobId:randomUUID(),sessionId:row.session_id,turnId:row.turn_id,agentTurnId:row.response_id},async () => {
     try {
-      const url = `https://api.openai.com/v1/agents/sessions/${encodeURIComponent(row.agent_session_id)}/turns/${encodeURIComponent(row.response_id)}`;
-      const response = await transport(url, { headers: { Authorization: `Bearer ${config.OPENAI_API_KEY}`, 'OpenAI-Beta': 'agents=v1' }, signal: AbortSignal.timeout(8_000) });
-      if (!response.ok) continue;
-      const turn = await response.json() as { id?: unknown; usage?: unknown };
-      if (turn.id !== row.response_id || !turn.usage || typeof turn.usage !== 'object') continue;
+      const client = new PlatformAgentClient(config.OPENAI_API_KEY!,config.OPENAI_PLATFORM_AGENT_ID!,[],transport);
+      const turn = await client.readTurn(row.agent_session_id,row.response_id,AbortSignal.timeout(8_000));
+      if (turn.id !== row.response_id || !turn.usage || typeof turn.usage !== 'object') { diagnosticEvent('usage.reconciliation.unknown',{usageKnown:false}); return; }
       const usage = extractOpenAIUsage(turn);
-      if (usage.totalTokens === null) continue;
+      if (usage.totalTokens === null) { diagnosticEvent('usage.reconciliation.unknown',{usageKnown:false}); return; }
       const pricing = estimateRecordedUsageCost(row.model, turn);
       const db = await pool.connect();
       try {
@@ -347,10 +350,13 @@ export async function reconcilePlatformAgentUsage(transport: typeof fetch = fetc
         await db.query('ROLLBACK').catch(() => undefined);
         throw error;
       } finally { db.release(); }
-    } catch {
+      diagnosticEvent('usage.reconciliation.complete',{usageKnown:true,totalTokens:usage.totalTokens});
+    } catch (error) {
+      diagnosticError('usage.reconciliation.failed',error,{usageKnown:false});
       // Keep the event pending for the next run; never infer zero or expose credentials.
       console.warn('[OpenAIUsage] Could not reconcile platform agent usage');
     }
+    });
   }
 }
 
@@ -358,7 +364,8 @@ export function startPlatformUsageReconciliation() {
   let inFlight: Promise<void> | undefined;
   const run = () => {
     if (inFlight) return;
-    inFlight = reconcilePlatformAgentUsage().catch(() => {
+    inFlight = runWithDiagnostics({jobType:'platform_usage_batch',jobId:randomUUID()},() => diagnosticSpan('usage.reconciliation',async () => reconcilePlatformAgentUsage())).catch(error => {
+      diagnosticError('usage.worker.failed',error);
       console.warn('[OpenAIUsage] Platform usage reconciliation failed');
     }).finally(() => { inFlight = undefined; });
   };

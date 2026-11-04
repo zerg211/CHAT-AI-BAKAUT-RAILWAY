@@ -1,3 +1,4 @@
+import { diagnosticSpan, diagnosticEvent, diagnosticError, bindDiagnosticIdentity } from '../observability/diagnostics.js';
 import { randomUUID } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
 import { config } from '../config.js';
@@ -101,12 +102,14 @@ async function currentCatalogRevision(signal?: AbortSignal): Promise<string> {
   if (base.protocol !== 'https:' || base.hostname !== 'catalog-search-production.up.railway.app') {
     throw new Error('Catalog URL is not allowed');
   }
-  const response = await fetch(new URL('/health', base), {
+  const response = await diagnosticSpan('catalog.revision.headers',async () => fetch(new URL('/health', base), {
     signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(5000)]) : AbortSignal.timeout(5000)
-  });
+  }),{endpoint:'/health',method:'GET'});
+  diagnosticEvent('catalog.revision.response',{endpoint:'/health',statusCode:response.status});
   if (!response.ok) throw new Error('Catalog revision is unavailable');
-  const health = await response.json() as { status?: unknown; revision?: unknown };
+  const health = await diagnosticSpan('catalog.revision.body_parse',async () => response.json()) as { status?: unknown; revision?: unknown };
   if (health.status !== 'ok' || typeof health.revision !== 'string' || !health.revision) throw new Error('Catalog revision is unavailable');
+  diagnosticEvent('catalog.revision.observed',{sourceRevision:health.revision});
   return health.revision;
 }
 
@@ -142,7 +145,7 @@ export class PlatformAgentAssistant {
 
   private keepLease(sessionId: string, turnId: string, ownerId: string) {
     const timer = setInterval(() => {
-      void this.conversations.renewTurnExecution({ sessionId, turnId, ownerId, leaseMs: 10_000 }).catch(() => undefined);
+      void diagnosticSpan('assistant.lease.renew', async () => this.conversations.renewTurnExecution({ sessionId, turnId, ownerId, leaseMs: 10_000 })).catch(() => undefined);
     }, 3_000);
     timer.unref();
     return () => clearInterval(timer);
@@ -175,7 +178,7 @@ export class PlatformAgentAssistant {
     let page = result.page;
     if (selectsAllCatalogMatches(result.answer)) {
       try {
-        page = await readFullCatalogSnapshot(result.page ?? {}, input.signal);
+        page = await diagnosticSpan('catalog.snapshot', async () => readFullCatalogSnapshot(result.page ?? {}, input.signal));
       } catch (error) {
         if (error instanceof Error && error.message === 'Catalog did not establish complete structured filter coverage') {
           throw new CatalogClassificationError(error.message);
@@ -215,15 +218,15 @@ export class PlatformAgentAssistant {
       if (missing.length && config.OPENAI_API_KEY && config.OPENAI_PLATFORM_AGENT_ID) {
         const client = new PlatformAgentClient(config.OPENAI_API_KEY, config.OPENAI_PLATFORM_AGENT_ID,
           config.OPENAI_PLATFORM_AGENT_VAULT_ID ? [config.OPENAI_PLATFORM_AGENT_VAULT_ID] : []);
-        const recovered = await client.findHistoricalCandidates(result.sessionId, result.turnId, missing, input.signal);
+        const recovered = await diagnosticSpan('catalog.history', async () => client.findHistoricalCandidates(result.sessionId, result.turnId, missing, input.signal));
         for (const card of cardsFromPage({ items: recovered })) if (!byId.has(card.id)) byId.set(card.id, card);
       }
       history = [...byId.values()];
     }
-    const classified = classifyPage(result.answer, candidates, history, Boolean(page), shownIds);
+    const classified = await diagnosticSpan('assistant.classification.validate', async () => classifyPage(result.answer, candidates, history, Boolean(page), shownIds));
     let catalogRevision = typeof page?.source_revision === 'string' ? page.source_revision : undefined;
     if (!page && classified.cards.length && config.BAKAUT_CATALOG_URL) {
-      catalogRevision = await currentCatalogRevision(input.signal);
+      catalogRevision = await diagnosticSpan('catalog.revision', async () => currentCatalogRevision(input.signal));
       if (classified.cards.some((card) => shownRevisions.get(card.id) !== catalogRevision)) {
         throw new CatalogClassificationError('Agent classification does not account for the catalog page: catalog revision changed or unknown');
       }
@@ -232,9 +235,9 @@ export class PlatformAgentAssistant {
     if (page?.incomplete_text_search === true && candidates.length) {
       answer += '\n\nПо текстовому поиску список может быть неполным.';
     }
-    let cards = await enrichMissingPrices(classified.cards, input.signal);
+    let cards = await diagnosticSpan('catalog.prices', async () => enrichMissingPrices(classified.cards, input.signal));
     const pendingPage = page && Array.isArray(page.pending_price_items) ? { items: page.pending_price_items } : undefined;
-    const pending = await enrichMissingPrices(cardsFromPage(pendingPage), input.signal);
+    const pending = await diagnosticSpan('catalog.prices', async () => enrichMissingPrices(cardsFromPage(pendingPage), input.signal));
     const criteria = page && page.criteria && typeof page.criteria === 'object' ? page.criteria as Record<string, unknown> : undefined;
     const budget = typeof criteria?.max_price_rub === 'number' && Number.isFinite(criteria.max_price_rub) ? criteria.max_price_rub : null;
     if (budget !== null && selectsAllCatalogMatches(result.answer)) {
@@ -269,24 +272,31 @@ export class PlatformAgentAssistant {
       await db.query('UPDATE platform_agent_sessions SET next_cursor=$2, seen_product_ids=$3::jsonb, updated_at=now() WHERE session_id=$1',
         [input.sessionId, null, JSON.stringify([...input.prior, ...ids])]);
       const repository = new ConversationRepository(db);
-      const message = await repository.addAssistantMessageForTurn({ sessionId: input.sessionId, turnId: input.turnId,
+      const message = await diagnosticSpan('assistant.message.persist', async () => repository.addAssistantMessageForTurn({ sessionId: input.sessionId, turnId: input.turnId,
         executionOwner: input.ownerId, content: answer, metadata, answerContract: { source: 'platform_agent' },
-        recovered: input.recovered, responsePayload });
-      await db.query('COMMIT');
+        recovered: input.recovered, responsePayload }));
+      await diagnosticSpan('assistant.transaction.commit', async () => db.query('COMMIT'));
+      diagnosticEvent('assistant.answer.persisted', { persisted: true, messageId: message.id });
       await input.onDelta?.(answer);
       return { ...responsePayload, assistantMessageId: message.id };
-    } catch (error) { await db.query('ROLLBACK'); throw error; } finally { db.release(); }
+    } catch (error) {
+      diagnosticError('assistant.persistence.primary_failed', error);
+      try { await diagnosticSpan('assistant.transaction.rollback', async () => db.query('ROLLBACK')); } catch { /* Keep the primary failure. */ }
+      throw error;
+    } finally { db.release(); }
   }
 
   async generateAnswer(input: AgentManagerGenerateInput): Promise<ChatResponsePayload> {
+    bindDiagnosticIdentity({ sessionId: input.sessionId, turnId: input.turnId });
     if (!input.turnId) throw new Error('Turn ID required');
     const old = await this.completed(input.sessionId, input.turnId);
-    if (old) return old;
-    const session = await this.conversations.getSession(input.sessionId);
+    if (old) { diagnosticEvent('assistant.deduplicated', { deduplicated: true }); return old; }
+    const session = await diagnosticSpan('assistant.session.read', async () => this.conversations.getSession(input.sessionId));
     if (!session || session.status !== 'active') throw new Error('Conversation session is not active');
     if (!config.OPENAI_API_KEY || !config.OPENAI_PLATFORM_AGENT_ID) throw new Error('Platform agent is not configured');
     const ownerId = randomUUID();
-    const claimed = await this.conversations.claimTurnExecution({ sessionId: input.sessionId, turnId: input.turnId, ownerId, leaseMs: 10_000 });
+    const claimed = await diagnosticSpan('assistant.lease.claim', async () => this.conversations.claimTurnExecution({ sessionId: input.sessionId, turnId: input.turnId!, ownerId, leaseMs: 10_000 }));
+    diagnosticEvent('assistant.lease.result', { leaseAcquired: Boolean(claimed) });
     if (!claimed) throw new TurnExecutionInProgressError();
     const stopLease = this.keepLease(input.sessionId, input.turnId, ownerId);
     try {
@@ -299,21 +309,22 @@ export class PlatformAgentAssistant {
       let submissionKey = input.turnId;
       const submission: { current: { sessionId: string; previousTurnId: string | null } | null } = { current: null };
       const checkpoint = async (id: string, previousTurnId: string | null, submitted: boolean) => {
-        await this.conversations.upsertTurnCheckpoint({ sessionId: input.sessionId, turnId: input.turnId!, executionOwner: ownerId,
+        await diagnosticSpan('assistant.checkpoint.write', async () => this.conversations.upsertTurnCheckpoint({ sessionId: input.sessionId, turnId: input.turnId!, executionOwner: ownerId,
           checkpoint: 'platform_agent_submission', status: 'running',
-          payload: { agentSessionId: id, previousTurnId, reservation, submitted, submittedText, idempotencyKey: submissionKey } });
+          payload: { agentSessionId: id, previousTurnId, reservation, submitted, submittedText, idempotencyKey: submissionKey } }), { submitted, agentSessionId: id });
       };
       let result: Awaited<ReturnType<PlatformAgentClient['waitForTurn']>> | null = null;
       try {
-      result = await client.run({ sessionId: row?.agent_session_id, idempotencyKey: input.turnId, signal: input.signal,
+      result = await diagnosticSpan('assistant.execution', async () => client.run({ sessionId: row?.agent_session_id, idempotencyKey: input.turnId!, signal: input.signal,
         message: input.userMessage,
-        onSession: async (id) => { await pool.query('INSERT INTO platform_agent_sessions(session_id,agent_session_id) VALUES($1,$2) ON CONFLICT(session_id) DO NOTHING', [input.sessionId, id]); },
+        onSession: async (id) => { await diagnosticSpan('assistant.session.persist', async () => pool.query('INSERT INTO platform_agent_sessions(session_id,agent_session_id) VALUES($1,$2) ON CONFLICT(session_id) DO NOTHING', [input.sessionId, id])); },
         onBeforeSubmit: async (id, previousTurnId, submitted, text) => { submission.current = { sessionId: id, previousTurnId }; submittedText = text; await checkpoint(id, previousTurnId, submitted); },
-        onSubmitted: async (id, previousTurnId) => checkpoint(id, previousTurnId, true) });
+        onSubmitted: async (id, previousTurnId) => checkpoint(id, previousTurnId, true) }));
       try {
-        return await this.saveResult({ sessionId: input.sessionId, turnId: input.turnId, ownerId, result, reservation, prior: [],
-          needState: session.needState, onDelta: input.onDelta, signal: input.signal });
+        return await diagnosticSpan('assistant.result.validate_persist', async () => this.saveResult({ sessionId: input.sessionId, turnId: input.turnId!, ownerId, result: result!, reservation, prior: [],
+          needState: session.needState, onDelta: input.onDelta, signal: input.signal }));
       } catch (error) {
+        diagnosticError('assistant.validation.failed', error);
         if (!(error instanceof CatalogClassificationError) || input.signal?.aborted) throw error;
         // Retry once with a new catalog search. A failed, undisplayed selection
         // is not buyer-visible history and must never be treated as confirmed.
@@ -321,25 +332,26 @@ export class PlatformAgentAssistant {
         const agentSessionId = result.sessionId;
         submissionKey = `${input.turnId}-catalog-retry`;
         result = null;
-        result = await client.run({ sessionId: agentSessionId, idempotencyKey: submissionKey, signal: input.signal,
+        result = await diagnosticSpan('assistant.execution', async () => client.run({ sessionId: agentSessionId, idempotencyKey: submissionKey, signal: input.signal,
           message: `Предыдущий ответ не был показан покупателю: его список товаров не прошёл проверку. Для ответа на исходный вопрос заново вызови search_products, проверь актуальные карточки и классифицируй все товары новой выдачи. Не считай товары предыдущих неудачных попыток показанными. Исходный вопрос покупателя: ${input.userMessage}`,
           onBeforeSubmit: async (id, previousTurnId, submitted, text) => { submission.current = { sessionId: id, previousTurnId }; submittedText = text; await checkpoint(id, previousTurnId, submitted); },
-          onSubmitted: async (id, previousTurnId) => checkpoint(id, previousTurnId, true) });
+          onSubmitted: async (id, previousTurnId) => checkpoint(id, previousTurnId, true) }));
         if (!result.page) {
           const usageRecord = { id: result.turnId, usage: result.usage };
           bindOpenAIUsageReservation(usageRecord, reservation);
           await recordOpenAIUsageOnce('platform_agent', result.model, usageRecord);
           throw new CatalogClassificationError('Catalog retry did not return a fresh search');
         }
-        return await this.saveResult({ sessionId: input.sessionId, turnId: input.turnId, ownerId, result, reservation, prior: [],
-          needState: session.needState, onDelta: input.onDelta, signal: input.signal });
+        return await diagnosticSpan('assistant.result.validate_persist', async () => this.saveResult({ sessionId: input.sessionId, turnId: input.turnId!, ownerId, result: result!, reservation, prior: [],
+          needState: session.needState, onDelta: input.onDelta, signal: input.signal }));
       }
       } catch (error) {
+        const causalEventId = diagnosticError('assistant.execution.primary_failed', error);
         if (!input.signal?.aborted || input.signal.reason === 'platform_agent_explicit_cancel' || !submission.current) throw error;
         const alreadySaved = await this.completed(input.sessionId, input.turnId);
         if (alreadySaved) return alreadySaved;
         const graceSignal = AbortSignal.timeout(25_000);
-        result ??= await client.settleAtDeadline({ ...submission.current, signal: graceSignal });
+        result ??= await diagnosticSpan('assistant.reconcile', async () => client.settleAtDeadline({ ...submission.current!, signal: graceSignal }), { causalEventId, recovery: true });
         if (!result) throw error;
         if (submissionKey !== input.turnId && !result.page) {
           const usageRecord = { id: result.turnId, usage: result.usage };
@@ -347,16 +359,17 @@ export class PlatformAgentAssistant {
           await recordOpenAIUsageOnce('platform_agent', result.model, usageRecord);
           throw new CatalogClassificationError('Catalog retry did not return a fresh search');
         }
-        return await this.saveResult({ sessionId: input.sessionId, turnId: input.turnId, ownerId, result, reservation, prior: [],
-          needState: session.needState, recovered: true, onDelta: input.onDelta, signal: graceSignal });
+        return await diagnosticSpan('assistant.result.validate_persist', async () => this.saveResult({ sessionId: input.sessionId, turnId: input.turnId!, ownerId, result: result!, reservation, prior: [],
+          needState: session.needState, recovered: true, onDelta: input.onDelta, signal: graceSignal }));
       }
     } finally {
       stopLease();
-      await this.conversations.releaseTurnExecution({ sessionId: input.sessionId, turnId: input.turnId, ownerId }).catch(() => undefined);
+      await diagnosticSpan('assistant.lease.release', async () => this.conversations.releaseTurnExecution({ sessionId: input.sessionId, turnId: input.turnId!, ownerId })).catch(() => undefined);
     }
   }
 
   async recoverTurn(input: AgentManagerRecoverInput): Promise<ChatResponsePayload> {
+    bindDiagnosticIdentity({ sessionId: input.sessionId, turnId: input.turnId });
     while (!input.signal?.aborted) {
       const completed = await this.completed(input.sessionId, input.turnId);
       if (completed) { await input.onDelta?.(completed.answer); return completed; }
@@ -365,36 +378,42 @@ export class PlatformAgentAssistant {
       if (!turn || (turn.deadlineAt && Date.parse(turn.deadlineAt) + 30_000 <= Date.now())) throw new Error('Turn deadline expired');
       const deadlineExpired = Boolean(turn.deadlineAt && Date.parse(turn.deadlineAt) <= Date.now());
       const ownerId = randomUUID();
-      const claimed = await this.conversations.claimTurnExecution({ sessionId: input.sessionId, turnId: input.turnId, ownerId, leaseMs: 10_000 });
+      const claimed = await diagnosticSpan('assistant.lease.claim', async () => this.conversations.claimTurnExecution({ sessionId: input.sessionId, turnId: input.turnId!, ownerId, leaseMs: 10_000 }));
+      diagnosticEvent('assistant.lease.result', { leaseAcquired: Boolean(claimed), recovery: true });
       if (!claimed) { await delay(1000, undefined, { signal: input.signal }); continue; }
       const stopLease = this.keepLease(input.sessionId, input.turnId, ownerId);
       try {
-        const rows = await this.conversations.listTurnCheckpoints(input.sessionId, input.turnId);
+        const rows = await diagnosticSpan('assistant.checkpoint.read', async () => this.conversations.listTurnCheckpoints(input.sessionId, input.turnId));
         const checkpoint = rows.find((row) => row.checkpoint === 'platform_agent_submission');
+        diagnosticEvent('assistant.checkpoint.found', { checkpointFound: Boolean(checkpoint) });
         const data = checkpoint?.payload as Record<string, unknown> | undefined;
         if (!data || typeof data.agentSessionId !== 'string' || !(data.previousTurnId === null || typeof data.previousTurnId === 'string')) {
           throw new Error('Agent submission is not recoverable without a saved identity');
         }
-        const session = await this.conversations.getSession(input.sessionId);
+        const agentSessionId = data.agentSessionId;
+        const previousTurnId = data.previousTurnId;
+        const session = await diagnosticSpan('assistant.session.read', async () => this.conversations.getSession(input.sessionId));
         if (!session || !config.OPENAI_API_KEY || !config.OPENAI_PLATFORM_AGENT_ID) throw new Error('Platform agent is not configured');
         const client = new PlatformAgentClient(config.OPENAI_API_KEY, config.OPENAI_PLATFORM_AGENT_ID,
           config.OPENAI_PLATFORM_AGENT_VAULT_ID ? [config.OPENAI_PLATFORM_AGENT_VAULT_ID] : []);
         let result;
         try {
           if (deadlineExpired) {
-            result = await client.settleAtDeadline({ sessionId: data.agentSessionId, previousTurnId: data.previousTurnId, signal: AbortSignal.timeout(25_000) });
+            result = await diagnosticSpan('assistant.reconcile', async () => client.settleAtDeadline({ sessionId: agentSessionId, previousTurnId, signal: AbortSignal.timeout(25_000) }));
             if (!result) throw new Error('Agent turn did not complete before the deadline');
           } else {
           if (data.submitted === false) {
             if (typeof data.submittedText !== 'string') throw new Error('Saved agent submission is incomplete');
-            await client.submitMessage(data.agentSessionId, data.submittedText,
-              typeof data.idempotencyKey === 'string' ? data.idempotencyKey : input.turnId, input.signal);
+            const submittedText = data.submittedText;
+            await diagnosticSpan('assistant.recovery.submit', async () => client.submitMessage(agentSessionId, submittedText,
+              typeof data.idempotencyKey === 'string' ? data.idempotencyKey : input.turnId, input.signal));
           }
-          result = await client.waitForTurn({ sessionId: data.agentSessionId, previousTurnId: data.previousTurnId, signal: input.signal });
+          result = await diagnosticSpan('assistant.recovery.wait', async () => client.waitForTurn({ sessionId: agentSessionId, previousTurnId, signal: input.signal }));
           }
         } catch (error) {
+          const causalEventId = diagnosticError('assistant.execution.primary_failed', error);
           if (!input.signal?.aborted || input.signal.reason === 'platform_agent_explicit_cancel') throw error;
-          result = await client.settleAtDeadline({ sessionId: data.agentSessionId, previousTurnId: data.previousTurnId, signal: AbortSignal.timeout(25_000) });
+          result = await diagnosticSpan('assistant.reconcile', async () => client.settleAtDeadline({ sessionId: agentSessionId, previousTurnId, signal: AbortSignal.timeout(25_000) }), { causalEventId, recovery: true });
           if (!result) throw error;
         }
         if (data.idempotencyKey === `${input.turnId}-catalog-retry` && !result.page) {
@@ -403,13 +422,13 @@ export class PlatformAgentAssistant {
           await recordOpenAIUsageOnce('platform_agent', result.model, usageRecord);
           throw new CatalogClassificationError('Catalog retry did not return a fresh search');
         }
-        return await this.saveResult({ sessionId: input.sessionId, turnId: input.turnId, ownerId, result,
+        return await diagnosticSpan('assistant.result.validate_persist', async () => this.saveResult({ sessionId: input.sessionId, turnId: input.turnId!, ownerId, result,
           reservation: typeof data.reservation === 'string' ? data.reservation : null,
           prior: Array.isArray(data.prior) ? data.prior.filter((id): id is string => typeof id === 'string') : [],
-          needState: session.needState, recovered: true, onDelta: input.onDelta, signal: deadlineExpired || input.signal?.aborted ? AbortSignal.timeout(25_000) : input.signal });
+          needState: session.needState, recovered: true, onDelta: input.onDelta, signal: deadlineExpired || input.signal?.aborted ? AbortSignal.timeout(25_000) : input.signal }));
       } finally {
         stopLease();
-        await this.conversations.releaseTurnExecution({ sessionId: input.sessionId, turnId: input.turnId, ownerId }).catch(() => undefined);
+        await diagnosticSpan('assistant.lease.release', async () => this.conversations.releaseTurnExecution({ sessionId: input.sessionId, turnId: input.turnId!, ownerId })).catch(() => undefined);
       }
     }
     throw new Error('Recovery was aborted');

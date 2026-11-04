@@ -1,5 +1,6 @@
 import React, { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
+import { DiagnosticTimeline } from './DiagnosticTimeline';
 import {OutcomeDashboard} from './OutcomeDashboard';
 import {createAnswerDeliveryMetric} from './answerDeliveryMetric';
 import {
@@ -1032,6 +1033,7 @@ function AdminApp() {
 
       {error ? <div className="admin-error">{error}</div> : null}
       <OutcomeDashboard baseUrl={currentSource.baseUrl} token={token} />
+      <DiagnosticTimeline baseUrl={currentSource.baseUrl} token={token} />
 
       <section className="admin-layout">
         <aside className="admin-sidebar">

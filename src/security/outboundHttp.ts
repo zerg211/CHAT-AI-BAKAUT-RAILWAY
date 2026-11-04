@@ -1,3 +1,4 @@
+import { diagnosticSpan, diagnosticEvent, diagnosticError, diagnosticAbortSource } from '../observability/diagnostics.js';
 import { lookup as dnsLookup } from 'node:dns/promises';
 import { isIP } from 'node:net';
 import ipaddr from 'ipaddr.js';
@@ -139,10 +140,10 @@ export async function resolveSafeOutboundUrl(
   const literalFamily = isIP(literalHostname);
   const addresses = literalFamily
     ? [{ address: literalHostname, family: literalFamily }]
-    : await abortableDnsLookup(
+    : await diagnosticSpan('network.dns',() => abortableDnsLookup(
         Promise.resolve().then(() => (options.resolver ?? dnsLookup)(url.hostname, { all: true, verbatim: true })),
         options.signal
-      );
+      ));
   options.signal?.throwIfAborted();
   if (!addresses.length || addresses.some((item) => isPrivateOrReservedIp(item.address))) {
     throw new UnsafeOutboundUrlError('Outbound hostname resolves to a private or reserved address');
@@ -250,7 +251,7 @@ export async function readBoundedResponseBytes(
 }
 
 export async function safeFetchBytes(value: string, options: SafeOutboundFetchOptions): Promise<SafeOutboundFetchResult> {
-  return timeOperation('http', 'safe_fetch_bytes', () => fetchBytes(value, options));
+  return timeOperation('http', 'safe_fetch_bytes', () => diagnosticSpan('network.fetch',() => fetchBytes(value, options)));
 }
 
 async function fetchBytes(value: string, options: SafeOutboundFetchOptions): Promise<SafeOutboundFetchResult> {
@@ -261,21 +262,23 @@ async function fetchBytes(value: string, options: SafeOutboundFetchOptions): Pro
   let current = value;
 
   for (let redirectCount = 0; redirectCount <= maxRedirects; redirectCount += 1) {
-    const resolved = await resolveSafeOutboundUrl(current, {
+    const resolved = await diagnosticSpan('network.url_validation',() => resolveSafeOutboundUrl(current, {
       allowedOrigin: options.allowedOrigin,
       resolver: options.resolver,
       signal
-    });
+    }));
     const dispatcher = createPinnedOutboundAgent(resolved.address, resolved.family);
     try {
-      const response = await (options.fetcher ?? fetch)(resolved.url, {
+      const response = await diagnosticSpan('network.headers',() => (options.fetcher ?? fetch)(resolved.url, {
         method: 'GET',
         headers: options.headers,
         redirect: 'manual',
         signal,
         dispatcher
-      });
+      }));
+      diagnosticEvent('network.response',{statusCode:response.status,attempt:redirectCount+1});
       if (redirectStatuses.has(response.status)) {
+        diagnosticEvent('network.redirect',{statusCode:response.status,attempt:redirectCount+1});
         const location = response.headers.get('location');
         await response.body?.cancel().catch(() => undefined);
         if (!location) throw new UnsafeOutboundUrlError('Outbound redirect has no location');
@@ -285,7 +288,7 @@ async function fetchBytes(value: string, options: SafeOutboundFetchOptions): Pro
       }
       const responseHeaders = response.headers as unknown as Headers;
       const responseUrl = resolved.url.toString();
-      const bytes = await readBoundedResponseBytes(
+      const bytes = await diagnosticSpan('network.body',() => readBoundedResponseBytes(
         response as unknown as Response,
         options.maxBytes,
         options.responseMaxBytes
@@ -296,14 +299,15 @@ async function fetchBytes(value: string, options: SafeOutboundFetchOptions): Pro
               prefix
             })
           : undefined
-      );
+      ));
+      diagnosticEvent('network.body.complete',{responseBytes:bytes.byteLength,statusCode:response.status});
       return {
         url: responseUrl,
         status: response.status,
         headers: responseHeaders,
         bytes
       };
-    } finally {
+    } catch(error) { diagnosticError('network.request.failed',error,{abortSource:diagnosticAbortSource(signal)});throw error; } finally {
       // This dispatcher owns only this request. The body has either been read,
       // cancelled, or failed; there is no shared work to drain. Graceful close
       // can wait for an aborted connection well beyond the request deadline.

@@ -601,3 +601,91 @@ describe('streamChatMessage watchdog and explicit continuation', () => {
     expect(fetcher).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('advisory browser operation reports', () => {
+  const sessionId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+  const turnId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+  const requestId = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
+
+  async function inBrowser(run: (reporter: ReturnType<typeof vi.fn<typeof fetch>>) => Promise<void>) {
+    const reporter = vi.fn<typeof fetch>(async () => new Response(null, { status: 204 }));
+    vi.stubGlobal('document', {});
+    vi.stubGlobal('fetch', reporter);
+    try { await run(reporter); } finally { vi.unstubAllGlobals(); }
+  }
+  function report(reporter: ReturnType<typeof vi.fn<typeof fetch>>) {
+    expect(reporter).toHaveBeenCalledOnce();
+    return JSON.parse(String(reporter.mock.calls[0]?.[1]?.body));
+  }
+
+  it('correlates headers and SSE while excluding all question, status, answer and error content', async () => {
+    await inBrowser(async (reporter) => {
+      const payload = { answer: 'PRIVATE_ANSWER', productCards: [], usedWebSearch: false };
+      const fetcher = vi.fn(async () => new Response(
+        sseEvent('turn', { turnId }) +
+        sseEvent('status', { status: 'PRIVATE_STATUS' }) +
+        sseEvent('status', { status: 'PRIVATE_STATUS_2' }) +
+        sseEvent('delta', { delta: 'PRIVATE_DELTA' }) +
+        sseEvent('delta', { delta: 'PRIVATE_DELTA_2' }) +
+        sseEvent('done', payload),
+        { headers: { 'x-request-id': requestId } }
+      ));
+      await expect(streamChatMessage('', sessionId, 'PRIVATE_QUESTION', { onDelta: () => undefined }, undefined, {
+        fetcher, visitorId, clientMessageId: sessionId
+      })).resolves.toEqual(payload);
+      const result = report(reporter);
+      expect(result).toMatchObject({ requestId, turnId, clientMessageId: sessionId, recovery: false });
+      expect(result.events.map((event: { type: string }) => event.type)).toEqual([
+        'request_sent', 'headers_received', 'turn_identified', 'status_received', 'first_answer_received', 'done_received', 'stream_closed'
+      ]);
+      expect(JSON.stringify(result)).not.toContain('PRIVATE_');
+      expect(fetcher).toHaveBeenCalledOnce();
+    });
+  });
+
+  it('preserves fetch errors and abort identity before headers and reports safely', async () => {
+    for (const error of [new Error('PRIVATE_NETWORK_ERROR'), new DOMException('PRIVATE_ABORT', 'AbortError')]) {
+      await inBrowser(async (reporter) => {
+        const fetcher = vi.fn(async () => { throw error; });
+        await expect(streamChatMessage('', sessionId, 'PRIVATE_QUESTION', { onDelta: () => undefined }, undefined, {
+          fetcher, visitorId
+        })).rejects.toBe(error);
+        const result = report(reporter);
+        expect(result.events.map((event: { type: string }) => event.type)).toEqual([
+          'request_sent', error.name === 'AbortError' ? 'aborted' : 'stream_error'
+        ]);
+        expect(JSON.stringify(result)).not.toContain('PRIVATE_');
+      });
+    }
+  });
+
+  it('records durable replay recovery completion without extra business requests', async () => {
+    await inBrowser(async (reporter) => {
+      const payload = { answer: 'PRIVATE_SAVED_ANSWER', productCards: [], usedWebSearch: false };
+      const fetcher = vi.fn(async () => new Response(JSON.stringify({ events: [], result: payload }), {
+        headers: { 'x-request-id': requestId }
+      }));
+      await expect(recoverChatTurn('', sessionId, turnId, visitorId, { onDelta: () => undefined }, undefined, { fetcher }))
+        .resolves.toEqual(payload);
+      const result = report(reporter);
+      expect(result).toMatchObject({ recovery: true, turnId, requestId });
+      expect(result.events.map((event: { type: string }) => event.type)).toContain('recovery_completed');
+      expect(JSON.stringify(result)).not.toContain('PRIVATE_');
+      expect(fetcher).toHaveBeenCalledOnce();
+    });
+  });
+
+  it('records terminal recovery failure and preserves cancellation', async () => {
+    await inBrowser(async (reporter) => {
+      const error = new DOMException('PRIVATE_ABORT', 'AbortError');
+      const fetcher = vi.fn(async () => { throw error; });
+      await expect(recoverChatTurn('', sessionId, turnId, visitorId, { onDelta: () => undefined }, undefined, { fetcher }))
+        .rejects.toBe(error);
+      const types = report(reporter).events.map((event: { type: string }) => event.type);
+      expect(types).toContain('aborted');
+      expect(types).toContain('recovery_failed');
+      expect(types).not.toContain('recovery_completed');
+      expect(fetcher).toHaveBeenCalledOnce();
+    });
+  });
+});

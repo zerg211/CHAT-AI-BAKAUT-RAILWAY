@@ -1,3 +1,4 @@
+import { diagnosticSpan, diagnosticEvent, diagnosticError } from '../observability/diagnostics.js';
 import { fetch } from 'undici';
 import { config } from '../config.js';
 import type { ConversationSession, Lead, Message } from '../shared/types.js';
@@ -266,6 +267,7 @@ export async function sendPreparedLeadEmail(snapshot: LeadEmailRequestSnapshot):
   // A changed destination requires reconciliation, not forwarding current credentials
   // to the old endpoint or silently changing an already attempted request.
   if (snapshot.url !== config.EMAIL_HTTP_URL || snapshot.method !== config.EMAIL_HTTP_METHOD) {
+    diagnosticEvent('email.dispatch.skipped', { outcome: 'destination_changed' });
     return {ok: false, skipped: true, error: 'email_destination_changed'};
   }
   const controller = new AbortController();
@@ -276,13 +278,14 @@ export async function sendPreparedLeadEmail(snapshot: LeadEmailRequestSnapshot):
     if (name && valueParts.length) headers[name.trim()] = valueParts.join(':').trim();
   }
   try {
-    const response = await fetch(snapshot.url, {
+    const response = await diagnosticSpan('email.http.headers', async () => fetch(snapshot.url, {
       method: snapshot.method,
       headers,
       signal: controller.signal,
       body: snapshot.body
-    });
-    const textResponse = await response.text();
+    }));
+    diagnosticEvent('email.http.response', { statusCode: response.status, outcome: response.ok ? 'accepted' : 'rejected' });
+    const textResponse = await diagnosticSpan('email.http.body', async () => response.text());
     let parsed: unknown = textResponse;
     try {
       parsed = JSON.parse(textResponse);
@@ -291,6 +294,7 @@ export async function sendPreparedLeadEmail(snapshot: LeadEmailRequestSnapshot):
     }
     return { ok: response.ok, status: response.status, response: parsed };
   } catch (error) {
+    diagnosticError('email.dispatch.failed', error, { knownOutcome: 'unknown', aborted: controller.signal.aborted, abortSource: controller.signal.aborted ? 'email_timeout' : 'unknown' });
     return { ok: false, error: String(error) };
   } finally {
     clearTimeout(timeout);

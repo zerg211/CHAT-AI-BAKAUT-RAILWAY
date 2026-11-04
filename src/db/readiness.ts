@@ -1,3 +1,4 @@
+import { diagnosticError, diagnosticEvent } from '../observability/diagnostics.js';
 import pg from 'pg';
 
 /** One bounded, shared dependency probe per app instance. Never calls a model. */
@@ -34,8 +35,8 @@ export function createReadinessProbe(connectionString: string, capabilitiesReady
           AND tgname IN ('a_product_price_observation','product_price_fact_mirror') AND tgenabled IN ('O','A'))
         AND (NOT $1::boolean OR to_regclass('public.platform_agent_sessions') IS NOT NULL) AS ready`, [platformAgentEnabled])
         .then(result => result.rows[0]?.ready === true)
-        .catch(() => false)
-        .then(ready => { cached = { ready, until: Date.now() + 2000 }; return ready; })
+        .catch(error => {diagnosticError('readiness.database.failed',error);return false;})
+        .then(ready => { diagnosticEvent('readiness.result',{outcome:ready?'ready':'not_ready'}); cached = { ready, until: Date.now() + 2000 }; return ready; })
         .finally(() => { inFlight = undefined; });
       return inFlight;
     },

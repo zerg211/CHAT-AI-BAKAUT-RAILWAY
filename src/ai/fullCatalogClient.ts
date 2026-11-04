@@ -1,3 +1,4 @@
+import { diagnosticSpan, diagnosticEvent } from '../observability/diagnostics.js';
 import { config } from '../config.js';
 
 type JsonObject = Record<string, unknown>;
@@ -6,6 +7,7 @@ const same = (left: unknown, right: unknown) => JSON.stringify(left) === JSON.st
 
 /** Read the full, already filtered snapshot without sending each product back through the model. */
 export async function readFullCatalogSnapshot(firstPage: JsonObject, signal?: AbortSignal, transport: typeof fetch = fetch): Promise<JsonObject> {
+  return diagnosticSpan('catalog.full_snapshot', async () => {
   if (!config.BAKAUT_MCP_TOKEN) throw new Error('Catalog access is not configured');
   const criteria = asObject(firstPage.criteria);
   const filters = asObject(firstPage.applied_filters);
@@ -26,12 +28,13 @@ export async function readFullCatalogSnapshot(firstPage: JsonObject, signal?: Ab
   const request = { query: criteria.query, category: criteria.category,
     min_nominal_kw: criteria.min_nominal_kw ?? null, max_nominal_kw: criteria.max_nominal_kw ?? null,
     max_price_rub: criteria.max_price_rub ?? null, expected_revision: firstPage.source_revision };
-  const response = await transport(new URL('/search-full', base), {
+  const response = await diagnosticSpan('catalog.http.headers', async () => transport(new URL('/search-full', base), {
     method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${config.BAKAUT_MCP_TOKEN}` },
     body: JSON.stringify(request), signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(10_000)]) : AbortSignal.timeout(10_000)
-  });
+  }), { endpoint: '/search-full', method: 'POST' });
+  diagnosticEvent('catalog.http.response', { statusCode: response.status, endpoint: '/search-full', method: 'POST' });
   if (!response.ok) throw new Error(`Full catalog request failed (${response.status})`);
-  const body = asObject(await response.json());
+  const body = asObject(await diagnosticSpan('catalog.http.body_parse', async () => response.json()));
   const groups = asObject(body?.groups);
   const counts = asObject(body?.counts);
   if (!body || body.status !== 'ok' || body.source_revision !== firstPage.source_revision || body.snapshot !== firstPage.snapshot ||
@@ -49,5 +52,7 @@ export async function readFullCatalogSnapshot(firstPage: JsonObject, signal?: Ab
     return item && (item.price_rub === null || item.price_rub === undefined) &&
       Array.isArray(item.conditions) && item.conditions.length === 1 && item.conditions[0] === 'нет цены для проверки бюджета';
   });
+  diagnosticEvent('catalog.full_snapshot.validated', { itemCount: items.length, unknownCount: pendingPriceItems.length, sourceRevision:firstPage.source_revision,snapshotId:firstPage.snapshot });
   return { ...firstPage, items, pending_price_items: pendingPriceItems, has_more: false, next_cursor: null };
+  });
 }

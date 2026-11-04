@@ -1,6 +1,7 @@
+import { randomUUID } from 'node:crypto';
+import { diagnosticSpan, diagnosticEvent, diagnosticError, runWithDiagnostics, safeErrorFields } from '../observability/diagnostics.js';
 import { ConversationRepository, LeadRepository, type LeadOutboxItem } from '../db/repositories.js';
 import { prepareLeadEmailRequest, sendPreparedLeadEmail } from '../email/httpEmail.js';
-import { safeError } from './responseUtils.js';
 
 function nextAttemptAt(attemptCount: number) {
   const delayMinutes = Math.min(60, Math.max(1, 2 ** Math.max(0, attemptCount - 1)));
@@ -29,22 +30,27 @@ export async function processLeadOutboxItem(input: {
   conversations: ConversationRepository;
   leads: LeadRepository;
 }) {
+  return runWithDiagnostics({ jobType: 'lead_outbox_item', jobId: randomUUID(), outboxId: input.item.id, leadId: input.item.leadId, sessionId: input.item.sessionId, turnId: input.item.turnId }, () => diagnosticSpan('outbox.item', async () => {
+  diagnosticEvent('outbox.attempt', { attempt: input.item.attemptCount });
   const leaseToken = input.item.leaseToken;
-  if (!leaseToken) return {ok: false, error: 'lease_missing'};
+  if (!leaseToken) { diagnosticEvent('outbox.lease.missing', { leaseAcquired: false }); return {ok: false, error: 'lease_missing'}; }
   const fail = async (error: string, dead = false) => {
     const updated = await input.leads.markLeadOutboxFailed({id: input.item.id, leaseToken, error, dead,
       nextAttemptAt: dead ? null : nextAttemptAt(input.item.attemptCount)});
+    diagnosticEvent('outbox.failure.recorded', { outcome: dead ? 'reconciliation_required' : 'retry_scheduled', persisted: Boolean(updated), nextRetryMs: dead ? 0 : Math.min(60, Math.max(1, 2 ** Math.max(0, input.item.attemptCount - 1))) * 60_000 });
     return {ok: false, dead, error, committed: Boolean(updated)};
   };
   // A legacy retry has no immutable wire request. Its prior outcome cannot be
   // reconstructed safely from a mutable transcript or current email settings.
   if (!input.item.requestSnapshot && input.item.attemptCount > 1) {
+    diagnosticEvent('outbox.outcome.unknown', { knownOutcome: 'unknown' });
     return fail('reconciliation_required:legacy_request_unknown', true);
   }
   if (input.item.firstAttemptAt) {
     const age = Date.now() - Date.parse(input.item.firstAttemptAt);
     if (input.item.requestSnapshot?.provider !== 'resend' || !Number.isFinite(age) || age < 0 || age >= 23 * 60 * 60_000) {
-      return fail('reconciliation_required:idempotency_window_unavailable', true);
+      diagnosticEvent('outbox.outcome.unknown', { knownOutcome: 'unknown' });
+    return fail('reconciliation_required:idempotency_window_unavailable', true);
     }
   }
   let snapshot = input.item.requestSnapshot;
@@ -65,15 +71,18 @@ export async function processLeadOutboxItem(input: {
   snapshot = prepared;
   }
   const dispatch = await input.leads.prepareLeadOutboxDispatch({id: input.item.id, leaseToken, snapshot});
-  if (!dispatch?.requestSnapshot) return {ok: false, error: 'lease_lost'};
-  const emailResult = await sendPreparedLeadEmail(dispatch.requestSnapshot);
+  if (!dispatch?.requestSnapshot) { diagnosticEvent('outbox.lease.lost', { leaseAcquired: false }); return {ok: false, error: 'lease_lost'}; }
+  const emailResult = await diagnosticSpan('outbox.dispatch', async () => sendPreparedLeadEmail(dispatch.requestSnapshot!));
+  diagnosticEvent('outbox.dispatch.result', { outcome: emailResult.ok ? 'accepted' : emailResult.status ? 'rejected' : 'unknown', statusCode: emailResult.status });
   if (emailResult.ok) {
     const committed = await input.leads.markLeadOutboxSent(input.item.id, leaseToken, emailResult as unknown as Record<string, unknown>);
+    diagnosticEvent('outbox.receipt.persisted', { persisted: Boolean(committed), knownOutcome: committed ? 'accepted' : 'unknown' });
     return committed ? {ok: true} : {ok: false, error: 'lease_lost_after_send'};
   }
   const error = JSON.stringify(emailResult).slice(0, 1000);
   if (emailResult.skipped) return fail(`reconciliation_required:${error}`, true);
   return fail(error);
+  }));
 }
 
 export async function processLeadOutboxBatch(input: {
@@ -105,8 +114,9 @@ export function startLeadOutboxWorker(input: {
   let inFlight: Promise<unknown> | undefined;
   const run = () => {
     if (stopped || inFlight) return;
-    inFlight = processLeadOutboxBatch({ shouldContinue: () => !stopped }).catch((error) => {
-      input.log?.warn({ error: safeError(error) }, 'lead outbox worker failed');
+    inFlight = runWithDiagnostics({ jobType: 'lead_outbox_batch', jobId: randomUUID() }, () => diagnosticSpan('outbox.batch', async () => processLeadOutboxBatch({ shouldContinue: () => !stopped }))).catch((error) => {
+      diagnosticError('outbox.worker.failed', error);
+      input.log?.warn({ ...safeErrorFields(error) }, 'lead outbox worker failed');
     }).finally(() => { inFlight = undefined; });
   };
   run();
