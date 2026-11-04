@@ -1,3 +1,4 @@
+import { diagnosticEvent } from '../observability/diagnostics.js';
 import { Query } from 'pg';
 import type { Pool, PoolClient, QueryResult, QueryResultRow } from 'pg';
 import { pool } from './pool.js';
@@ -745,8 +746,10 @@ export class ConversationRepository {
   async recordAnswerDelivery(input:{sessionId:string;messageId:string;firstUsefulContentMs:number}) {
     const result=await this.db.query(`UPDATE messages SET metadata=CASE WHEN metadata ? 'clientDelivery' THEN metadata
       ELSE jsonb_set(coalesce(metadata,'{}'::jsonb),'{clientDelivery}',$3::jsonb) END
-      WHERE id=$2 AND session_id=$1 AND role='assistant' RETURNING id`,[input.sessionId,input.messageId,
+      WHERE id=$2 AND session_id=$1 AND role='assistant' RETURNING id,
+        (SELECT t.id FROM conversation_turns t WHERE t.assistant_message_id=messages.id AND t.session_id=messages.session_id LIMIT 1) AS turn_id`,[input.sessionId,input.messageId,
       JSON.stringify({firstUsefulContentMs:input.firstUsefulContentMs,basis:'client_visible_render_opportunity',cohort:'initial_submit',receivedAt:new Date().toISOString()})]);
+    if (result.rowCount===1) diagnosticEvent('delivery.client_render.observed',{sessionId:input.sessionId,turnId:result.rows[0]?.turn_id,messageId:input.messageId,firstUsefulContentMs:input.firstUsefulContentMs,basis:'client_visible_render_opportunity'});
     return result.rowCount===1;
   }
 

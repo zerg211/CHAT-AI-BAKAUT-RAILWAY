@@ -1,3 +1,4 @@
+import { diagnosticSpan, diagnosticEvent, diagnosticError } from '../observability/diagnostics.js';
 import * as cheerio from 'cheerio';
 import { config } from '../config.js';
 import type { Product } from '../shared/types.js';
@@ -48,9 +49,9 @@ export function extractCurrentSitePrice(html: string, product: Product, pageUrl:
 
 async function fetchCurrentSitePrice(product: Product): Promise<VerifiedSitePrice> {
   if (!product.sourceUrl || new URL(product.sourceUrl).origin !== new URL(config.CATALOG_BASE_URL).origin) throw new Error('site_price_source_untrusted');
-  const result = await safeFetchBytes(product.sourceUrl, { allowedOrigin:config.CATALOG_BASE_URL,
+  const result = await diagnosticSpan('catalog.price.fetch', async () => safeFetchBytes(product.sourceUrl!, { allowedOrigin:config.CATALOG_BASE_URL,
     timeoutMs:Math.min(15_000,config.CATALOG_REQUEST_TIMEOUT_MS), maxBytes:config.CATALOG_MAX_RESPONSE_BYTES, maxRedirects:2,
-    headers:{'user-agent':'Bakaut catalog price verification'} });
+    headers:{'user-agent':'Bakaut catalog price verification'} }));
   if (result.status !== 200) throw new Error('site_price_http_error');
   const price = extractCurrentSitePrice(outboundText(result), product, result.url, config.CATALOG_BASE_URL);
   if (!price) throw new Error('site_price_identity_or_value_unconfirmed');
@@ -100,13 +101,15 @@ export function extractSitePriceObservation(html: string, product: Product, page
 
 export async function readSitePriceObservation(product: Product, signal?: AbortSignal): Promise<SitePriceObservation> {
   const unknown: SitePriceObservation = { status: 'unknown', productId: product.id };
-  if (!product.sourceUrl) return unknown;
+  if (!product.sourceUrl) { diagnosticEvent('catalog.price.result', { outcome: 'unknown', basis: 'missing_source' }); return unknown; }
   try {
     const expected = new URL(product.sourceUrl);
     if (expected.protocol !== 'https:' || expected.origin !== 'https://bakautprof.ru') return unknown;
-    const result = await safeFetchBytes(product.sourceUrl, { allowedOrigin: 'https://bakautprof.ru',
+    const result = await diagnosticSpan('catalog.price.fetch', async () => safeFetchBytes(product.sourceUrl!, { allowedOrigin: 'https://bakautprof.ru',
       timeoutMs: 5000, maxBytes: config.CATALOG_MAX_RESPONSE_BYTES, maxRedirects: 2, signal,
-      headers: { 'user-agent': 'Bakaut catalog price verification' } });
-    return result.status === 200 ? extractSitePriceObservation(outboundText(result), product, result.url, 'https://bakautprof.ru') : unknown;
-  } catch { return unknown; }
+      headers: { 'user-agent': 'Bakaut catalog price verification' } }));
+    const observation = result.status === 200 ? extractSitePriceObservation(outboundText(result), product, result.url, 'https://bakautprof.ru') : unknown;
+    diagnosticEvent('catalog.price.result', { statusCode: result.status, outcome: observation.status });
+    return observation;
+  } catch (error) { diagnosticError('catalog.price.failed', error, { outcome: 'unknown', aborted: Boolean(signal?.aborted) }); return unknown; }
 }

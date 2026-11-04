@@ -8,6 +8,7 @@ type Scope = 'diagnostics:read' | 'catalog:read' | 'catalog:write' | 'leads:read
   'feedback:read' | 'feedback:write' | 'destructive:write' | 'provider:probe';
 type RoutePolicy = {scope: Scope; mutation?: boolean};
 const routes: Record<string, RoutePolicy> = {
+  'GET /api/admin/diagnostics': {scope:'diagnostics:read'},
   'GET /api/admin/health': {scope:'diagnostics:read'},
   'GET /api/admin/quality/audit': {scope:'diagnostics:read'},
   'GET /api/admin/openai-usage': {scope:'diagnostics:read'},

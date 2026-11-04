@@ -1,3 +1,4 @@
+import { runWithDiagnostics, type DiagnosticEvent } from '../src/observability/diagnostics.js';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const state = vi.hoisted(() => ({
@@ -275,6 +276,52 @@ describe('site chat and platform agent', () => {
     expect(state.price).toHaveBeenCalledTimes(4);
     expect(answer.answer).toContain('под заказ');
     expect(answer.answer).toContain('соответствие бюджету неизвестно');
+  });
+
+  it('records the primary failure before reconciliation and keeps cleanup failures separate without content', async () => {
+    const events: DiagnosticEvent[] = [];
+    const controller = new AbortController();
+    const primary = new Error('PRIVATE_USER_PROMPT_CANARY phone +79991234567');
+    const reconciliation = new TypeError('PRIVATE_TOOL_OUTPUT_CANARY');
+    state.run.mockImplementationOnce(async (options) => {
+      await options.onBeforeSubmit('session_provider', null, true, 'PRIVATE_SUBMITTED_TEXT_CANARY');
+      controller.abort('turn_deadline_exceeded');
+      throw primary;
+    });
+    state.settle.mockRejectedValueOnce(reconciliation);
+    state.releaseLease.mockRejectedValueOnce(new Error('PRIVATE_RELEASE_CANARY'));
+    await expect(runWithDiagnostics({}, () => new PlatformAgentAssistant(repo).generateAnswer({
+      sessionId: 'chat', turnId: 'turn', userMessage: 'PRIVATE_USER_PROMPT_CANARY', signal: controller.signal
+    }), (event) => events.push(event))).rejects.toBe(reconciliation);
+    const primaryIndex = events.findIndex(event => event.name === 'assistant.execution.primary_failed');
+    const reconcileIndex = events.findIndex(event => event.name === 'assistant.reconcile.failed');
+    expect(primaryIndex).toBeGreaterThanOrEqual(0);
+    expect(reconcileIndex).toBeGreaterThan(primaryIndex);
+    expect(events[reconcileIndex].causalEventId).toBe(events[primaryIndex].eventId);
+    expect(events.some(event => event.name === 'assistant.lease.release.failed')).toBe(true);
+    expect(JSON.stringify(events)).not.toContain('PRIVATE_');
+    expect(JSON.stringify(events)).not.toContain('+79991234567');
+    expect(state.run).toHaveBeenCalledTimes(1);
+    expect(state.settle).toHaveBeenCalledTimes(1);
+  });
+
+  it('preserves a persistence failure even if rollback also fails', async () => {
+    const events: DiagnosticEvent[] = [];
+    const primary = new Error('PRIVATE_DATABASE_FAILURE_CANARY');
+    state.run.mockResolvedValueOnce({ sessionId: 'agent-session', turnId: 'agent-turn',
+      answer: JSON.stringify({ answer: 'PRIVATE_ANSWER_CANARY', selected: [], rejected: [], uncertain: [] }) });
+    state.commitMessage.mockRejectedValueOnce(primary);
+    state.transactionQuery.mockImplementation(async (query) => {
+      if (query === 'ROLLBACK') throw new Error('PRIVATE_ROLLBACK_CANARY');
+      return { rows: [], rowCount: 1 };
+    });
+    await expect(runWithDiagnostics({}, () => new PlatformAgentAssistant(repo).generateAnswer({
+      sessionId: 'chat', turnId: 'turn', userMessage: 'PRIVATE_QUESTION_CANARY'
+    }), (event) => events.push(event))).rejects.toBe(primary);
+    expect(events.some(event => event.name === 'assistant.persistence.primary_failed')).toBe(true);
+    expect(events.some(event => event.name === 'assistant.transaction.rollback.failed')).toBe(true);
+    expect(JSON.stringify(events)).not.toContain('PRIVATE_');
+    expect(state.run).toHaveBeenCalledTimes(1);
   });
 
 });

@@ -1,4 +1,5 @@
 import type { ChatResponsePayload } from '../shared/types';
+import { createClientDiagnostics, type ClientDiagnostics } from './clientDiagnostics';
 
 export type ChatStreamHandlers = {
   onDelta: (delta: string) => void;
@@ -101,7 +102,8 @@ async function consumeSse(
   handlers: ChatStreamHandlers,
   signal: AbortSignal | undefined,
   idleTimeoutMs: number,
-  onEvent?: (event: string, data: Record<string, unknown>) => Promise<ChatResponsePayload | void> | ChatResponsePayload | void
+  onEvent?: (event: string, data: Record<string, unknown>) => Promise<ChatResponsePayload | void> | ChatResponsePayload | void,
+  diagnostics?: ClientDiagnostics
 ) {
   if (!response.body) throw new Error(FRIENDLY_FINAL_ERROR);
   const reader = response.body.getReader();
@@ -111,7 +113,10 @@ async function consumeSse(
 
   while (true) {
     const { value, done } = await readWithIdleWatchdog(reader, idleTimeoutMs, signal);
-    if (done) break;
+    if (done) {
+      diagnostics?.event('stream_closed');
+      break;
+    }
     buffer += decoder.decode(value, { stream: true });
     const events = buffer.split('\n\n');
     buffer = events.pop() ?? '';
@@ -119,6 +124,13 @@ async function consumeSse(
     for (const rawEvent of events) {
       const parsed = parseSseEvent(rawEvent);
       if (!parsed) continue;
+      if (parsed.event === 'turn') diagnostics?.identifyTurn(parsed.data.turnId);
+      if (parsed.event === 'status') diagnostics?.event('status_received');
+      if (parsed.event === 'delta' || parsed.event === 'done') diagnostics?.event('first_answer_received');
+      if (parsed.event === 'done') {
+        diagnostics?.identifyTurn(parsed.data.turnId);
+        diagnostics?.event('done_received');
+      }
       const delegated = await onEvent?.(parsed.event, parsed.data);
       if (delegated) return delegated;
       if (parsed.event === 'turn' && typeof parsed.data.turnId === 'string') handlers.onTurn?.(parsed.data.turnId);
@@ -147,7 +159,8 @@ async function recoverChatMessage(
   handlers: ChatStreamHandlers,
   signal: AbortSignal | undefined,
   fetcher: FetchLike,
-  idleTimeoutMs: number
+  idleTimeoutMs: number,
+  diagnostics: ClientDiagnostics
 ) {
   let lastError: unknown = new Error(FRIENDLY_FINAL_ERROR);
   let lastSeq = 0;
@@ -158,12 +171,17 @@ async function recoverChatMessage(
       turnId,
       visitorId,
       afterSeq: lastSeq,
+      diagnostics,
       signal,
       fetcher,
-      onStatus: handlers.onStatus,
+      onStatus: (status) => { diagnostics.event('status_received'); handlers.onStatus?.(status); },
       onSeq: (seq) => { lastSeq = Math.max(lastSeq, seq); }
     });
-    if (replayed) return replayed;
+    if (replayed) {
+      diagnostics.event('first_answer_received');
+      diagnostics.event('done_received');
+      return replayed;
+    }
     handlers.onStatus?.(RECOVERING_STATUS);
     try {
       const response = await fetcher(`${apiBase}/api/chat/sessions/${sessionId}/messages/${turnId}/recover`, {
@@ -180,11 +198,14 @@ async function recoverChatMessage(
         response,
         handlers,
         signal,
-        Math.max(idleTimeoutMs, DEFAULT_RECOVERY_IDLE_TIMEOUT_MS)
+        Math.max(idleTimeoutMs, DEFAULT_RECOVERY_IDLE_TIMEOUT_MS),
+        undefined,
+        diagnostics
       );
     } catch (error) {
       if (signal?.aborted || (error instanceof DOMException && error.name === 'AbortError')) throw error;
       if (error instanceof ServerSseError && !error.recoverable) throw error;
+      diagnostics.event('stream_error');
       lastError = error;
       if (attempt + 1 >= MAX_RECOVERY_TRANSPORT_ATTEMPTS) break;
       await new Promise<void>((resolve, reject) => {
@@ -211,6 +232,7 @@ async function replayDurableTurnEvents(input: {
   turnId: string;
   visitorId: string;
   afterSeq: number;
+  diagnostics: ClientDiagnostics;
   signal?: AbortSignal;
   fetcher: FetchLike;
   onStatus?: (status: string) => void;
@@ -225,7 +247,7 @@ async function replayDurableTurnEvents(input: {
         signal: input.signal
       }
     );
-    if (!response.ok) return null;
+    if (!response.ok) { input.diagnostics.event('stream_error'); return null; }
     const body = await response.json() as {
       events?: Array<{ seq?: unknown; status?: unknown }>;
       result?: ChatResponsePayload | null;
@@ -241,6 +263,7 @@ async function replayDurableTurnEvents(input: {
       : null;
   } catch (error) {
     if (input.signal?.aborted || (error instanceof DOMException && error.name === 'AbortError')) throw error;
+    input.diagnostics.event('stream_error');
     return null;
   }
 }
@@ -254,16 +277,24 @@ export async function recoverChatTurn(
   signal?: AbortSignal,
   options: Pick<ChatStreamOptions, 'fetcher' | 'idleTimeoutMs'> = {}
 ) {
-  return recoverChatMessage(
-    apiBase,
-    sessionId,
-    turnId,
-    visitorId,
-    handlers,
-    signal,
-    options.fetcher ?? fetch,
-    options.idleTimeoutMs ?? DEFAULT_STREAM_IDLE_TIMEOUT_MS
-  );
+  const diagnostics = createClientDiagnostics({ apiBase, sessionId, turnId, visitorId, recovery: true });
+  diagnostics.event('recovery_started');
+  try {
+    const result = await recoverChatMessage(
+      apiBase, sessionId, turnId, visitorId, handlers, signal,
+      diagnosticFetch(options.fetcher ?? fetch, diagnostics),
+      options.idleTimeoutMs ?? DEFAULT_STREAM_IDLE_TIMEOUT_MS,
+      diagnostics
+    );
+    diagnostics.event('recovery_completed');
+    return result;
+  } catch (error) {
+    diagnostics.event(signal?.aborted || (error instanceof DOMException && error.name === 'AbortError') ? 'aborted' : 'stream_error');
+    diagnostics.event('recovery_failed');
+    throw error;
+  } finally {
+    diagnostics.finish();
+  }
 }
 
 export async function streamChatMessage(
@@ -274,48 +305,64 @@ export async function streamChatMessage(
   signal: AbortSignal | undefined,
   options: ChatStreamOptions
 ) {
-  const fetcher = options.fetcher ?? fetch;
   const idleTimeoutMs = options.idleTimeoutMs ?? DEFAULT_STREAM_IDLE_TIMEOUT_MS;
   const clientMessageId = options.clientMessageId ?? crypto.randomUUID();
-
-  const response = await fetcher(`${apiBase}/api/chat/sessions/${sessionId}/messages`, {
-    method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-      'x-bakaut-visitor-id': options.visitorId
-    },
-    body: JSON.stringify({ message, clientMessageId }),
-    signal
-  });
-  if (!response.ok) {
-    const errorPayload = await response.json().catch(() => ({})) as { error?: string; activeTurnId?: unknown };
-    const activeTurnId = typeof errorPayload.activeTurnId === 'string'
-      ? errorPayload.activeTurnId.trim()
-      : '';
-    if (response.status === 409) {
-      if (activeTurnId) throw new ActiveConversationTurnError(activeTurnId);
-      throw new ChatMessageNotAcceptedError(
-        'Сообщение не принято. Оно осталось в поле ввода — попробуйте отправить ещё раз.',
-        undefined,
-        response.status
-      );
-    }
-    if (response.status >= 400 && response.status < 500) {
-      throw new ChatMessageNotAcceptedError(
-        response.status === 404
-          ? 'Сообщение не принято: сессия завершилась. Вопрос остался в поле ввода — отправьте его ещё раз.'
-          : 'Сообщение не принято. Оно осталось в поле ввода — попробуйте отправить ещё раз.',
-        undefined,
-        response.status
-      );
-    }
-    throw new Error('Не удалось получить ответ');
-  }
-  if (!response.body) throw new Error('Не удалось получить ответ');
+  const diagnostics = createClientDiagnostics({ apiBase, sessionId, visitorId: options.visitorId, clientMessageId, recovery: false });
+  const fetcher = diagnosticFetch(options.fetcher ?? fetch, diagnostics);
   try {
-    return await consumeSse(response, handlers, signal, idleTimeoutMs);
+    const response = await fetcher(`${apiBase}/api/chat/sessions/${sessionId}/messages`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-bakaut-visitor-id': options.visitorId
+      },
+      body: JSON.stringify({ message, clientMessageId }),
+      signal
+    });
+    if (!response.ok) {
+      const errorPayload = await response.json().catch(() => ({})) as { error?: string; activeTurnId?: unknown };
+      const activeTurnId = typeof errorPayload.activeTurnId === 'string'
+        ? errorPayload.activeTurnId.trim()
+        : '';
+      if (response.status === 409) {
+        if (activeTurnId) throw new ActiveConversationTurnError(activeTurnId);
+        throw new ChatMessageNotAcceptedError(
+          'Сообщение не принято. Оно осталось в поле ввода — попробуйте отправить ещё раз.',
+          undefined,
+          response.status
+        );
+      }
+      if (response.status >= 400 && response.status < 500) {
+        throw new ChatMessageNotAcceptedError(
+          response.status === 404
+            ? 'Сообщение не принято: сессия завершилась. Вопрос остался в поле ввода — отправьте его ещё раз.'
+            : 'Сообщение не принято. Оно осталось в поле ввода — попробуйте отправить ещё раз.',
+          undefined,
+          response.status
+        );
+      }
+      throw new Error('Не удалось получить ответ');
+    }
+    if (!response.body) throw new Error('Не удалось получить ответ');
+    try {
+      return await consumeSse(response, handlers, signal, idleTimeoutMs, undefined, diagnostics);
+    } catch (error) {
+      if (signal?.aborted || (error instanceof DOMException && error.name === 'AbortError')) throw error;
+      throw new Error(error instanceof Error && error.message ? error.message : FRIENDLY_FINAL_ERROR);
+    }
   } catch (error) {
-    if (signal?.aborted || (error instanceof DOMException && error.name === 'AbortError')) throw error;
-    throw new Error(error instanceof Error && error.message ? error.message : FRIENDLY_FINAL_ERROR);
+    diagnostics.event(signal?.aborted || (error instanceof DOMException && error.name === 'AbortError') ? 'aborted' : 'stream_error');
+    throw error;
+  } finally {
+    diagnostics.finish();
   }
+}
+
+function diagnosticFetch(fetcher: FetchLike, diagnostics: ClientDiagnostics): FetchLike {
+  return async (input, init) => {
+    diagnostics.event('request_sent');
+    const response = await fetcher(input, init);
+    diagnostics.headers(response);
+    return response;
+  };
 }

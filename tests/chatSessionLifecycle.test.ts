@@ -281,3 +281,20 @@ describe('session-scoped chat route capability', () => {
     }));
   });
 });
+
+describe('bounded client technical reports',()=>{
+  it('requires session capability, rejects another session turn and private payload fields',async()=>{
+    const {app,conversations}=await buildApp();
+    const request={method:'POST' as const,url:`/api/chat/sessions/${sessionId}/diagnostics`,payload:{clientMessageId:messageId,turnId,requestId:turnId,recovery:false,droppedEvents:100000,
+      events:Array.from({length:32},()=>({type:'stream_error',offsetMs:3600000,statusCode:503}))}};
+    expect((await app.inject(request)).statusCode).toBe(404);
+    const headers={'x-bakaut-visitor-id':visitorId};
+    expect((await app.inject({...request,headers})).statusCode).toBe(404);
+    conversations.getTurn.mockResolvedValue({id:turnId} as never);
+    expect((await app.inject({...request,headers})).statusCode).toBe(200);
+    expect((await app.inject({...request,headers,payload:{...request.payload,secret:'PRIVATE'}})).statusCode).toBeGreaterThanOrEqual(400);
+    expect((await app.inject({...request,headers,payload:{...request.payload,events:[...request.payload.events,request.payload.events[0]]}})).statusCode).toBeGreaterThanOrEqual(400);
+    expect(conversations.updateTurn).not.toHaveBeenCalled();
+    expect(conversations.recordAnswerDelivery).not.toHaveBeenCalled();
+  });
+});

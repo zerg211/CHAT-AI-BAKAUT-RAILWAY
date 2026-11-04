@@ -1,3 +1,8 @@
+import { startRuntimeDiagnostics } from './observability/runtimeDiagnostics.js';
+import { randomUUID } from 'node:crypto';
+import { registerRequestDiagnostics } from './observability/requestDiagnostics.js';
+import { startDiagnosticJournal } from './observability/diagnosticJournal.js';
+import { diagnosticEvent, diagnosticError, runWithDiagnostics } from './observability/diagnostics.js';
 import cors from '@fastify/cors';
 import rateLimit from '@fastify/rate-limit';
 import Fastify from 'fastify';
@@ -28,13 +33,21 @@ export function corsOriginsForEnvironment(input: {
 
 export async function buildApp() {
   const app = Fastify({
+    genReqId: () => randomUUID(),
+    disableRequestLogging: true,
     logger: {
       level: config.NODE_ENV === 'development' ? 'info' : 'warn'
     },
     bodyLimit: 2 * 1024 * 1024
   });
 
+  registerRequestDiagnostics(app);
+  if (config.NODE_ENV !== 'test') app.addHook('onClose',startDiagnosticJournal(config.DATABASE_URL));
+  if (config.NODE_ENV !== 'test') app.addHook('onClose',startRuntimeDiagnostics());
+  diagnosticEvent('service.started');
+
   app.setErrorHandler((error, _request, reply) => {
+    diagnosticError('request.handler.failed',error);
     const status = (error as Error & { statusCode?: number }).statusCode ?? 500;
     reply.code(status).send({
       error: status >= 500 ? 'Internal server error' : (error as Error).message
@@ -55,7 +68,8 @@ export async function buildApp() {
   });
   await app.register(cors, {
     origin: corsOrigins,
-    credentials: false
+    credentials: false,
+    exposedHeaders: ['x-request-id','x-chat-turn-id']
   });
   await app.register(rateLimit, {
     max: 120,
@@ -66,6 +80,7 @@ export async function buildApp() {
     return {
       ok: true,
       runtime: {
+        diagnosticsSchemaVersion: 1,
         commitSha: process.env.RAILWAY_GIT_COMMIT_SHA ?? process.env.GIT_COMMIT_SHA ?? null,
         version: AI_MANAGER_RUNTIME_MANIFEST.version,
         contractVersion: AI_MANAGER_RUNTIME_MANIFEST.contractVersion,
@@ -83,15 +98,20 @@ export async function buildApp() {
   let maintenanceInFlight: Promise<unknown> | undefined;
   const maintenanceTimer = setInterval(() => {
     if (maintenanceInFlight) return;
-    maintenanceInFlight = Promise.all([
+    maintenanceInFlight = runWithDiagnostics({jobId:randomUUID(),jobType:'session_maintenance'},() => {
+      diagnosticEvent('job.started');
+      return Promise.all([
       conversations.expireInactiveSessions(),
       conversations.deleteOldEmptyWidgetSessions(),
       conversations.deleteEmptyNonWidgetSessions()
-    ]).catch(() => {
+    ]).then(() => diagnosticEvent('job.complete')).catch(error => {
+      diagnosticError('job.failed',error);
       app.log.warn({ error: 'session_maintenance_failed' }, 'failed to maintain sessions');
     }).finally(() => { maintenanceInFlight = undefined; });
+    });
   }, 60_000).unref();
   app.addHook('onClose', async () => {
+    diagnosticEvent('service.stopping');
     clearInterval(maintenanceTimer);
     await maintenanceInFlight;
   });

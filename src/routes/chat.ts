@@ -1,3 +1,4 @@
+import { bindDiagnosticIdentity, diagnosticAbortSource, diagnosticError, diagnosticEvent, safeErrorFields } from '../observability/diagnostics.js';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { createHash, randomUUID } from 'node:crypto';
 import { z } from 'zod';
@@ -82,7 +83,9 @@ async function restoreAuthorizedSession(
   setPrivateSessionHeaders(reply);
   const visitorCapability = visitorCapabilityFromRequest(request);
   if (!visitorCapability) return null;
-  return conversations.restoreSession(sessionId, visitorCapability);
+  const session = await conversations.restoreSession(sessionId, visitorCapability);
+  if (session) bindDiagnosticIdentity({sessionId});
+  return session;
 }
 
 function sessionNotFound(reply: FastifyReply) {
@@ -269,14 +272,31 @@ export async function registerChatRoutes(
     return reply.send({ ok: true });
   });
 
+  app.post('/api/chat/sessions/:id/diagnostics', async (request,reply) => {
+    const params = z.object({id:z.string().uuid()}).parse(request.params);
+    const input = z.object({clientMessageId:z.string().uuid().optional(),turnId:z.string().uuid().optional(),requestId:z.string().uuid().optional(),
+      recovery:z.boolean(),droppedEvents:z.number().int().min(0).max(100000),events:z.array(z.object({
+        type:z.enum(['request_sent','headers_received','turn_identified','status_received','first_answer_received','done_received','stream_closed','stream_error','recovery_started','recovery_completed','recovery_failed','aborted']),
+        offsetMs:z.number().min(0).max(3600000),statusCode:z.number().int().min(100).max(599).optional()
+      }).strict()).max(32)}).strict().parse(request.body);
+    const session = await restoreAuthorizedSession(request,reply,conversations,params.id);
+    if (!session) return sessionNotFound(reply);
+    // A client claim never binds another session's turn, changes business state,
+    // or becomes proof that an answer was delivered/read.
+    if (input.turnId && !await conversations.getTurn(params.id,input.turnId)) return reply.code(404).send({error:'Turn not found'});
+    bindDiagnosticIdentity({sessionId:params.id,turnId:input.turnId,clientMessageId:input.clientMessageId});
+    for (const event of input.events) diagnosticEvent('client.observed',{eventType:event.type,durationMs:event.offsetMs,statusCode:event.statusCode,
+      recovery:input.recovery,basis:'untrusted_client_report',clientRequestId:input.requestId});
+    diagnosticEvent('client.report.complete',{count:input.events.length,droppedEvents:input.droppedEvents,recovery:input.recovery,basis:'untrusted_client_report'});
+    return reply.send({ok:true});
+  });
+
   app.post('/api/chat/sessions/:id/messages/:messageId/delivery', async (request, reply) => {
     const params = z.object({id:z.string().uuid(),messageId:z.string().uuid()}).parse(request.params);
     const input = z.object({firstUsefulContentMs:z.number().int().min(0).max(600_000)}).strict().parse(request.body);
     const session = await restoreAuthorizedSession(request, reply, conversations, params.id);
     if (!session) return sessionNotFound(reply);
     const recorded = await conversations.recordAnswerDelivery({...params,sessionId:params.id,...input});
-    if (recorded) app.log.info({event:'answer_delivery',sessionId:params.id,messageId:params.messageId,
-      firstUsefulContentMs:input.firstUsefulContentMs,basis:'client_visible_render_opportunity'},'answer delivery');
     return recorded ? reply.send({ok:true}) : reply.code(404).send({error:'Message not found'});
   });
 
@@ -316,11 +336,13 @@ export async function registerChatRoutes(
       if (remote.status !== 'cancelled') await client.cancelTurn(data.agentSessionId);
       await db.query("UPDATE conversation_turns SET status='failed',stage='cancelled_by_user',error_code='cancelled_by_user',error_message=NULL,execution_owner=NULL,execution_lease_expires_at=NULL,updated_at=now() WHERE session_id=$1 AND id=$2", [params.id, params.turnId]);
       await db.query('COMMIT');
+      bindDiagnosticIdentity({sessionId:params.id,turnId:params.turnId});
+      diagnosticEvent('turn.cancel.accepted',{abortSource:'client_cancel'});
       for (const controller of activeControllers.get(params.turnId) ?? []) controller.abort('platform_agent_explicit_cancel');
       return reply.send({ status: 'cancelled' });
     } catch (error) {
       await db.query('ROLLBACK').catch(() => undefined);
-      app.log.warn({ error: safeErrorMessage(error) }, 'chat cancellation failed');
+      app.log.warn({ ...safeErrorFields(error) }, 'chat cancellation failed');
       return reply.code(503).send({ error: 'cancellation_unavailable' });
     } finally { db.release(); }
   });
@@ -348,6 +370,7 @@ export async function registerChatRoutes(
         deadlineAt: new Date(Date.now() + TURN_DEADLINE_MS).toISOString()
       });
     } catch (error) {
+      diagnosticError('turn.acceptance.failed',error);
       if (error instanceof ActiveConversationTurnError) {
         return reply.code(409).send({
           error: error.code,
@@ -364,12 +387,16 @@ export async function registerChatRoutes(
       throw error;
     }
     const turnId = turn.id;
+    bindDiagnosticIdentity({sessionId:params.id,turnId,clientMessageId});
+    diagnosticEvent('turn.accepted',{deduplicated:turnId !== requestedTurnId});
     const controller = new AbortController();
     const unregisterController = registerController(turnId, controller);
-    const timeout = setTimeout(() => controller.abort(), remainingTurnDeadlineMs(turn.deadlineAt));
+    const timeout = setTimeout(() => { diagnosticEvent('turn.abort.requested',{abortSource:'server_deadline'}); controller.abort('turn_deadline_exceeded'); }, remainingTurnDeadlineMs(turn.deadlineAt));
     timeout.unref?.();
 
     const send = openSseReply(reply, {
+      'x-request-id': request.id,
+      'access-control-expose-headers':'x-request-id, x-chat-turn-id',
       'x-chat-turn-id': turnId,
       ...sseCorsHeaders(request.headers.origin)
     });
@@ -396,9 +423,10 @@ export async function registerChatRoutes(
            onStage: sendStageStatus,
            signal: controller.signal
         }));
-      app.log.info({event:'answer_ready',sessionId:params.id,turnId,messageId:payload.assistantMessageId},'answer ready');
+      diagnosticEvent('answer.ready',{sessionId:params.id,turnId,messageId:payload.assistantMessageId});
       send('done', buildPublicCustomerResponse(payload));
     } catch (error) {
+      diagnosticError('turn.route.failed',error,{abortSource:diagnosticAbortSource(controller.signal),aborted:controller.signal.aborted});
       const executionInProgress = error instanceof TurnExecutionInProgressError;
       const budgetStopped = error instanceof AgentManagerTurnBudgetExceededError;
       const explicitlyCancelled = controller.signal.reason === 'platform_agent_explicit_cancel' ||
@@ -418,7 +446,7 @@ export async function registerChatRoutes(
             : `${runtimeDecision.runtimeMode}_generation_failed`,
           errorMessage: safeErrorMessage(error),
           requireUnowned: true
-        }).catch((updateError) => app.log.warn({ sessionId: params.id, turnId, error: safeErrorMessage(updateError) }, 'turn failure update failed'));
+        }).catch((updateError) => app.log.warn({ sessionId: params.id, turnId, ...safeErrorFields(updateError) }, 'turn failure update failed'));
       }
       const message = executionInProgress
         ? 'Этот ответ уже формируется в другом запросе. Дождитесь завершения — повторно выполнять ход не нужно.'
@@ -432,7 +460,7 @@ export async function registerChatRoutes(
           sessionId: params.id,
           runtimeMode: runtimeDecision.runtimeMode,
           runtimeModeReason: runtimeDecision.reason,
-          error: error instanceof Error ? error.message : String(error)
+          ...safeErrorFields(error)
         }, 'chat generation failed');
       }
       if (explicitlyCancelled) send('cancelled', { turnId });
@@ -457,16 +485,20 @@ export async function registerChatRoutes(
     if (!sessionForRecovery) return sessionNotFound(reply);
     const persistedTurn = await conversations.getTurn(params.id, params.turnId);
     if (!persistedTurn) return reply.code(404).send({ error: 'Turn not found' });
+    bindDiagnosticIdentity({sessionId:params.id,turnId:params.turnId});
+    diagnosticEvent('turn.recovery.started',{recovery:true});
     const controller = new AbortController();
     const unregisterController = registerController(params.turnId, controller);
     // A recovery already past the deadline may reconcile the known remote turn
     // during grace; one started earlier must still stop remote work at deadline.
     const recoveryGraceMs = config.OPENAI_PLATFORM_AGENT_ID && persistedTurn.deadlineAt &&
       Date.parse(persistedTurn.deadlineAt) <= Date.now() ? 30_000 : 0;
-    const timeout = setTimeout(() => controller.abort(), remainingTurnDeadlineMs(persistedTurn.deadlineAt, recoveryGraceMs));
+    const timeout = setTimeout(() => { diagnosticEvent('turn.abort.requested',{abortSource:recoveryGraceMs ? 'recovery_grace' : 'server_deadline'}); controller.abort(recoveryGraceMs ? 'recovery_grace_exceeded' : 'turn_deadline_exceeded'); }, remainingTurnDeadlineMs(persistedTurn.deadlineAt, recoveryGraceMs));
     timeout.unref?.();
 
     const send = openSseReply(reply, {
+      'x-request-id': request.id,
+      'access-control-expose-headers':'x-request-id, x-chat-turn-id',
       'x-chat-turn-id': params.turnId,
       ...sseCorsHeaders(request.headers.origin)
     });
@@ -491,9 +523,10 @@ export async function registerChatRoutes(
         onStage: sendStageStatus,
         signal: controller.signal
       }));
-      app.log.info({event:'answer_ready',sessionId:params.id,turnId:params.turnId,messageId:payload.assistantMessageId},'answer ready');
+      diagnosticEvent('answer.ready',{sessionId:params.id,turnId:params.turnId,messageId:payload.assistantMessageId,recovery:true});
       send('done', buildPublicCustomerResponse(payload));
     } catch (error) {
+      diagnosticError('turn.route.failed',error,{abortSource:diagnosticAbortSource(controller.signal),aborted:controller.signal.aborted});
       const executionInProgress = error instanceof TurnExecutionInProgressError;
       const explicitlyCancelled = controller.signal.reason === 'platform_agent_explicit_cancel' ||
         (typeof conversations.getTurn === 'function' && (await conversations.getTurn(params.id, params.turnId).catch(() => null))?.errorCode === 'cancelled_by_user');
@@ -512,14 +545,14 @@ export async function registerChatRoutes(
             : `${runtimeDecision.runtimeMode}_recovery_failed`,
           errorMessage: safeErrorMessage(error),
           requireUnowned: true
-        }).catch((updateError) => app.log.warn({ sessionId: params.id, turnId: params.turnId, error: safeErrorMessage(updateError) }, 'turn recovery failure update failed'));
+        }).catch((updateError) => app.log.warn({ sessionId: params.id, turnId: params.turnId, ...safeErrorFields(updateError) }, 'turn recovery failure update failed'));
       }
       app.log.warn({
         sessionId: params.id,
         turnId: params.turnId,
         runtimeMode: runtimeDecision.runtimeMode,
         runtimeModeReason: runtimeDecision.reason,
-        error: safeErrorMessage(error)
+        ...safeErrorFields(error)
       }, 'chat recovery failed');
       if (explicitlyCancelled) send('cancelled', { turnId: params.turnId });
       else send('error', {
