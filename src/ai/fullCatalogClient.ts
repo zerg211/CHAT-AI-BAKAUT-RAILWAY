@@ -27,8 +27,7 @@ export async function readFullCatalogSnapshot(firstPage: JsonObject, signal?: Ab
   if (base.protocol !== 'https:' || base.hostname !== 'catalog-search-production.up.railway.app') throw new Error('Catalog URL is not allowed');
   const request = { query: criteria.query, category: criteria.category,
     min_nominal_kw: criteria.min_nominal_kw ?? null, max_nominal_kw: criteria.max_nominal_kw ?? null,
-    max_price_rub: criteria.max_price_rub ?? null, expected_revision: firstPage.source_revision,
-    ...(typeof criteria.relevance_query === 'string' && criteria.relevance_query ? { relevance_query: criteria.relevance_query } : {}) };
+    max_price_rub: criteria.max_price_rub ?? null, expected_revision: firstPage.source_revision };
   const response = await diagnosticSpan('catalog.http.headers', async () => transport(new URL('/search-full', base), {
     method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${config.BAKAUT_MCP_TOKEN}` },
     body: JSON.stringify(request), signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(10_000)]) : AbortSignal.timeout(10_000)
