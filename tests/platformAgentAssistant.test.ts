@@ -49,6 +49,14 @@ describe('site chat and platform agent', () => {
     expect(answer.answer).toBe('Новый результат');
     expect(answer.productCards.map((card) => card.id)).toEqual(['fresh']);
   });
+  it('returns uncertain candidates separately without presenting them as confirmed matches', async () => {
+    state.run.mockResolvedValue({ sessionId: 'agent-session', turnId: 'agent-turn',
+      page: { items: [{ product_id: 'maybe', name: 'Товар', price_rub: 100 },
+        { product_id: 'no', name: 'Другой', price_rub: 200 }] },
+      answer: JSON.stringify({ answer: 'Есть вариант для уточнения', selected: [], rejected: ['no'], uncertain: ['maybe'] }) });
+    const answer = await new PlatformAgentAssistant(repo).generateAnswer({ sessionId: 'chat', turnId: 'turn', userMessage: 'Что подходит?' });
+    expect(answer.productCards).toEqual([expect.objectContaining({ id: 'maybe', matchStatus: 'uncertain' })]);
+  });
   it('refreshes a shown selection after the catalog revision changes', async () => {
     Object.assign(config, { BAKAUT_CATALOG_URL: 'https://catalog-search-production.up.railway.app' });
     vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => ({ status: 'ok', revision: 'new-revision' }) })));

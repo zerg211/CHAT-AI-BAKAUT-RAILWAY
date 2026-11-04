@@ -105,6 +105,7 @@ export function normalizePublicProductCard(value: unknown): ProductCard | null {
     card.price = source.price;
   }
   if (source.priceOnRequest === true && card.price == null) card.priceOnRequest = true;
+  if (source.matchStatus === 'uncertain') card.matchStatus = 'uncertain';
   if (currency) card.currency = currency;
   if (imageUrl) card.imageUrl = imageUrl;
   if (sourceUrl) card.sourceUrl = sourceUrl;

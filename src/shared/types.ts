@@ -78,6 +78,7 @@ export interface ProductCard {
   priceSource?: 'catalog' | 'site';
   priceObservedAt?: string;
   priceOnRequest?: boolean;
+  matchStatus?: 'uncertain';
   currency?: string | null;
   imageUrl?: string | null;
   sourceUrl?: string | null;

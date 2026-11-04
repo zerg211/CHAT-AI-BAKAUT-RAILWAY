@@ -637,11 +637,13 @@ async function sendAssistantFeedback(sessionId: string, messageId: string, ratin
 const CARDS_PER_PAGE = 10;
 
 function ProductCards({ cards }: { cards: ProductCard[] }) {
-  const confirmed = cards.filter((card) => !card.priceOnRequest);
-  const onRequest = cards.filter((card) => card.priceOnRequest);
+  const confirmed = cards.filter((card) => !card.priceOnRequest && card.matchStatus !== 'uncertain');
+  const onRequest = cards.filter((card) => card.priceOnRequest && card.matchStatus !== 'uncertain');
+  const uncertain = cards.filter((card) => card.matchStatus === 'uncertain');
   return <>
     {confirmed.length ? <ProductCardGroup cards={confirmed} title="Подходящие варианты" /> : null}
     {onRequest.length ? <ProductCardGroup cards={onRequest} title="Под заказ — цену и сроки уточнит менеджер" /> : null}
+    {uncertain.length ? <ProductCardGroup cards={uncertain} title="Возможные варианты — нужно уточнить соответствие" /> : null}
   </>;
 }
 
