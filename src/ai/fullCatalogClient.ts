@@ -10,13 +10,16 @@ export async function readFullCatalogSnapshot(firstPage: JsonObject, signal?: Ab
   const criteria = asObject(firstPage.criteria);
   const filters = asObject(firstPage.applied_filters);
   const unsupported = firstPage.unsupported_filters;
+  const semantic = Array.isArray(criteria?.semantic_requirements) && firstPage.semantic_scan_complete === true;
   if (!criteria || !filters || !Array.isArray(unsupported) || unsupported.length || firstPage.numeric_scan_complete !== true ||
       typeof firstPage.source_revision !== 'string' || typeof firstPage.snapshot !== 'string' ||
-      typeof firstPage.count !== 'number' || typeof criteria.category !== 'string' || !criteria.category ||
+      typeof firstPage.count !== 'number' ||
+      (semantic ? criteria.category != null : typeof criteria.category !== 'string' || !criteria.category) ||
       typeof criteria.query !== 'string' || criteria.query.trim()) {
     throw new Error('Catalog did not establish complete structured filter coverage');
   }
-  const keys = ['category', 'min_nominal_kw', 'max_nominal_kw', 'max_price_rub'] as const;
+  const keys = ['category', 'min_nominal_kw', 'max_nominal_kw', 'max_price_rub',
+    ...(semantic ? ['semantic_requirements'] as const : [])] as const;
   for (const key of keys) {
     const value = criteria[key];
     if (value !== null && value !== undefined && !same(value, filters[key])) throw new Error('Catalog filter coverage mismatch');
@@ -25,7 +28,8 @@ export async function readFullCatalogSnapshot(firstPage: JsonObject, signal?: Ab
   if (base.protocol !== 'https:' || base.hostname !== 'catalog-search-production.up.railway.app') throw new Error('Catalog URL is not allowed');
   const request = { query: criteria.query, category: criteria.category,
     min_nominal_kw: criteria.min_nominal_kw ?? null, max_nominal_kw: criteria.max_nominal_kw ?? null,
-    max_price_rub: criteria.max_price_rub ?? null, expected_revision: firstPage.source_revision };
+    max_price_rub: criteria.max_price_rub ?? null, expected_revision: firstPage.source_revision,
+    ...(semantic ? { semantic_requirements: criteria.semantic_requirements } : {}) };
   const response = await transport(new URL('/search-full', base), {
     method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${config.BAKAUT_MCP_TOKEN}` },
     body: JSON.stringify(request), signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(10_000)]) : AbortSignal.timeout(10_000)
@@ -44,6 +48,23 @@ export async function readFullCatalogSnapshot(firstPage: JsonObject, signal?: Ab
   if (items.length !== firstPage.count) throw new Error('Full catalog result count mismatch');
   const ids = Object.values(groups).flatMap((group) => Array.isArray(group) ? group.map((item) => asObject(item)?.product_id) : []);
   if (ids.some((id) => typeof id !== 'string' || !id) || new Set(ids).size !== ids.length) throw new Error('Full catalog contains duplicate or invalid product identities');
+  if (semantic) {
+    const excluded = asObject(body.excluded);
+    const excludedIds = excluded ? Object.keys(excluded) : [];
+    const visibleIds = new Set(ids);
+    if (!excluded || typeof body.candidates_checked !== 'number' ||
+        excludedIds.length + ids.length !== body.candidates_checked ||
+        excludedIds.some((id) => visibleIds.has(id) || !Array.isArray(excluded[id]) || !(excluded[id] as unknown[]).length)) {
+      throw new Error('Semantic catalog did not account for every product');
+    }
+    const uncertain = [...groups.needs_check as unknown[], ...groups.unknown as unknown[]].map((value) => {
+      const item = asObject(value);
+      if (!item) throw new Error('Invalid uncertain semantic product');
+      return { ...item, match_status: 'uncertain' };
+    });
+    return { ...firstPage, items: [...items, ...uncertain], has_more: false, next_cursor: null,
+      semantic_result_statuses: counts };
+  }
   const pendingPriceItems = (groups.needs_check as unknown[]).filter((value) => {
     const item = asObject(value);
     return item && (item.price_rub === null || item.price_rub === undefined) &&

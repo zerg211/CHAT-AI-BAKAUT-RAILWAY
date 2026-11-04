@@ -33,7 +33,8 @@ function cardsFromPage(page: Record<string, unknown> | undefined): ProductCard[]
       price: typeof p.price_rub === 'number' && Number.isFinite(p.price_rub) && p.price_rub > 0 ? p.price_rub : null,
       priceSource: typeof p.price_rub === 'number' && Number.isFinite(p.price_rub) && p.price_rub > 0 ? 'catalog' : undefined,
       currency: 'RUB', sourceUrl, specs: { article: typeof p.sku === 'string' ? p.sku : '' }, reasons,
-      caveats: Array.isArray(p.conditions) ? p.conditions.filter((x): x is string => typeof x === 'string') : [] };
+      caveats: Array.isArray(p.conditions) ? p.conditions.filter((x): x is string => typeof x === 'string') : [],
+      ...(p.match_status === 'uncertain' ? { matchStatus: 'uncertain' as const } : {}) };
   });
 }
 
@@ -237,6 +238,13 @@ export class PlatformAgentAssistant {
     const pending = await enrichMissingPrices(cardsFromPage(pendingPage), input.signal);
     const criteria = page && page.criteria && typeof page.criteria === 'object' ? page.criteria as Record<string, unknown> : undefined;
     const budget = typeof criteria?.max_price_rub === 'number' && Number.isFinite(criteria.max_price_rub) ? criteria.max_price_rub : null;
+    if (page?.semantic_scan_complete === true && budget !== null && selectsAllCatalogMatches(result.answer)) {
+      cards = cards.filter((card) => card.price == null || card.price <= budget).map((card) => {
+        if (card.matchStatus !== 'uncertain' || card.caveats?.length !== 1 ||
+            card.caveats[0] !== 'нет цены для проверки бюджета' || card.price == null) return card;
+        return { ...card, matchStatus: undefined, caveats: [] };
+      });
+    }
     if (budget !== null && selectsAllCatalogMatches(result.answer)) {
       const additional = pending.filter((card) => typeof card.price === 'number' && card.price <= budget);
       cards = [...cards, ...additional];
@@ -259,7 +267,11 @@ export class PlatformAgentAssistant {
         sourceUrl: checked.priceSource === 'site' ? checked.sourceUrl : undefined, observedAt: checked.priceObservedAt };
     });
     const metadata = { runtimeMode: 'openai_platform_agent' as const, runtimeModeReason: 'sole_runtime', productCards: cards,
-      catalogCandidates: page && !selectsAllCatalogMatches(result.answer) ? candidates : undefined, catalogRevision, priceAudit, cardDisplay, needStateSnapshot: input.needState,
+      catalogCandidates: page && !selectsAllCatalogMatches(result.answer) ? candidates : undefined, catalogRevision,
+      catalogSnapshot: typeof page?.snapshot === 'string' ? page.snapshot : undefined,
+      catalogCriteria: page?.criteria, catalogCandidateCount: typeof page?.count === 'number' ? page.count : undefined,
+      semanticScanComplete: page?.semantic_scan_complete === true,
+      priceAudit, cardDisplay, needStateSnapshot: input.needState,
       platformAgentUsage: result.usage, platformAgentTurnId: result.turnId, usedWebSearch: result.usedWebSearch };
     const responsePayload: ChatResponsePayload = { turnId: input.turnId, answer, needState: input.needState,
       productCards: cards, cardDisplay, usedWebSearch: result.usedWebSearch, metadata };

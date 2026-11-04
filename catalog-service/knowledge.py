@@ -36,9 +36,85 @@ class Knowledge:
             FROM concepts WHERE kind=? ORDER BY normalized_value''',(kind,)).fetchall()
         without=self.semantic.execute('''SELECT COUNT(*) FROM products p WHERE NOT EXISTS
             (SELECT 1 FROM facts f WHERE f.product_id=p.product_id AND f.kind=?)''',(kind,)).fetchone()[0]
+        review=self.semantic.execute('SELECT COUNT(*) FROM products WHERE needs_review=1').fetchone()[0]
         return {'status':'ok','kind':kind,'source_revision':self.revision,
                 'concepts':[{'key':row[0],'name':row[1],'products':row[2]} for row in rows],
-                'without_facts':without,'concepts_complete':True}
+                'without_facts':without,'cards_needing_review':review,
+                'accepted_fact_vocabulary_complete':True}
+    def classify_semantic_concepts(self,kind,decisions):
+        """Account for every product against a model-reviewed complete vocabulary."""
+        if kind not in ('product_type','purpose','material','compatibility','feature','dimension'):
+            raise ValueError('Unsupported semantic concept kind')
+        if self.semantic is None:raise ValueError('Semantic index unavailable')
+        if not isinstance(decisions,dict) or any(value not in ('match','exclude','uncertain')
+                for value in decisions.values()):raise ValueError('Invalid semantic concept decisions')
+        vocabulary={row[0] for row in self.semantic.execute(
+            'SELECT normalized_value FROM concepts WHERE kind=?',(kind,))}
+        if set(decisions)!=vocabulary:
+            raise ValueError('Semantic concept decisions do not cover the complete vocabulary')
+        product_facts={}
+        for product_id,value in self.semantic.execute(
+                'SELECT product_id,normalized_value FROM facts WHERE kind=?',(kind,)):
+            product_facts.setdefault(product_id,set()).add(value)
+        results={}
+        for (product_id,) in self.semantic.execute('SELECT product_id FROM products'):
+            values=product_facts.get(product_id,set())
+            labels={decisions[value] for value in values}
+            results[product_id]=('match' if 'match' in labels else
+                                 'unknown' if not labels or 'uncertain' in labels else 'exclude')
+        expected=self.db.execute('SELECT COUNT(*) FROM products').fetchone()[0]
+        if len(results)!=expected:raise ValueError('Semantic classification lost a product')
+        return results
+    def semantic_selection(self,requirements,min_nominal_kw=None,max_nominal_kw=None,max_price_rub=None):
+        """Apply model-interpreted concept decisions to every catalog identity."""
+        if not isinstance(requirements,list) or not requirements:
+            raise ValueError('At least one semantic requirement is required')
+        seen=set();classifications=[]
+        for requirement in requirements:
+            if not isinstance(requirement,dict) or set(requirement)!={'kind','decisions'}:
+                raise ValueError('Invalid semantic requirement')
+            kind=requirement['kind']
+            if kind in seen:raise ValueError('Duplicate semantic requirement kind')
+            seen.add(kind)
+            classifications.append((kind,self.classify_semantic_concepts(kind,requirement['decisions'])))
+        rows=self.db.execute('SELECT '+SUMMARY_COLUMNS+' FROM products ORDER BY price IS NULL,price,title,id').fetchall()
+        groups={'matches':[],'needs_check':[],'unknown':[]}
+        excluded={}
+        for row in rows:
+            product_id=row['id']
+            failed=[kind for kind,statuses in classifications if statuses[product_id]=='exclude']
+            if failed:
+                excluded[product_id]=[{'kind':kind,'reason':'reviewed_concept_excludes_product'} for kind in failed]
+                continue
+            numeric,notes=self.classify(row,min_nominal_kw,max_nominal_kw,max_price_rub)
+            if numeric=='excluded':
+                excluded[product_id]=[{'kind':'numeric_or_price','reason':'known_value_outside_requested_range'}]
+                continue
+            undecided=[kind for kind,statuses in classifications if statuses[product_id]=='unknown']
+            if undecided:
+                notes=[*notes,*('не определено: '+kind for kind in undecided)]
+                status='unknown'
+            else:status=numeric
+            groups[status].append(self.compact(row,notes))
+        if len(excluded)+sum(len(group) for group in groups.values())!=len(rows):
+            raise ValueError('Semantic selection did not account for every catalog product')
+        return {'groups':groups,'excluded':excluded,'candidates_checked':len(rows),
+                'source_revision':self.revision,'semantic_scan_complete':True}
+    def semantic_facts(self,product_id,kinds=None):
+        if self.semantic is None:return None
+        allowed=('product_type','purpose','material','compatibility','feature','dimension')
+        if kinds is not None and (not isinstance(kinds,list) or any(kind not in allowed for kind in kinds)):
+            raise ValueError('Unsupported semantic fact kind')
+        arguments=[product_id]
+        clause=''
+        if kinds is not None:
+            if not kinds:return []
+            clause=' AND kind IN ('+','.join('?' for _ in kinds)+')'
+            arguments.extend(kinds)
+        return [{'kind':kind,'value':value,'source_field':field,'attribute_key':attribute,'evidence':evidence}
+                for kind,value,field,attribute,evidence in self.semantic.execute(
+                    'SELECT kind,value,source_field,attribute_key,evidence FROM facts WHERE product_id=?'+clause,
+                    arguments)]
     def row(self,ident):return self.db.execute('SELECT * FROM products WHERE id=?',(ident,)).fetchone()
     def source_evidence(self,r,query):
         if not re.search(r'дистанц|пульт|радиоуправ|инфракрас|bluetooth|remote',norm(query)):return None
@@ -76,7 +152,7 @@ class Knowledge:
         # Full original attributes are returned for the exact product. Images never inflate model context.
         result={'status':'found','product_id':r['id'],'name':r['title'],'sku':r['sku'],'url':r['url'],'category':r['category'],'source_file':r['source'],'source_sha256':r['sha'],'price_rub':r['price'],'price_source':'catalog' if r['price'] is not None else 'unknown','stock':'unknown'}
         if fields:
-            aliases={**result,'nominal_electrical_power':json.loads(r['powers']),'conditions':[],'attributes':d.get('характеристики',{}),'description':d.get('описание',''),'documents':d.get('документы',[]),'brand':d.get('бренд')}
+            aliases={**result,'nominal_electrical_power':json.loads(r['powers']),'conditions':[],'attributes':d.get('характеристики',{}),'description':d.get('описание',''),'documents':d.get('документы',[]),'brand':d.get('бренд'),'semantic_facts':self.semantic_facts(r['id'])}
             result['fields']={k:aliases.get(k,d.get(k,(d.get('характеристики') or {}).get(k))) for k in fields}
         else:
             result.update(brand=d.get('бренд'),attributes=d.get('характеристики',{}),description=d.get('описание',''),documents=d.get('документы',[]))
