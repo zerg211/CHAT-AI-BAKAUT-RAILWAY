@@ -295,6 +295,26 @@ h1 {
   letter-spacing: 0.005em;
 }
 
+/* Chat controls */
+.header-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+.new-chat-button {
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-pill);
+  background: rgba(255, 255, 255, 0.07);
+  color: var(--text);
+  padding: 6px 10px;
+  font-size: 11.5px;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.new-chat-button:disabled { opacity: 0.5; cursor: not-allowed; }
+
 /* Status pill */
 .status {
   flex: 0 0 auto;
@@ -1899,6 +1919,7 @@ h1 {
     padding: 16px 14px;
     gap: 10px;
   }
+  .header-actions { flex-direction: column; align-items: flex-end; gap: 5px; }
 
   header > div { gap: 10px; }
 
