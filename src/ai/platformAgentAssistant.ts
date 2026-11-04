@@ -166,9 +166,20 @@ export class PlatformAgentAssistant {
     const usageRecord = { id: result.turnId, usage: result.usage };
     bindOpenAIUsageReservation(usageRecord, input.reservation);
     await recordOpenAIUsageOnce('platform_agent', result.model, usageRecord);
-    const page = selectsAllCatalogMatches(result.answer)
-      ? await readFullCatalogSnapshot(result.page ?? {}, input.signal)
-      : result.page;
+    if (selectsAllCatalogMatches(result.answer) && !result.page) {
+      throw new CatalogClassificationError('Complete catalog selection requires a fresh search');
+    }
+    let page = result.page;
+    if (selectsAllCatalogMatches(result.answer)) {
+      try {
+        page = await readFullCatalogSnapshot(result.page ?? {}, input.signal);
+      } catch (error) {
+        if (error instanceof Error && error.message === 'Catalog did not establish complete structured filter coverage') {
+          throw new CatalogClassificationError(error.message);
+        }
+        throw error;
+      }
+    }
     const candidates = cardsFromPage(page);
     const parsed = JSON.parse(result.answer) as { selected?: unknown; rejected?: unknown; uncertain?: unknown };
     const classifiedIds = [parsed.selected, parsed.rejected, parsed.uncertain].flatMap((value) => Array.isArray(value) ? value : []);

@@ -97,6 +97,16 @@ describe('site chat and platform agent', () => {
     expect(state.full).toHaveBeenCalledOnce();
     expect(answer.productCards.map((item) => item.id)).toEqual(['p1', 'p2']);
   });
+  it('refreshes a full-selection marker when the agent did not perform a current search', async () => {
+    const answer = JSON.stringify({ answer: 'Подборка', selected: ['__ALL_CATALOG_MATCHES__'], rejected: [], uncertain: [] });
+    const page = { source_revision: 'new', items: [{ product_id: 'p1', name: 'Товар', price_rub: 100 }] };
+    state.run.mockResolvedValueOnce({ sessionId: 'agent-session', turnId: 'old', answer })
+      .mockResolvedValueOnce({ sessionId: 'agent-session', turnId: 'fresh', answer, page });
+    state.full.mockResolvedValue(page);
+    const result = await new PlatformAgentAssistant(repo).generateAnswer({ sessionId: 'chat', turnId: 'turn', userMessage: 'Покажи снова' });
+    expect(state.run).toHaveBeenCalledTimes(2);
+    expect(result.productCards.map((card) => card.id)).toEqual(['p1']);
+  });
   it('saves the original completed response when the deadline races completion', async () => {
     const controller = new AbortController();
     state.run.mockImplementation(async (input: { onBeforeSubmit: (id: string, prev: string, submitted: boolean, text: string) => Promise<void> }) => {
