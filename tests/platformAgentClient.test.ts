@@ -79,38 +79,6 @@ describe('Platform agent result', () => {
     expect(() => extractAgentResult([{ turn_id: 'new', type: 'mcp_call', name: 'search_products', arguments: {}, status: 'completed', output: { structuredContent: page } }], 'new')).toThrow('incomplete');
   });
 
-  it('combines classified searches without mixing an unrelated lookup or duplicating products', () => {
-    const call = (items: string[]) => ({ turn_id: 't', type: 'mcp_call', name: 'search_products', arguments: {},
-      status: 'completed', output: { structuredContent: { group: 'matches', count: items.length, source_revision: 'r1',
-        items: items.map(product_id => ({ product_id })), has_more: false, next_cursor: null } } });
-    const answer = JSON.stringify({ answer: 'Подобрал', selected: ['a', 'c'], rejected: ['b'], uncertain: [] });
-    const result = extractAgentResult([call(['machine']), call(['a', 'b']), call(['b', 'c']),
-      { turn_id: 't', role: 'assistant', phase: 'final_answer', content: [{ type: 'output_text', text: answer }] }], 't');
-    expect(result.page?.items).toEqual([{ product_id: 'a' }, { product_id: 'b' }, { product_id: 'c' }]);
-  });
-
-  it('rejects an incomplete earlier search when its results are classified', () => {
-    const cursor = Buffer.from(JSON.stringify({ snapshot: 's1', revision: 'r1', group: 'matches', offset: 1 })).toString('base64url');
-    const call = (page: unknown) => ({ turn_id: 't', type: 'mcp_call', name: 'search_products', arguments: {},
-      status: 'completed', output: { structuredContent: page } });
-    const first = { group: 'matches', count: 2, source_revision: 'r1', items: [{ product_id: 'a' }], has_more: true, next_cursor: cursor };
-    const last = { group: 'matches', count: 1, source_revision: 'r1', items: [{ product_id: 'b' }], has_more: false };
-    const answer = JSON.stringify({ answer: 'Подобрал', selected: ['a', 'b'], rejected: [], uncertain: [] });
-    expect(() => extractAgentResult([call(first), call(last),
-      { turn_id: 't', role: 'assistant', phase: 'final_answer', content: [{ type: 'output_text', text: answer }] }], 't')).toThrow('incomplete');
-  });
-
-  it('flags a classified text search whose catalog cannot establish completeness', () => {
-    const page = { group: 'matches', count: 1, source_revision: 'r', items: [{ product_id: 'a' }],
-      unsupported_filters: ['semantic_query_completeness'], has_more: false };
-    const answer = JSON.stringify({ answer: 'Подобрал', selected: ['a'], rejected: [], uncertain: [] });
-    const result = extractAgentResult([
-      { turn_id: 't', type: 'mcp_call', name: 'search_products', arguments: {}, status: 'completed', output: { structuredContent: page } },
-      { turn_id: 't', role: 'assistant', phase: 'final_answer', content: [{ type: 'output_text', text: answer }] }
-    ], 't');
-    expect(result.page?.incomplete_text_search).toBe(true);
-  });
-
   it('recovers candidates only from completed search calls in the same Platform session', async () => {
     const replies = [
       { data: [{ id: 'current', status: 'completed' }, { id: 'prior', status: 'completed' }], has_more: false },

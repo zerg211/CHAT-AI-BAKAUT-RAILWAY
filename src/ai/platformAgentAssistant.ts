@@ -226,9 +226,6 @@ export class PlatformAgentAssistant {
       }
     }
     let answer = classified.answer;
-    if (page?.incomplete_text_search === true && candidates.length) {
-      answer += '\n\nПо текстовому поиску список может быть неполным.';
-    }
     let cards = await enrichMissingPrices(classified.cards, input.signal);
     const pendingPage = page && Array.isArray(page.pending_price_items) ? { items: page.pending_price_items } : undefined;
     const pending = await enrichMissingPrices(cardsFromPage(pendingPage), input.signal);
