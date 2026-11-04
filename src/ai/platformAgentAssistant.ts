@@ -133,15 +133,10 @@ function classifyPage(raw: string, candidates: ProductCard[], history: ProductCa
       (!hasSearch && [...selected].some((id) => !shownIds.has(id)))) {
     throw new CatalogClassificationError('Agent classification does not account for the catalog page');
   }
-  const available = new Map((hasSearch ? candidates : history).map((card) => [card.id, card]));
-  // The agent orders selected and uncertain IDs by buyer relevance. Preserve
-  // that order in the complete snapshot instead of reverting to FTS order.
-  const cards = [...(result.selected as string[]), ...(result.uncertain as string[])]
-    .filter((id) => available.has(id) && (selected.has(id) || hasSearch || shownIds.has(id)))
-    .map((id) => {
-      const card = available.get(id)!;
-      return selected.has(id) ? card : { ...card, matchStatus: 'uncertain' as const };
-    });
+  const uncertain = new Set(result.uncertain as string[]);
+  const cards = (hasSearch ? candidates : history).filter((card) => selected.has(card.id) ||
+    (uncertain.has(card.id) && (hasSearch || shownIds.has(card.id))))
+    .map((card) => uncertain.has(card.id) ? { ...card, matchStatus: 'uncertain' as const } : card);
   return { answer: reconcileCitations(result.answer, cards), cards };
 }
 

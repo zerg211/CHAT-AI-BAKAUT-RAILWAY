@@ -123,7 +123,6 @@ const selectionHistoryContract = `\n\nТолько товары из ответ�
 
 const pricePolicy = `\n\nЦена, указанная в точной карточке базы, используется в ответе без общих оговорок о возможной неактуальности. Если покупатель сам спрашивает, изменилась ли цена, или есть доказанное расхождение, проверь сайт точного артикула. При отсутствии цены в базе проверь сайт: найденную цену показывай без оговорок; если на сайте цены нет, сообщи, что товар под заказ, сроки уточняет менеджер. Если сайт недоступен или артикул не подтверждён, цену нужно уточнить; не выдавай отсутствие подтверждения за товар под заказ.`;
 const coveragePolicy = `\n\nЕсли запрос допускает несколько видов или категорий товара, не ограничивай подбор одним видом без основания в запросе: охвати все релевантные категории или выполни общий поиск. Учитывай совместимость и явные требования покупателя, но не угадывай отсутствующие ограничения. Сохраняй подходящие варианты из разных поисков в selection_snapshots. Для нового подбора по смыслу, назначению, материалу, свойству или совместимости сначала один раз вызови semantic_rank_products с формулировкой товара и его применения. Смотри его как карту возможных категорий и моделей; не повторяй запрос с теми же условиями. Затем через search_products проверь точные условия по всем товарам в подходящих категориях; не делай повторных поисков с теми же условиями. Ранжирование не является границей отбора: товары ниже первой страницы не исключены. Если для полноты нужны другие категории или есть неизвестный решающий факт, расширь проверку или пометь неопределённость. Для чисто числового подбора в известной категории и для вопроса по точному артикулу этот предварительный смысловой поиск не нужен. Если текстовый поиск не гарантирует охват синонимов, не называй его результат полным.`;
-const buyerSelectionPolicy = `\n\nПодбор не является коротким списком советов. Классифицируй каждый найденный товар по всему запросу покупателя. В selected передай все доказанно подходящие товары, а не только те, которые назвал в answer; в uncertain — товары, для которых недостаёт решающего факта. В rejected передавай только товары с доказанным несоответствием, а не варианты, которые просто менее выгодны. Порядок ID внутри selected и uncertain определяет порядок карточек в виджете: ставь сначала наиболее уместные, а если покупатель просит недорогие варианты — начинай с меньшей цены. Слова о желательной низкой цене без названной суммы не создают жёсткий ценовой предел. Не называй дорогую модель недорогой; если точный бюджет нужен для окончательного выбора, спроси его, уже показав найденные варианты. Виджет сам раскрывает полный список по 10 карточек.`;
 
 function object(value: unknown): JsonObject | undefined {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as JsonObject : undefined;
@@ -359,23 +358,23 @@ export class PlatformAgentClient {
       const turns = await this.request(`/agents/sessions/${encodeURIComponent(sessionId)}/turns?limit=1&order=desc`, input.signal);
       previousTurnId = object(Array.isArray(turns.data) ? turns.data[0] : undefined)?.id;
       const previous = typeof previousTurnId === 'string' ? previousTurnId : null;
-      await input.onBeforeSubmit?.(sessionId, previous, false, input.message + contract + selectionHistoryContract + pricePolicy + coveragePolicy + buyerSelectionPolicy);
-      await this.submitMessage(sessionId, input.message + contract + selectionHistoryContract + pricePolicy + coveragePolicy + buyerSelectionPolicy, input.idempotencyKey, input.signal);
+      await input.onBeforeSubmit?.(sessionId, previous, false, input.message + contract + selectionHistoryContract + pricePolicy + coveragePolicy);
+      await this.submitMessage(sessionId, input.message + contract + selectionHistoryContract + pricePolicy + coveragePolicy, input.idempotencyKey, input.signal);
       await input.onSubmitted?.(sessionId, previous);
     } else {
       const saved = await this.request(`/agents/${encodeURIComponent(this.agentId)}`, input.signal);
       if (typeof saved.instructions !== 'string') throw new Error('Saved agent instructions are unavailable');
       const updatedTools = enableCatalogBatchTool(saved.tools);
       const session = await this.request('/agents/sessions', input.signal, {
-        agent_id: this.agentId, agent: { instructions: `${saved.instructions}\n\n${contract}${selectionHistoryContract}${pricePolicy}${coveragePolicy}${buyerSelectionPolicy}`, text: { format: outputFormat },
-          ...(updatedTools ? { tools: updatedTools } : {}) }, environment: { type: 'none' }, input: input.message + contract + selectionHistoryContract + pricePolicy + coveragePolicy + buyerSelectionPolicy,
+        agent_id: this.agentId, agent: { instructions: `${saved.instructions}\n\n${contract}${selectionHistoryContract}${pricePolicy}${coveragePolicy}`, text: { format: outputFormat },
+          ...(updatedTools ? { tools: updatedTools } : {}) }, environment: { type: 'none' }, input: input.message + contract + selectionHistoryContract + pricePolicy + coveragePolicy,
         ...(this.vaultIds.length ? { vault_ids: this.vaultIds } : {})
       }, input.idempotencyKey);
       if (typeof session.id !== 'string' || !session.id) throw new Error('Platform agent session ID missing');
       sessionId = session.id;
       try {
         await input.onSession?.(sessionId);
-        await input.onBeforeSubmit?.(sessionId, null, true, input.message + contract + selectionHistoryContract + pricePolicy + coveragePolicy + buyerSelectionPolicy);
+        await input.onBeforeSubmit?.(sessionId, null, true, input.message + contract + selectionHistoryContract + pricePolicy + coveragePolicy);
       } catch (error) {
         // The initial input has already started, so failure to durably record its
         // identity must not leave an unobservable paid run behind.
