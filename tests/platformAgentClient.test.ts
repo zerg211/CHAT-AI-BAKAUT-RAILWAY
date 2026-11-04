@@ -28,6 +28,11 @@ assert len(r['items'])==135 and r['count']==135 and not r['has_more']
 assert 'semantic_query_completeness' in r['unsupported_filters'] and not r['numeric_scan_complete']
 assert 'price_current' not in r
 assert 'price_current' not in k.get_product('0')
+full=k.search_products(category='category')
+assert len(full['items'])==100 and full['count']==135 and full['has_more']
+rest=k.search_products(cursor=full['next_cursor'])
+assert len(rest['items'])==35 and not rest['has_more']
+assert len({item['product_id'] for item in full['items']+rest['items']})==135
 `;
     const run = spawnSync(process.platform === 'win32' ? 'python' : 'python3', ['-c', script], { encoding: 'utf8' });
     expect(run.stderr).toBe('');

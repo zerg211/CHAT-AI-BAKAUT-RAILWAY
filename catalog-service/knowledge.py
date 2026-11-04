@@ -142,7 +142,10 @@ class Knowledge:
         if group not in snapshot['groups']:raise ValueError('invalid group')
         # This is a transport page size, not a cap on the number of candidates.
         items=snapshot['groups'][group]
-        next_offset=len(items) if snapshot['criteria']['query'].strip() and not snapshot['complete'] else offset+10
+        # MCP pages carry candidates to the agent, not cards to the buyer.
+        # Larger transport pages avoid dozens of agent/tool round trips while
+        # the widget still reveals the saved result ten cards at a time.
+        next_offset=len(items) if snapshot['criteria']['query'].strip() and not snapshot['complete'] else offset+100
         next_cursor=base64.urlsafe_b64encode(json.dumps({'snapshot':snapshot['snapshot'],'revision':self.revision,'criteria':snapshot['criteria'],'offset':next_offset,'group':group}).encode()).decode().rstrip('=') if next_offset<len(items) else None
         criteria=snapshot['criteria']
         applied={key:value for key,value in criteria.items() if key!='query' and value is not None}
