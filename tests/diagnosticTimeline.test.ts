@@ -23,6 +23,25 @@ describe('technical diagnostic timeline helpers', () => {
     expect(JSON.stringify(safe)).not.toContain('PRIVATE_CANARY');
     expect(safeDiagnosticEvent(null)).toEqual({});
   });
+  it.each(['done_received', 'stream_error', 'done', 'error'])('preserves safe transport eventType %s and the causal UUID', eventType => {
+    expect(safeDiagnosticEvent({ name: 'client.observed', eventType, causalEventId: uuid, prompt: 'PRIVATE_CANARY', token: 'SECRET_CANARY' }))
+      .toEqual({ name: 'client.observed', eventType, causalEventId: uuid });
+  });
+  it('rejects invalid transport labels and causal identifiers without leaking private fields', () => {
+    for (const eventType of ['', 'Bearer SECRET_CANARY', '<script>', 'x'.repeat(101), { secret: 'SECRET_CANARY' }, null, 42]) {
+      expect(safeDiagnosticEvent({ eventType })).toEqual({});
+    }
+    for (const causalEventId of ['', 'SECRET_CANARY', 'req_abc', uuid + '?secret=SECRET_CANARY', { secret: 'SECRET_CANARY' }, null, 42]) {
+      expect(safeDiagnosticEvent({ causalEventId })).toEqual({});
+    }
+  });
+  it('does not mark completed provider observations without errors as failures', () => {
+    for (const name of ['provider.turn.observed', 'provider.item.observed']) {
+      expect(diagnosticEventFailed(safeDiagnosticEvent({ name, remoteStatus: 'completed' }))).toBe(false);
+      expect(diagnosticEventFailed(safeDiagnosticEvent({ name, remoteStatus: 'failed' }))).toBe(true);
+      expect(diagnosticEventFailed(safeDiagnosticEvent({ name, remoteStatus: 'completed', errorCode: 'unknown', errorCodeReported: true }))).toBe(true);
+    }
+  });
   it('highlights local and remote failures without interpreting absent evidence as success', () => {
     expect(diagnosticEventFailed({ statusCode: 503 })).toBe(true);
     expect(diagnosticEventFailed({ remoteStatus: 'incomplete' })).toBe(true);
@@ -66,6 +85,26 @@ describe('manual diagnostic timeline requests', () => {
   async function submit() {
     await act(async () => container.querySelector('form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })));
   }
+  it('shows transport discriminators and causal links in expanded technical details', async () => {
+    const events = [
+      { id: '1', name: 'client.observed', eventType: 'done_received' },
+      { id: '2', name: 'client.observed', eventType: 'stream_error' },
+      { id: '3', name: 'delivery.sse.write_attempt', eventType: 'done' },
+      { id: '4', name: 'recovery.complete', causalEventId: uuid }
+    ];
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => ({
+      events: events.map(event => ({ ...event, prompt: 'PRIVATE_CANARY', authorization: 'SECRET_CANARY' })), hasMore: false
+    }) })));
+    await mount(); await submit();
+    const details = [...container.querySelectorAll('li details')];
+    expect(details).toHaveLength(events.length);
+    for (const [index, detail] of details.entries()) {
+      await act(async () => { (detail as HTMLDetailsElement).open = true; });
+      expect(JSON.parse(detail.querySelector('pre')!.textContent!)).toEqual(events[index]);
+    }
+    expect(container.textContent).not.toContain('PRIVATE_CANARY');
+    expect(container.textContent).not.toContain('SECRET_CANARY');
+  });
   it('never fetches automatically, and blocks requests without a token', async () => {
     const fetcher = vi.fn(); vi.stubGlobal('fetch', fetcher);
     await mount(''); await submit();

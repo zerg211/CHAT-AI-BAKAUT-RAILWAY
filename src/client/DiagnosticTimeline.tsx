@@ -26,6 +26,8 @@ export function safeDiagnosticEvent(input: unknown): TechnicalEvent {
     else if (key === 'id' && typeof value === 'number' && Number.isSafeInteger(value) && value >= 0) result[key] = String(value);
     else if (key === 'timestamp' && typeof value === 'string' && /^\d{4}-\d{2}-\d{2}T[\d:.]+Z$/.test(value) && Number.isFinite(Date.parse(value))) result[key] = value;
     else if (key === 'errorSite' && typeof value === 'string' && value.length<160 && /^[a-zA-Z0-9_./-]+\.[jt]s:[0-9]{1,8}:[0-9]{1,8}$/.test(value)) result[key]=value;
+    else if (key === 'eventType' && typeof value === 'string' && value.length > 0 && value.length <= 100 && tokenCharacters(value)) result[key] = value;
+    else if (key === 'causalEventId' && typeof value === 'string' && uuid(value)) result[key] = value;
     else if (key === 'endpoint' && typeof value === 'string' && endpoints.has(value)) result[key] = value;
     else if (key !== 'endpoint' && textFields.has(key) && typeof value === 'string' && value.length <= 200 && tokenCharacters(value)) result[key] = value;
   }
