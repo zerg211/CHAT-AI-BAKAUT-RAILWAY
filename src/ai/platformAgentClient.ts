@@ -80,33 +80,55 @@ export function extractAgentResult(items: unknown[], turnId: string) {
       if (typeof cursor !== 'string' || !cursor) return undefined;
       try { return object(JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8'))); } catch { return undefined; }
     };
-    const firstNext = decodeCursor(first.next_cursor);
-    if (first.has_more === true && !firstNext) throw new Error('Invalid catalog cursor');
-    const sequence = [{ entry: root, offset: 0 }, ...pages.flatMap((entry) => {
-      const token = decodeCursor(entry.cursor);
-      if (!token || !firstNext || token.snapshot !== firstNext.snapshot || token.revision !== firstNext.revision ||
-          token.group !== 'matches' || typeof token.offset !== 'number') return [];
-      return [{ entry, offset: token.offset }];
-    })].sort((a, b) => a.offset - b.offset);
-    let expectedOffset = 0;
-    for (const part of sequence) {
-      if (part.offset !== expectedOffset || part.entry.page.count !== first.count ||
-          part.entry.page.source_revision !== first.source_revision ||
-          JSON.stringify(part.entry.page.criteria) !== JSON.stringify(first.criteria)) {
-        throw new Error('Catalog pages are incomplete or inconsistent');
+    let classified = new Set<string>();
+    try {
+      const parsed = object(JSON.parse(answer));
+      classified = new Set([parsed?.selected, parsed?.rejected, parsed?.uncertain].flatMap((v) =>
+        Array.isArray(v) ? v.filter((id): id is string => typeof id === 'string') : []));
+    } catch { /* Answer validation happens later. */ }
+    const roots = pages.filter((entry) => !entry.cursor);
+    const allById = new Map<string, unknown>();
+    let incompleteTextSearch = false;
+    for (const search of roots) {
+      const start = search.page;
+      const firstNext = decodeCursor(start.next_cursor);
+      if (start.has_more === true && !firstNext) throw new Error('Invalid catalog cursor');
+      const sequence = [{ entry: search, offset: 0 }, ...pages.flatMap((entry) => {
+        const token = decodeCursor(entry.cursor);
+        if (!token || !firstNext || token.snapshot !== firstNext.snapshot || token.revision !== firstNext.revision ||
+            token.group !== 'matches' || typeof token.offset !== 'number') return [];
+        return [{ entry, offset: token.offset }];
+      })].sort((a, b) => a.offset - b.offset);
+      const searchItems = sequence.flatMap((part) => part.entry.page.items as unknown[]);
+      // Other searches may only identify a machine or provide context. Include
+      // the final search and any earlier search explicitly classified by the model.
+      if (search !== root && !searchItems.some((item) => classified.has(String(object(item)?.product_id ?? '')))) continue;
+      if (Array.isArray(start.unsupported_filters) && start.unsupported_filters.includes('semantic_query_completeness')) incompleteTextSearch = true;
+      if (start.source_revision !== first.source_revision) throw new Error('Catalog revision changed between searches');
+      let expectedOffset = 0;
+      for (const part of sequence) {
+        if (part.offset !== expectedOffset || part.entry.page.count !== start.count ||
+            part.entry.page.source_revision !== start.source_revision ||
+            JSON.stringify(part.entry.page.criteria) !== JSON.stringify(start.criteria)) {
+          throw new Error('Catalog pages are incomplete or inconsistent');
+        }
+        expectedOffset += (part.entry.page.items as unknown[]).length;
+        const next = decodeCursor(part.entry.page.next_cursor);
+        if (part.entry.page.has_more === true && (!next || next.snapshot !== firstNext?.snapshot || next.offset !== expectedOffset)) {
+          throw new Error('Catalog continuation is inconsistent');
+        }
       }
-      expectedOffset += (part.entry.page.items as unknown[]).length;
-      const next = decodeCursor(part.entry.page.next_cursor);
-      if (part.entry.page.has_more === true && (!next || next.snapshot !== firstNext?.snapshot || next.offset !== expectedOffset)) {
-        throw new Error('Catalog continuation is inconsistent');
+      if (sequence[sequence.length - 1].entry.page.has_more === true ||
+          typeof start.count !== 'number' || searchItems.length !== start.count) {
+        throw new Error('Catalog result is incomplete or changed while loading');
+      }
+      for (const item of searchItems) {
+        const id = object(item)?.product_id;
+        if (typeof id !== 'string' || !id) throw new Error('Invalid catalog product identity');
+        if (!allById.has(id)) allById.set(id, item);
       }
     }
-    const last = sequence[sequence.length - 1].entry.page;
-    const all = sequence.flatMap((part) => part.entry.page.items as unknown[]);
-    if (last.has_more === true || typeof first.count !== 'number' || all.length !== first.count) {
-      throw new Error('Catalog result is incomplete or changed while loading');
-    }
-    page = { ...first, items: all, has_more: false, next_cursor: null };
+    page = { ...first, items: [...allById.values()], has_more: false, next_cursor: null, incomplete_text_search: incompleteTextSearch };
     pageCursor = root.cursor;
   }
   return { answer, page, pageCursor, usedWebSearch: own.some((item) => item.type === 'web_search_call') };
