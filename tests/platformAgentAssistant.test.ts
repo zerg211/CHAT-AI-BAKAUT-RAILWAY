@@ -185,7 +185,7 @@ describe('site chat and platform agent', () => {
     state.run.mockResolvedValue({ sessionId: 'agent-session', turnId: 'agent-turn',
       answer: JSON.stringify({ answer: 'Виброплита', selected: ['plate'], rejected: ['reviewed'], uncertain: [] }) });
     const result = await new PlatformAgentAssistant(repo).generateAnswer({ sessionId: 'chat', turnId: 'turn', userMessage: 'Какие были виброплиты?' });
-    expect(state.listMessages).toHaveBeenCalledWith('chat', 80);
+    expect(state.listMessages).toHaveBeenCalledWith('chat', null);
     expect(result.productCards.map((card) => card.id)).toEqual(['plate']);
   });
   it('recovers rejected candidates from the same Platform session when old chat messages did not save them', async () => {

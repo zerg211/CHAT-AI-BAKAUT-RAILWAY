@@ -179,7 +179,7 @@ export class PlatformAgentAssistant {
     if (!selectsAllCatalogMatches(result.answer) && classifiedIds.some((id) => !currentIds.has(id))) {
       // All previously delivered results belong to this session. Use the most
       // recent copy of each card, while never inventing unknown identities.
-      const messages = await this.conversations.listMessages(input.sessionId, 80);
+      const messages = await this.conversations.listMessages(input.sessionId, null);
       const byId = new Map<string, ProductCard>();
       for (const message of [...messages].reverse()) {
         const shown = message.metadata?.productCards;
