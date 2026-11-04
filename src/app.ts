@@ -6,6 +6,7 @@ import { ConversationRepository } from './db/repositories.js';
 import { createReadinessProbe } from './db/readiness.js';
 import { startLeadOutboxWorker } from './ai/leadOutbox.js';
 import { startKnowledgeEnrichmentWorker } from './ai/knowledgeEnrichment.js';
+import { startPlatformUsageReconciliation } from './ai/openaiUsageGuard.js';
 import { AI_MANAGER_RUNTIME_MANIFEST } from './ai/aiManagerRuntimeManifest.js';
 import { registerAdminRoutes } from './routes/admin.js';
 import { registerChatRoutes } from './routes/chat.js';
@@ -105,6 +106,7 @@ export async function buildApp() {
   if (config.NODE_ENV !== 'test') {
     const stopOutbox = startLeadOutboxWorker({ log: app.log });
     app.addHook('onClose', stopOutbox);
+    if (config.OPENAI_PLATFORM_AGENT_ID) app.addHook('onClose', startPlatformUsageReconciliation());
   }
   if (config.NODE_ENV !== 'test' && !config.OPENAI_PLATFORM_AGENT_ID) {
     const stopEnrichment = startKnowledgeEnrichmentWorker();

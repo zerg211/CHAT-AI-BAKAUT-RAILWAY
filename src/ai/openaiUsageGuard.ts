@@ -299,6 +299,74 @@ export async function recordOpenAIUsageOnce(stage: string, model: string, respon
   await recordOpenAIUsage(stage, model, response);
 }
 
+/** Platform usage is best-effort and may arrive after the turn has completed. */
+export async function reconcilePlatformAgentUsage(transport: typeof fetch = fetch) {
+  if (!config.OPENAI_API_KEY || !config.OPENAI_PLATFORM_AGENT_ID) return;
+  const pending = await pool.query<{ id: string; session_id: string; turn_id: string; response_id: string; agent_session_id: string; model: string }>(
+    `SELECT e.id, e.session_id, e.turn_id, e.response_id, e.model, s.agent_session_id
+     FROM openai_usage_events e JOIN platform_agent_sessions s ON s.session_id=e.session_id
+     WHERE e.stage='platform_agent' AND e.response_id IS NOT NULL AND e.turn_id IS NOT NULL
+       AND e.created_at > now() - interval '30 days'
+       AND (e.total_tokens IS NULL OR e.created_at > now() - interval '15 minutes')
+     ORDER BY (e.total_tokens IS NULL) DESC, e.created_at DESC LIMIT 25`
+  );
+  for (const row of pending.rows) {
+    try {
+      const url = `https://api.openai.com/v1/agents/sessions/${encodeURIComponent(row.agent_session_id)}/turns/${encodeURIComponent(row.response_id)}`;
+      const response = await transport(url, { headers: { Authorization: `Bearer ${config.OPENAI_API_KEY}`, 'OpenAI-Beta': 'agents=v1' }, signal: AbortSignal.timeout(8_000) });
+      if (!response.ok) continue;
+      const turn = await response.json() as { id?: unknown; usage?: unknown };
+      if (turn.id !== row.response_id || !turn.usage || typeof turn.usage !== 'object') continue;
+      const usage = extractOpenAIUsage(turn);
+      if (usage.totalTokens === null) continue;
+      const pricing = estimateRecordedUsageCost(row.model, turn);
+      const db = await pool.connect();
+      try {
+        await db.query('BEGIN');
+        await db.query(
+          `UPDATE openai_usage_events SET input_tokens=coalesce($2,input_tokens), output_tokens=coalesce($3,output_tokens),
+             reasoning_tokens=coalesce($4,reasoning_tokens), total_tokens=$5, cost_usd=coalesce($6,cost_usd),
+             metadata=coalesce(metadata,'{}'::jsonb) || $7::jsonb
+           WHERE id=$1 AND stage='platform_agent' AND response_id=$8`,
+          [row.id, usage.inputTokens, usage.outputTokens, usage.reasoningTokens, usage.totalTokens, pricing.costUsd,
+            JSON.stringify({ hasUsage: true, cachedInputTokens: usage.cachedInputTokens, usageReconciledAt: new Date().toISOString() }), row.response_id]
+        );
+        await db.query(
+          `UPDATE messages m SET metadata=coalesce(m.metadata,'{}'::jsonb) || jsonb_build_object('platformAgentUsage',$3::jsonb)
+           FROM conversation_turns t WHERE t.id=$1 AND t.session_id=$2 AND t.assistant_message_id=m.id
+             AND m.metadata->>'platformAgentTurnId'=$4`,
+          [row.turn_id, row.session_id, JSON.stringify(turn.usage), row.response_id]
+        );
+        await db.query(
+          `UPDATE openai_usage_reservations SET status='reconciled', actual_tokens=$3, updated_at=now()
+           WHERE session_id=$1 AND turn_id=$2 AND stage='platform_agent' AND status='reserved'`,
+          [row.session_id, row.turn_id, usage.totalTokens]
+        );
+        await db.query('COMMIT');
+      } catch (error) {
+        await db.query('ROLLBACK').catch(() => undefined);
+        throw error;
+      } finally { db.release(); }
+    } catch {
+      // Keep the event pending for the next run; never infer zero or expose credentials.
+      console.warn('[OpenAIUsage] Could not reconcile platform agent usage');
+    }
+  }
+}
+
+export function startPlatformUsageReconciliation() {
+  let inFlight: Promise<void> | undefined;
+  const run = () => {
+    if (inFlight) return;
+    inFlight = reconcilePlatformAgentUsage().catch(() => {
+      console.warn('[OpenAIUsage] Platform usage reconciliation failed');
+    }).finally(() => { inFlight = undefined; });
+  };
+  run();
+  const timer = setInterval(run, 60_000).unref();
+  return async () => { clearInterval(timer); await inFlight; };
+}
+
 function numberOrNull(value: unknown) {
   if (value === null || value === undefined || value === '' || typeof value === 'boolean') return null;
   const number = Number(value);
