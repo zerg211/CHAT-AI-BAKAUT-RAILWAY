@@ -134,12 +134,9 @@ function classifyPage(raw: string, candidates: ProductCard[], history: ProductCa
     throw new CatalogClassificationError('Agent classification does not account for the catalog page');
   }
   const uncertain = new Set(result.uncertain as string[]);
-  const available = hasSearch ? candidates : history;
-  const cards = [
-    ...available.filter((card) => selected.has(card.id)),
-    ...available.filter((card) => uncertain.has(card.id) && (hasSearch || shownIds.has(card.id)))
-      .map((card) => ({ ...card, matchStatus: 'uncertain' as const }))
-  ];
+  const cards = (hasSearch ? candidates : history).filter((card) => selected.has(card.id) ||
+    (uncertain.has(card.id) && (hasSearch || shownIds.has(card.id))))
+    .map((card) => uncertain.has(card.id) ? { ...card, matchStatus: 'uncertain' as const } : card);
   return { answer: reconcileCitations(result.answer, cards), cards };
 }
 

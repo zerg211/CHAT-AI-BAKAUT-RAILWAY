@@ -122,9 +122,7 @@ const contract = `\n\nСлужебная инструкция виджета и�
 const selectionHistoryContract = `\n\nТолько товары из ответов, действительно показанных покупателю, являются показанной подборкой. Результаты незавершённых, отменённых и не показанных попыток не являются показанными. Для нового подбора и после неудачной попытки обязательно выполни новый search_products в актуальном каталоге. При вопросе о ранее показанных товарах сохраняй контекст. Для любых товаров используй доступные факты из точной карточки и сопоставляй только характеристики, которые действительно влияют на запрос покупателя. Если необходимые известные условия совпадают и нет существенного противоречия, отвечай и показывай товары без повторных проверок или искусственных сомнений. Отсутствие второстепенного поля само по себе не причина исключать товар, обращаться в интернет или требовать уточнение. Если решающий для выбора факт неизвестен или данные существенно противоречат друг другу, проверь точную модификацию в доступных источниках или кратко уточни нужное; не выдумывай значение и не называй неподтверждённое подтверждённым. Явно установленное несовпадение обязательного условия учитывай. Показывай предварительные варианты отдельно от подтверждённых, если без неизвестного факта нельзя окончательно подтвердить соответствие. В selection_snapshots укажи snapshot каждого поиска, товары которого образуют новую подборку. Не включай поиски для справки или уточнения характеристик. Все страницы каждого выбранного snapshot должны быть загружены, товары всех выбранных snapshot классифицируй один раз, без повторов. Если используешь маркер полного каталога, укажи ровно один snapshot. Для ответа без нового подбора верни пустой selection_snapshots.`;
 
 const pricePolicy = `\n\nЦена, указанная в точной карточке базы, используется в ответе без общих оговорок о возможной неактуальности. Если покупатель сам спрашивает, изменилась ли цена, или есть доказанное расхождение, проверь сайт точного артикула. При отсутствии цены в базе проверь сайт: найденную цену показывай без оговорок; если на сайте цены нет, сообщи, что товар под заказ, сроки уточняет менеджер. Если сайт недоступен или артикул не подтверждён, цену нужно уточнить; не выдавай отсутствие подтверждения за товар под заказ.`;
-const coveragePolicy = `\n\nЕсли запрос допускает несколько видов или категорий товара, не ограничивай подбор одним видом без основания в запросе: охвати все релевантные категории или выполни общий поиск. Учитывай совместимость и явные требования покупателя, но не угадывай отсутствующие ограничения. Сохраняй подходящие варианты из разных поисков в selection_snapshots. Если вид товара неясен, один раз вызови semantic_rank_products для определения возможных категорий. Когда покупатель прямо назвал категорию, этот вызов не нужен. Ранжирование используй как карту категорий и моделей, не повторяй его с теми же условиями. Для выбранных категорий через search_products проверь точные условия по всем товарам в подходящих категориях; не делай повторных поисков с теми же условиями. Ранжирование не является границей отбора: товары ниже первой страницы не исключены. Если для полноты нужны другие категории или есть неизвестный решающий факт, расширь проверку или пометь неопределённость. Для чисто числового подбора в известной категории и для вопроса по точному артикулу этот предварительный смысловой поиск не нужен. Если текстовый поиск не гарантирует охват синонимов, не называй его результат полным.`;
-const buyerCriteriaPolicy = `\n\nРаздели запрос на обязательные условия и предпочтения. Без названной покупателем суммы слова «недорогой», «подешевле» и подобные означают сортировку по цене, а не предел: не придумывай бюджет и не отбрасывай подходящие товары из-за цены. Для обязательного условия по назначению, свойству или совместимости вызови search_products по подходящей категории с query="" и relevance_query с формулировкой именно обязательного условия. Этот параметр добавляет короткие выдержки из исходных карточек и не исключает товары; пройди все страницы одного snapshot без повторного поиска с теми же условиями. В selected внеси все товары с подтверждением обязательных условий, в rejected — только с доказанным противоречием, в uncertain — товары, где решающий факт ещё неизвестен. Не считай совпадение категории или близость эмбеддингов подтверждением пригодности. При необходимости уточняй недостающие факты через get_products_batch и только затем через сеть. Не сокращай selected до нескольких рекомендаций: виджет сам показывает полный список по десять карточек.`;
-const fullPolicy = contract + selectionHistoryContract + pricePolicy + coveragePolicy + buyerCriteriaPolicy;
+const coveragePolicy = `\n\nЕсли запрос допускает несколько видов или категорий товара, не ограничивай подбор одним видом без основания в запросе: охвати все релевантные категории или выполни общий поиск. Учитывай совместимость и явные требования покупателя, но не угадывай отсутствующие ограничения. Сохраняй подходящие варианты из разных поисков в selection_snapshots. Для нового подбора по смыслу, назначению, материалу, свойству или совместимости сначала один раз вызови semantic_rank_products с формулировкой товара и его применения. Смотри его как карту возможных категорий и моделей; не повторяй запрос с теми же условиями. Затем через search_products проверь точные условия по всем товарам в подходящих категориях; не делай повторных поисков с теми же условиями. Ранжирование не является границей отбора: товары ниже первой страницы не исключены. Если для полноты нужны другие категории или есть неизвестный решающий факт, расширь проверку или пометь неопределённость. Для чисто числового подбора в известной категории и для вопроса по точному артикулу этот предварительный смысловой поиск не нужен. Если текстовый поиск не гарантирует охват синонимов, не называй его результат полным.`;
 
 function object(value: unknown): JsonObject | undefined {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as JsonObject : undefined;
@@ -212,24 +210,12 @@ export function extractAgentResult(items: unknown[], turnId: string) {
     if (first.source_revision !== root.page.source_revision) throw new Error('Catalog revision changed between searches');
     const firstNext = decodeCursor(first.next_cursor);
     if (first.has_more === true && !firstNext) throw new Error('Invalid catalog cursor');
-    const repeated = [{ entry: selectedRoot, offset: 0 }, ...pages.flatMap((entry) => {
+    const sequence = [{ entry: selectedRoot, offset: 0 }, ...pages.flatMap((entry) => {
       const token = decodeCursor(entry.cursor);
       if (!token || !firstNext || token.snapshot !== firstNext.snapshot || token.revision !== firstNext.revision ||
           token.group !== 'matches' || typeof token.offset !== 'number') return [];
       return [{ entry, offset: token.offset }];
-    })];
-    const byOffset = new Map<number, typeof repeated[number]>();
-    const stablePage = (value: JsonObject) => JSON.stringify({ items: value.items, count: value.count,
-      source_revision: value.source_revision, criteria: value.criteria, next_cursor: value.next_cursor,
-      has_more: value.has_more, snapshot: value.snapshot });
-    for (const part of repeated) {
-      const earlier = byOffset.get(part.offset);
-      if (earlier && stablePage(earlier.entry.page) !== stablePage(part.entry.page)) {
-        throw new Error('Repeated catalog page changed');
-      }
-      byOffset.set(part.offset, part);
-    }
-    const sequence = [...byOffset.values()].sort((a, b) => a.offset - b.offset);
+    })].sort((a, b) => a.offset - b.offset);
     let expectedOffset = 0;
     for (const part of sequence) {
       if (part.offset !== expectedOffset || part.entry.page.count !== first.count ||
@@ -372,23 +358,23 @@ export class PlatformAgentClient {
       const turns = await this.request(`/agents/sessions/${encodeURIComponent(sessionId)}/turns?limit=1&order=desc`, input.signal);
       previousTurnId = object(Array.isArray(turns.data) ? turns.data[0] : undefined)?.id;
       const previous = typeof previousTurnId === 'string' ? previousTurnId : null;
-      await input.onBeforeSubmit?.(sessionId, previous, false, input.message + fullPolicy);
-      await this.submitMessage(sessionId, input.message + fullPolicy, input.idempotencyKey, input.signal);
+      await input.onBeforeSubmit?.(sessionId, previous, false, input.message + contract + selectionHistoryContract + pricePolicy + coveragePolicy);
+      await this.submitMessage(sessionId, input.message + contract + selectionHistoryContract + pricePolicy + coveragePolicy, input.idempotencyKey, input.signal);
       await input.onSubmitted?.(sessionId, previous);
     } else {
       const saved = await this.request(`/agents/${encodeURIComponent(this.agentId)}`, input.signal);
       if (typeof saved.instructions !== 'string') throw new Error('Saved agent instructions are unavailable');
       const updatedTools = enableCatalogBatchTool(saved.tools);
       const session = await this.request('/agents/sessions', input.signal, {
-        agent_id: this.agentId, agent: { instructions: `${saved.instructions}\n\n${fullPolicy}`, text: { format: outputFormat },
-          ...(updatedTools ? { tools: updatedTools } : {}) }, environment: { type: 'none' }, input: input.message + fullPolicy,
+        agent_id: this.agentId, agent: { instructions: `${saved.instructions}\n\n${contract}${selectionHistoryContract}${pricePolicy}${coveragePolicy}`, text: { format: outputFormat },
+          ...(updatedTools ? { tools: updatedTools } : {}) }, environment: { type: 'none' }, input: input.message + contract + selectionHistoryContract + pricePolicy + coveragePolicy,
         ...(this.vaultIds.length ? { vault_ids: this.vaultIds } : {})
       }, input.idempotencyKey);
       if (typeof session.id !== 'string' || !session.id) throw new Error('Platform agent session ID missing');
       sessionId = session.id;
       try {
         await input.onSession?.(sessionId);
-        await input.onBeforeSubmit?.(sessionId, null, true, input.message + fullPolicy);
+        await input.onBeforeSubmit?.(sessionId, null, true, input.message + contract + selectionHistoryContract + pricePolicy + coveragePolicy);
       } catch (error) {
         // The initial input has already started, so failure to durably record its
         // identity must not leave an unobservable paid run behind.
