@@ -180,6 +180,7 @@ assert 'price_current' not in k.get_product('0')
     const request = JSON.parse(String(options.body));
     expect(request).toMatchObject({ agent_id: 'saved-agent', vault_ids: ['vault-id'], agent: { instructions: expect.stringContaining('Исходные инструкции агента'), text: { format: { type: 'json_schema' } } } });
     expect(request.agent.instructions).toContain('без общих оговорок о возможной неактуальности');
+    expect(request.agent.instructions).toContain('не ограничивай подбор одним видом без основания в запросе');
     expect(onSession).toHaveBeenCalledWith('new-session');
     expect(result.answer).toBe('Ответ');
   });
