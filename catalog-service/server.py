@@ -21,9 +21,9 @@ if os.environ.get('BAKAUT_PUBLIC_HOSTNAME'):hosts.append(os.environ['BAKAUT_PUBL
 server=FastMCP('BAKAUT indexed catalog',stateless_http=True,json_response=True,transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=True,allowed_hosts=hosts))
 def compact_result(data):return CallToolResult(content=[TextContent(type='text',text=json.dumps(data,ensure_ascii=False,separators=(',',':')))])
 @server.tool(structured_output=False)
-def search_products(query:str='',category:str|None=None,min_nominal_kw:float|None=None,max_nominal_kw:float|None=None,max_price_rub:float|None=None,cursor:str|None=None,group:str='matches')->CallToolResult:
-    """Search catalog. Generator category choices: Инверторные генераторы, Бензиновые генераторы, Дизельные генераторы, Газовые генераторы, Сварочные генераторы; генераторы includes all five. For numeric filters choose the most precise actual category: numeric search does not apply query text, reported in unsupported_filters. applied_filters lists only enforced constraints. Unknown or conflicting fields remain separately grouped. Text matching is evidence, not proof of an arbitrary property; source_scan_complete does not cover all synonyms. Page results have stable revision, snapshot and next_cursor."""
-    return compact_result(Knowledge('fts').search_products(query,category,min_nominal_kw,max_nominal_kw,max_price_rub,cursor,group))
+def search_products(query:str='',category:str|None=None,min_nominal_kw:float|None=None,max_nominal_kw:float|None=None,max_price_rub:float|None=None,cursor:str|None=None,group:str='matches',cutting_diameters_mm:list[float]|None=None,max_cutting_diameter_mm:float|None=None)->CallToolResult:
+    """Search catalog. For discs only, use category Режущие диски and empty query, with cutting_diameters_mm for exact sizes OR max_cutting_diameter_mm for all sizes up to a confirmed machine maximum. Unknown and conflicting diameters are in unknown. This checks diameter only, not compatibility, bore, speed or material. Generator category choices: Инверторные генераторы, Бензиновые генераторы, Дизельные генераторы, Газовые генераторы, Сварочные генераторы; генераторы includes all five. Numeric generator search does not apply query text. applied_filters lists only enforced constraints. Source-labelled cutting_evidence is card data, not proof of compatibility."""
+    return compact_result(Knowledge('fts').search_products(query,category,min_nominal_kw,max_nominal_kw,max_price_rub,cursor,group,cutting_diameters_mm,max_cutting_diameter_mm))
 @server.tool(structured_output=False)
 def get_product(identifier:str,fields:list[str]|None=None)->CallToolResult:
     """Read one original card by product ID, SKU, model or URL. Preserve SKU ambiguity and conflicting source fields. Use for additional facts not present in search results."""
@@ -43,11 +43,11 @@ async def search_full(request):
     """Server-side complete selection from one catalog revision, not model pagination."""
     try:
         body=await request.json()
-        allowed={'query','category','min_nominal_kw','max_nominal_kw','max_price_rub','expected_revision'}
+        allowed={'query','category','min_nominal_kw','max_nominal_kw','max_price_rub','cutting_diameters_mm','max_cutting_diameter_mm','expected_revision'}
         if not isinstance(body,dict):raise ValueError('Expected an object')
         extras=sorted(set(body)-allowed)
         if extras:return JSONResponse({'status':'unsupported_filters','unsupported_filters':extras},status_code=400)
-        args={key:body[key] for key in ('query','category','min_nominal_kw','max_nominal_kw','max_price_rub') if key in body}
+        args={key:body[key] for key in ('query','category','min_nominal_kw','max_nominal_kw','max_price_rub','cutting_diameters_mm','max_cutting_diameter_mm') if key in body}
         if 'query' in args and not isinstance(args['query'],str):raise ValueError('query must be a string')
         if args.get('category') is not None and not isinstance(args['category'],str):raise ValueError('category must be a string or null')
         for key in ('min_nominal_kw','max_nominal_kw','max_price_rub'):
