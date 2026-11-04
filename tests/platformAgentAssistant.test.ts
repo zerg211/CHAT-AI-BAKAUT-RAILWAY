@@ -15,6 +15,7 @@ vi.mock('../src/ai/fullCatalogClient.js', () => ({ readFullCatalogSnapshot: stat
 vi.mock('../src/ai/openaiUsageGuard.js', () => ({ assertOpenAIUsageBudget: vi.fn(async () => 'reservation'), bindOpenAIUsageReservation: vi.fn(), recordOpenAIUsageOnce: vi.fn(async () => undefined) }));
 vi.mock('../src/ai/agentManagerOrchestrator.js', () => ({ TurnExecutionInProgressError: class extends Error {} }));
 import { PlatformAgentAssistant } from '../src/ai/platformAgentAssistant.js';
+import { config } from '../src/config.js';
 import type { ConversationRepository } from '../src/db/repositories.js';
 
 describe('site chat and platform agent', () => {
@@ -33,6 +34,59 @@ describe('site chat and platform agent', () => {
     state.query.mockResolvedValue({ rows: [{ agent_session_id: 'agent-session', next_cursor: 'cursor-1', seen_product_ids: ['old'] }] });
     state.transactionQuery.mockResolvedValue({ rows: [], rowCount: 1 });
     state.commitMessage.mockResolvedValue({ id: 'assistant-message' });
+  });
+  it('retries an undisplayed selection with a new catalog search and shows only the new checked result', async () => {
+    state.run
+      .mockResolvedValueOnce({ sessionId: 'agent-session', turnId: 'failed-list',
+        answer: JSON.stringify({ answer: 'Старый список', selected: ['unshown'], rejected: [], uncertain: [] }) })
+      .mockResolvedValueOnce({ sessionId: 'agent-session', turnId: 'fresh-list',
+        page: { items: [{ product_id: 'fresh', name: 'Проверенный товар', price_rub: 100 }] },
+        answer: JSON.stringify({ answer: 'Новый результат', selected: ['fresh'], rejected: [], uncertain: [] }) });
+    const answer = await new PlatformAgentAssistant(repo).generateAnswer({ sessionId: 'chat', turnId: 'turn', userMessage: 'Найди диск' });
+    expect(state.run).toHaveBeenCalledTimes(2);
+    expect(state.run.mock.calls[1][0]).toMatchObject({ sessionId: 'agent-session', idempotencyKey: 'turn-catalog-retry' });
+    expect(state.run.mock.calls[1][0].message).toContain('заново вызови search_products');
+    expect(answer.answer).toBe('Новый результат');
+    expect(answer.productCards.map((card) => card.id)).toEqual(['fresh']);
+  });
+  it('refreshes a shown selection after the catalog revision changes', async () => {
+    Object.assign(config, { BAKAUT_CATALOG_URL: 'https://catalog-search-production.up.railway.app' });
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => ({ status: 'ok', revision: 'new-revision' }) })));
+    state.listMessages.mockResolvedValue([{ metadata: { catalogRevision: 'old-revision', productCards: [
+      { id: 'shown', name: 'Товар', price: 100, specs: {}, currency: 'RUB' }
+    ] } }]);
+    state.run
+      .mockResolvedValueOnce({ sessionId: 'agent-session', turnId: 'old-result',
+        answer: JSON.stringify({ answer: 'Старые данные', selected: ['shown'], rejected: [], uncertain: [] }) })
+      .mockResolvedValueOnce({ sessionId: 'agent-session', turnId: 'fresh-result',
+        page: { source_revision: 'new-revision', items: [{ product_id: 'shown', name: 'Товар', price_rub: 120 }] },
+        answer: JSON.stringify({ answer: 'Актуальные данные', selected: ['shown'], rejected: [], uncertain: [] }) });
+    try {
+      const answer = await new PlatformAgentAssistant(repo).generateAnswer({ sessionId: 'chat', turnId: 'turn', userMessage: 'Подойдёт этот?' });
+      expect(answer.answer).toBe('Актуальные данные');
+      expect(answer.productCards[0].price).toBe(120);
+      expect(state.run).toHaveBeenCalledTimes(2);
+    } finally {
+      Object.assign(config, { BAKAUT_CATALOG_URL: undefined });
+      vi.unstubAllGlobals();
+    }
+  });
+  it('keeps shown products in a follow-up when the catalog revision has not changed', async () => {
+    Object.assign(config, { BAKAUT_CATALOG_URL: 'https://catalog-search-production.up.railway.app' });
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => ({ status: 'ok', revision: 'same' }) })));
+    state.listMessages.mockResolvedValue([{ metadata: { catalogRevision: 'same', productCards: [
+      { id: 'shown', name: 'Товар', price: 100, specs: {}, currency: 'RUB' }
+    ] } }]);
+    state.run.mockResolvedValue({ sessionId: 'agent-session', turnId: 'follow-up',
+      answer: JSON.stringify({ answer: 'Из показанных — этот.', selected: ['shown'], rejected: [], uncertain: [] }) });
+    try {
+      const answer = await new PlatformAgentAssistant(repo).generateAnswer({ sessionId: 'chat', turnId: 'turn', userMessage: 'Какой дешевле?' });
+      expect(answer.productCards.map((card) => card.id)).toEqual(['shown']);
+      expect(state.run).toHaveBeenCalledOnce();
+    } finally {
+      Object.assign(config, { BAKAUT_CATALOG_URL: undefined });
+      vi.unstubAllGlobals();
+    }
   });
   it('preloads all verified catalog matches without asking the model to list product IDs', async () => {
     const first = { items: [{ product_id: 'p1', name: 'Товар 1' }], count: 2 };
@@ -82,6 +136,17 @@ describe('site chat and platform agent', () => {
     expect(state.submit).toHaveBeenCalledWith('agent-session', 'Точный сохранённый ввод', 'turn', undefined);
     expect(state.run).not.toHaveBeenCalled();
   });
+  it('recovers a catalog retry with its own idempotency key', async () => {
+    state.getTurn.mockResolvedValueOnce(null).mockResolvedValueOnce({ id: 'turn', status: 'answering', deadlineAt: new Date(Date.now() + 60_000).toISOString() });
+    state.checkpoints.mockResolvedValue([{ checkpoint: 'platform_agent_submission', payload: {
+      agentSessionId: 'agent-session', previousTurnId: 'first-attempt', submitted: false,
+      submittedText: 'Повторный поиск', idempotencyKey: 'turn-catalog-retry'
+    } }]);
+    state.wait.mockResolvedValue({ sessionId: 'agent-session', turnId: 'retry', page: { items: [] },
+      answer: JSON.stringify({ answer: 'Ничего не найдено', selected: [], rejected: [], uncertain: [] }) });
+    await new PlatformAgentAssistant(repo).recoverTurn({ sessionId: 'chat', turnId: 'turn' });
+    expect(state.submit).toHaveBeenCalledWith('agent-session', 'Повторный поиск', 'turn-catalog-retry', undefined);
+  });
   it('uses the catalog URL for a selected product even if the prose has a malformed link', async () => {
     const url = 'https://bakautprof.ru/catalog/generator_a_ipower_a5500/';
     state.run.mockResolvedValue({ sessionId: 'agent-session', turnId: 'agent-turn', pageCursor: 'cursor-1',
@@ -110,7 +175,7 @@ describe('site chat and platform agent', () => {
     expect(result.productCards.map((card) => card.id)).toEqual(['first']);
     state.run.mockResolvedValue({ sessionId: 'agent-session', turnId: 'agent-turn',
       answer: JSON.stringify({ answer: 'Ответ', selected: ['not-shown'], rejected: [], uncertain: [] }) });
-    await expect(new PlatformAgentAssistant(repo).generateAnswer({ sessionId: 'chat', turnId: 'turn', userMessage: 'Какая?' })).rejects.toThrow('does not account');
+    await expect(new PlatformAgentAssistant(repo).generateAnswer({ sessionId: 'chat', turnId: 'turn', userMessage: 'Какая?' })).rejects.toThrow('did not return a fresh search');
   });
   it('resolves older product results across later selections in the same session', async () => {
     state.listMessages.mockResolvedValue([
