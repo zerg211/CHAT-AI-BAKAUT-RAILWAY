@@ -48,7 +48,7 @@ assert 'price_current' not in k.get_product('0')
     const updated = enableCatalogBatchTool(tools);
     expect(updated?.[0]).toEqual(tools[0]);
     expect(updated?.[1]).toMatchObject({ credential_id: 'vault-credential', transport: tools[1].transport,
-      allowed_tools: ['search_products', 'get_product', 'get_products_batch'] });
+      allowed_tools: ['search_products', 'get_product', 'get_products_batch', 'semantic_concepts'] });
     expect(tools[1].allowed_tools).toEqual(['search_products', 'get_product']);
   });
   it('keeps the first catalog page when the agent delegates all matching results to the catalog', () => {
