@@ -14,7 +14,7 @@ if _startup_kb.revision!=EXPECTED_REVISION:
     raise RuntimeError('Catalog revision does not match the configured expected revision')
 if _startup_kb.db.execute('select count(*) from products').fetchone()[0]!=int(os.environ.get('BAKAUT_EXPECTED_COUNT','4324')):
     raise RuntimeError('Catalog does not contain the expected number of products')
-_startup_kb.db.close()
+_startup_kb.close()
 hosts=['127.0.0.1:*','localhost:*','healthcheck.railway.app']
 if os.environ.get('RAILWAY_PUBLIC_DOMAIN'):hosts.append(os.environ['RAILWAY_PUBLIC_DOMAIN'])
 if os.environ.get('BAKAUT_PUBLIC_HOSTNAME'):hosts.append(os.environ['BAKAUT_PUBLIC_HOSTNAME'])
@@ -32,6 +32,12 @@ def get_product(identifier:str,fields:list[str]|None=None)->CallToolResult:
 def get_products_batch(identifiers:list[str],fields:list[str],expected_revision:str|None=None)->CallToolResult:
     """Read only requested missing fields for up to 100 exact product_id values. Pass source_revision as expected_revision. Null means unknown. Do not reread fields already supplied by search; use web for unresolved material facts."""
     return compact_result(read_product_batch(Knowledge('fts'),identifiers,fields,expected_revision))
+@server.tool(structured_output=False)
+def semantic_concepts(kind:str)->CallToolResult:
+    """Read the complete evidence-backed concept vocabulary for one kind in this catalog revision. This is reference data for model interpretation of a buyer request; synonyms are not the selection boundary."""
+    kb=Knowledge('fts')
+    try:return compact_result(kb.semantic_concepts(kind))
+    finally:kb.close()
 @server.custom_route('/health',methods=['GET'])
 async def health(request):
     kb=Knowledge('fts');root=Path(__file__).parent

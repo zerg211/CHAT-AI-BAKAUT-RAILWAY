@@ -4,6 +4,7 @@ from pathlib import Path
 
 ROOT=Path(__file__).resolve().parent
 DB=Path(os.environ.get('BAKAUT_DB_PATH', str(ROOT/'knowledge.sqlite')))
+SEMANTIC_DB=Path(os.environ['BAKAUT_SEMANTIC_DB_PATH']) if os.environ.get('BAKAUT_SEMANTIC_DB_PATH') else None
 SUMMARY_COLUMNS='id,sku,title,category,url,price,powers,source,sha'
 REMOTE_EVIDENCE_RE=re.compile(r'дистанционн.{0,30}(?:управ|пульт)|(?:управ|пульт).{0,30}дистанционн|(?:\bик\b|инфракрасн).{0,30}(?:управ|пульт)|(?:управ|пульт).{0,30}(?:\bик\b|инфракрасн)|радиоуправ|радио[- ]?пульт|remote\s*control|(?:bluetooth.{0,20}(?:пульт|управ|радио)|(?:пульт|управ|радио).{0,20}bluetooth)|пульт.{0,15}\bду\b|\bду\b.{0,15}пульт',re.I)
 def norm(s):return unicodedata.normalize('NFKC',str(s)).casefold().replace('ё','е').strip()
@@ -12,6 +13,32 @@ class Knowledge:
         if retrieval_backend!='fts':raise ValueError('Unsupported retrieval backend')
         self.db=sqlite3.connect('file:'+DB.resolve().as_posix()+'?mode=ro',uri=True);self.db.row_factory=sqlite3.Row
         self.revision=self.db.execute('select revision from metadata').fetchone()[0];self.snapshots={};self.log=[]
+        self.semantic=None
+        if SEMANTIC_DB is not None:
+            self.semantic=sqlite3.connect('file:'+SEMANTIC_DB.resolve().as_posix()+'?mode=ro',uri=True)
+            details=dict(self.semantic.execute('SELECT key,value FROM metadata'))
+            total=self.db.execute('SELECT COUNT(*) FROM products').fetchone()[0]
+            indexed=self.semantic.execute('SELECT COUNT(*) FROM products').fetchone()[0]
+            digest=hashlib.sha256(''.join(row['source']+'\t'+row['sha']+'\n' for row in
+                self.db.execute('SELECT source,sha FROM products ORDER BY source')).encode()).hexdigest()
+            if (details.get('source_revision')!=self.revision or details.get('card_count')!=str(total)
+                    or details.get('source_digest')!=digest or indexed!=total):
+                self.semantic.close();self.db.close()
+                raise RuntimeError('Semantic index does not cover the current catalog revision')
+    def close(self):
+        if self.semantic is not None:self.semantic.close()
+        self.db.close()
+    def semantic_concepts(self,kind):
+        if kind not in ('product_type','purpose','material','compatibility','feature','dimension'):
+            raise ValueError('Unsupported semantic concept kind')
+        if self.semantic is None:return {'status':'unavailable','source_revision':self.revision}
+        rows=self.semantic.execute('''SELECT normalized_value,display_value,product_count
+            FROM concepts WHERE kind=? ORDER BY normalized_value''',(kind,)).fetchall()
+        without=self.semantic.execute('''SELECT COUNT(*) FROM products p WHERE NOT EXISTS
+            (SELECT 1 FROM facts f WHERE f.product_id=p.product_id AND f.kind=?)''',(kind,)).fetchone()[0]
+        return {'status':'ok','kind':kind,'source_revision':self.revision,
+                'concepts':[{'key':row[0],'name':row[1],'products':row[2]} for row in rows],
+                'without_facts':without,'concepts_complete':True}
     def row(self,ident):return self.db.execute('SELECT * FROM products WHERE id=?',(ident,)).fetchone()
     def source_evidence(self,r,query):
         if not re.search(r'дистанц|пульт|радиоуправ|инфракрас|bluetooth|remote',norm(query)):return None
