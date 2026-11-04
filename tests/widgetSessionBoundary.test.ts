@@ -82,7 +82,8 @@ describe('rendered widget session boundary', () => {
     await act(async () => root.unmount());
     const cards = [
       ...Array.from({ length: 12 }, (_, i) => ({ id: `matched-${i}`, name: `Подходит ${i}`, price: 90000, specs: {}, reasons: [], caveats: [] })),
-      ...Array.from({ length: 12 }, (_, i) => ({ id: `order-${i}`, name: `Заказ ${i}`, price: null, priceOnRequest: true, specs: {}, reasons: [], caveats: [] }))
+      ...Array.from({ length: 12 }, (_, i) => ({ id: `order-${i}`, name: `Заказ ${i}`, price: null, priceOnRequest: true, specs: {}, reasons: [], caveats: [] })),
+      { id: 'uncertain', name: 'Возможный', matchStatus: 'uncertain', specs: {}, reasons: [], caveats: [] }
     ];
     fetcher.mockImplementation(async (url: string) => url.endsWith('/messages')
       ? Response.json({ messages: [{ id: 'a1', role: 'assistant', content: 'Результаты', products: cards }] })
@@ -90,15 +91,14 @@ describe('rendered widget session boundary', () => {
     const actual = await vi.importActual<typeof import('react-dom/client')>('react-dom/client');
     root = actual.createRoot(document.getElementById('root')!);
     await act(async () => root.render(mounted.element as React.ReactNode));
-    const panels = [...document.querySelectorAll('.product-panel')];
-    expect(panels).toHaveLength(2);
-    expect(panels[0].textContent).toContain('Подходящие варианты');
-    expect(panels[0].textContent).not.toContain('Заказ 0');
-    expect(panels[1].textContent).toContain('Под заказ — цену и сроки уточнит менеджер');
-    expect(panels[1].textContent).toContain('Товар под заказ, сроки уточнит менеджер');
-    expect(panels.map((panel) => panel.querySelectorAll('.product-card').length)).toEqual([10, 10]);
-    await act(async () => (panels[1].querySelector('button') as HTMLButtonElement).click());
-    expect(panels.map((panel) => panel.querySelectorAll('.product-card').length)).toEqual([10, 12]);
+    expect(document.querySelectorAll('.product-card')).toHaveLength(10);
+    expect(document.body.textContent).not.toContain('Заказ 0');
+    await act(async () => (document.querySelector('.product-more') as HTMLButtonElement).click());
+    expect(document.querySelectorAll('.product-card')).toHaveLength(20);
+    expect(document.body.textContent).toContain('Под заказ — цену и сроки уточнит менеджер');
+    await act(async () => (document.querySelector('.product-more') as HTMLButtonElement).click());
+    expect(document.querySelectorAll('.product-card')).toHaveLength(25);
+    expect(document.body.textContent).toContain('Возможные варианты — нужно уточнить соответствие');
   });
 
   it('blocks silent continuation and preserves history and draft across explicit new chat', async () => {

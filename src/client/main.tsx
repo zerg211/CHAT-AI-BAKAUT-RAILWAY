@@ -637,31 +637,33 @@ async function sendAssistantFeedback(sessionId: string, messageId: string, ratin
 const CARDS_PER_PAGE = 10;
 
 function ProductCards({ cards }: { cards: ProductCard[] }) {
-  const confirmed = cards.filter((card) => !card.priceOnRequest);
-  const onRequest = cards.filter((card) => card.priceOnRequest);
+  const [visibleCount, setVisibleCount] = useState(CARDS_PER_PAGE);
+  const visible = cards.slice(0, visibleCount);
+  const hiddenCount = cards.length - visible.length;
+  const confirmed = visible.filter((card) => !card.priceOnRequest && card.matchStatus !== 'uncertain');
+  const onRequest = visible.filter((card) => card.priceOnRequest && card.matchStatus !== 'uncertain');
+  const uncertain = visible.filter((card) => card.matchStatus === 'uncertain');
   return <>
+    <div className="product-panel-head"><span>Товары</span><span>{visible.length} из {cards.length}</span></div>
     {confirmed.length ? <ProductCardGroup cards={confirmed} title="Подходящие варианты" /> : null}
     {onRequest.length ? <ProductCardGroup cards={onRequest} title="Под заказ — цену и сроки уточнит менеджер" /> : null}
+    {uncertain.length ? <ProductCardGroup cards={uncertain} title="Возможные варианты — нужно уточнить соответствие" /> : null}
+    {hiddenCount > 0 ? <button className="product-more" type="button" onClick={() => setVisibleCount(visible.length + CARDS_PER_PAGE)}>
+      Показать ещё {Math.min(CARDS_PER_PAGE, hiddenCount)}
+    </button> : null}
   </>;
 }
 
 function ProductCardGroup({ cards, title }: { cards: ProductCard[]; title: string }) {
-  const [visibleCount, setVisibleCount] = useState<number | null>(null);
   if (!cards.length) return null;
-
-  const initialCount = Math.min(cards.length, CARDS_PER_PAGE);
-  const visibleCards = cards.slice(0, visibleCount ?? initialCount);
-  const hiddenCount = Math.max(0, cards.length - visibleCards.length);
-  const countLabel = `${visibleCards.length} из ${cards.length}`;
 
   return (
     <div className="product-panel" aria-label={title}>
       <div className="product-panel-head">
         <span>{title}</span>
-        <span>{countLabel}</span>
       </div>
       <div className="product-grid">
-        {visibleCards.map((card) => (
+        {cards.map((card) => (
           <article className="product-card" key={card.id}>
             <div className="product-media">
               {card.imageUrl ? <img src={card.imageUrl} alt="" loading="lazy" /> : <div className="product-image-empty" />}
@@ -682,11 +684,6 @@ function ProductCardGroup({ cards, title }: { cards: ProductCard[]; title: strin
           </article>
         ))}
       </div>
-      {hiddenCount > 0 ? (
-        <button className="product-more" type="button" onClick={() => setVisibleCount(visibleCards.length + CARDS_PER_PAGE)}>
-          Показать ещё {Math.min(CARDS_PER_PAGE, hiddenCount)}
-        </button>
-      ) : null}
     </div>
   );
 }

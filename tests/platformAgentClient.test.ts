@@ -36,6 +36,10 @@ assert 'semantic_query_completeness' in r['unsupported_filters'] and not r['nume
     expect(cards[0].priceOnRequest).toBe(true);
     expect(cards[1].priceOnRequest).toBeUndefined();
   });
+  it('preserves uncertain product status across chat history', () => {
+    const cards = normalizePublicProductCards([{ id: 'a', name: 'A', matchStatus: 'uncertain' }]);
+    expect(cards[0].matchStatus).toBe('uncertain');
+  });
   it('adds batch access only to the saved catalog MCP while preserving web search and credentials', () => {
     const tools = [{ type: 'web_search', context_size: 'medium' }, { type: 'mcp', server_label: 'bakaut_catalog',
       credential_id: 'vault-credential', transport: { type: 'http', server_url: 'https://catalog.example/mcp' }, allowed_tools: ['search_products', 'get_product'] }];
