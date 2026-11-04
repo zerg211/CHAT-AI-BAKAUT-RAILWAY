@@ -3,10 +3,34 @@ import { enableCatalogBatchTool, extractAgentResult, PlatformAgentClient } from 
 import { normalizePublicCardDisplay, normalizePublicProductCards } from '../src/shared/publicChatHistory.js';
 import { ALL_CATALOG_MATCHES } from '../src/ai/catalogDecision.js';
 import { readFullCatalogSnapshot } from '../src/ai/fullCatalogClient.js';
+import { spawnSync } from 'node:child_process';
 
 vi.mock('../src/config.js', () => ({ config: { BAKAUT_MCP_TOKEN: 'mock-catalog-token', BAKAUT_CATALOG_URL: 'https://catalog-search-production.up.railway.app' } }));
 
 describe('Platform agent result', () => {
+  it('marks ranked catalog text search incomplete and returns its first 30 results in one call', () => {
+    const script = `
+import sys,sqlite3,json
+sys.path.insert(0,'catalog-service')
+from knowledge import Knowledge
+k=Knowledge.__new__(Knowledge)
+k.db=sqlite3.connect(':memory:')
+k.db.row_factory=sqlite3.Row
+k.revision='rev';k.snapshots={};k.log=[]
+k.db.execute('CREATE TABLE products (id TEXT,sku TEXT,title TEXT,category TEXT,url TEXT,price REAL,powers TEXT,source TEXT,sha TEXT,raw TEXT)')
+k.db.execute('CREATE VIRTUAL TABLE docs USING fts5(id UNINDEXED,title,body)')
+for n in range(35):
+    key=str(n)
+    k.db.execute('INSERT INTO products VALUES (?,?,?,?,?,?,?,?,?,?)',(key,key,'pump '+key,'category','https://example.test/'+key,1,'[]','s','h','{}'))
+    k.db.execute('INSERT INTO docs VALUES (?,?,?)',(key,'pump '+key,''))
+r=k.search_products(query='pump')
+assert len(r['items'])==30 and r['count']==30 and not r['has_more']
+assert 'semantic_query_completeness' in r['unsupported_filters'] and not r['numeric_scan_complete']
+`;
+    const run = spawnSync(process.platform === 'win32' ? 'python' : 'python3', ['-c', script], { encoding: 'utf8' });
+    expect(run.stderr).toBe('');
+    expect(run.status).toBe(0);
+  });
   it('preserves verified on-request status in public cards without overriding prices', () => {
     const cards = normalizePublicProductCards([{ id: 'a', name: 'A', priceOnRequest: true }, { id: 'b', name: 'B', price: 100, priceOnRequest: true }]);
     expect(cards[0].priceOnRequest).toBe(true);
@@ -77,6 +101,34 @@ describe('Platform agent result', () => {
     const next = Buffer.from(JSON.stringify({ snapshot: 's1', revision: 'r1', group: 'matches', offset: 1 })).toString('base64url');
     const page = { group: 'matches', count: 20, items: [{ product_id: 'p1' }], has_more: true, next_cursor: next };
     expect(() => extractAgentResult([{ turn_id: 'new', type: 'mcp_call', name: 'search_products', arguments: {}, status: 'completed', output: { structuredContent: page } }], 'new')).toThrow('incomplete');
+  });
+
+  it('uses explicitly selected searches, ignoring incomplete reference searches even with overlapping items', () => {
+    const next = Buffer.from(JSON.stringify({ snapshot: 'reference', revision: 'r', group: 'matches', offset: 1 })).toString('base64url');
+    const call = (page: unknown) => ({ turn_id: 't', type: 'mcp_call', name: 'search_products', arguments: {},
+      status: 'completed', output: { structuredContent: page } });
+    const reference = { snapshot: 'reference', group: 'matches', count: 2, source_revision: 'r',
+      items: [{ product_id: 'a' }], has_more: true, next_cursor: next };
+    const first = { snapshot: 'first', group: 'matches', count: 2, source_revision: 'r',
+      items: [{ product_id: 'a' }, { product_id: 'b' }], has_more: false, next_cursor: null };
+    const second = { snapshot: 'second', group: 'matches', count: 2, source_revision: 'r',
+      items: [{ product_id: 'b' }, { product_id: 'c' }], has_more: false, next_cursor: null };
+    const answer = JSON.stringify({ answer: 'Подобрал', selected: ['a', 'c'], rejected: ['b'], uncertain: [],
+      selection_snapshots: ['first', 'second'] });
+    const result = extractAgentResult([call(reference), call(first), call(second),
+      { turn_id: 't', role: 'assistant', phase: 'final_answer', content: [{ type: 'output_text', text: answer }] }], 't');
+    expect(result.page?.items).toEqual([{ product_id: 'a' }, { product_id: 'b' }, { product_id: 'c' }]);
+  });
+
+  it('rejects an incomplete or fabricated explicitly selected search', () => {
+    const next = Buffer.from(JSON.stringify({ snapshot: 's', revision: 'r', group: 'matches', offset: 1 })).toString('base64url');
+    const call = { turn_id: 't', type: 'mcp_call', name: 'search_products', arguments: {}, status: 'completed',
+      output: { structuredContent: { snapshot: 's', group: 'matches', count: 2, source_revision: 'r',
+        items: [{ product_id: 'a' }], has_more: true, next_cursor: next } } };
+    const reply = (id: string) => ({ turn_id: 't', role: 'assistant', phase: 'final_answer', content: [{ type: 'output_text',
+      text: JSON.stringify({ answer: 'Подобрал', selected: ['a'], rejected: [], uncertain: [], selection_snapshots: [id] }) }] });
+    expect(() => extractAgentResult([call, reply('s')], 't')).toThrow('incomplete');
+    expect(() => extractAgentResult([call, reply('other')], 't')).toThrow('unavailable');
   });
 
   it('recovers candidates only from completed search calls in the same Platform session', async () => {

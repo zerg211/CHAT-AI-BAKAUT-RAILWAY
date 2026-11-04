@@ -120,7 +120,9 @@ class Knowledge:
                 complete=False;universe=len(allrows);source_scan_complete=True;candidate_basis='full_category_keyword_scan'
             else:
                 exact=self.exact(query) if query.strip() else []
-                matches=exact
+                # Keep the exact-match evidence separate from ranked results.
+                # Appending FTS hits must not make a non-exact search look complete.
+                matches=list(exact)
                 if category:matches=[r for r in matches if r['id'] in {x['id'] for x in allrows}]
                 if not matches and query.strip():
                     allowed={r['id'] for r in allrows};seen=set()
@@ -139,7 +141,10 @@ class Knowledge:
             sid=hashlib.sha256(json.dumps([self.revision,criteria],sort_keys=True,ensure_ascii=False).encode()).hexdigest()[:24]
             snapshot={'groups':groups,'criteria':criteria,'snapshot':sid,'complete':complete,'universe':universe,'excluded':excluded,'source_scan_complete':source_scan_complete,'candidate_basis':candidate_basis};self.snapshots[sid]=snapshot;offset=0
         if group not in snapshot['groups']:raise ValueError('invalid group')
-        items=snapshot['groups'][group];next_offset=offset+10
+        # The widget paginates for people. For text searches return the small
+        # ranked candidate set in one MCP call, avoiding three model round trips.
+        items=snapshot['groups'][group]
+        next_offset=offset+(30 if snapshot['criteria']['query'].strip() and not snapshot['complete'] else 10)
         next_cursor=base64.urlsafe_b64encode(json.dumps({'snapshot':snapshot['snapshot'],'revision':self.revision,'criteria':snapshot['criteria'],'offset':next_offset,'group':group}).encode()).decode().rstrip('=') if next_offset<len(items) else None
         criteria=snapshot['criteria']
         applied={key:value for key,value in criteria.items() if key!='query' and value is not None}

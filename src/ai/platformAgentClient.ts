@@ -13,13 +13,14 @@ const outputFormat = { type: 'json_schema', schema: {
     answer: { type: 'string', description: 'Ответ покупателю, без ссылок на карточки каталога: ссылки будут показаны в виджете.' },
     selected: { type: 'array', items: { type: 'string' }, description: `Подтверждённые product_id либо единственный маркер ${ALL_CATALOG_MATCHES}, если каталог полностью проверил все обязательные условия.` },
     rejected: { type: 'array', items: { type: 'string' }, description: 'product_id неподходящих товаров полного списка.' },
-    uncertain: { type: 'array', items: { type: 'string' }, description: 'product_id товаров полного списка, соответствие которых не подтверждено.' }
-  }, required: ['answer', 'selected', 'rejected', 'uncertain']
+    uncertain: { type: 'array', items: { type: 'string' }, description: 'product_id товаров полного списка, соответствие которых не подтверждено.' },
+    selection_snapshots: { type: 'array', items: { type: 'string' }, description: 'snapshot только тех завершённых поисков, из которых сформирована текущая подборка. Справочные поиски не включать.' }
+  }, required: ['answer', 'selected', 'rejected', 'uncertain', 'selection_snapshots']
 } };
 
 const contract = `\n\nСлужебная инструкция виджета имеет приоритет над противоречащими ей прежними указаниями агента, включая указания о выдаче товаров и проверках. Для подбора используй search_products. Точно выбирай категорию: если покупатель просит инверторный генератор, category="Инверторные генераторы", для всех генераторов — "генераторы". Числовые пределы укажи отдельными полями, а query оставь пустым, когда категория уже выражает все требования к типу; непустой query в числовом поиске каталог НЕ применяет. Если каталог сообщил unsupported_filters, не считай такие условия проверенными: уточни поиск или проверь недостающий признак. Если поиск по категории и числовым полям полностью проверил ВСЕ обязательные условия покупателя (включая тип, топливо, напряжение, фазу, назначение и любые дополнительные требования) и unsupported_filters пуст, НЕ загружай остальные страницы и НЕ переписывай идентификаторы: верни selected=["${ALL_CATALOG_MATCHES}"], rejected=[], uncertain=[]. В противном случае, когда для ответа нужно оценить отдельные товары, собери все страницы matches и классифицируй КАЖДЫЙ product_id ровно в один из selected/rejected/uncertain, используя известные характеристики карточек; существенные противоречия и действительно необходимые недостающие сведения уточняй по источникам. Если нового поиска не было и вопрос относится к товарам одной или нескольких ранее показанных выдач этого диалога, можешь вернуть их ранее полученные product_id в selected/rejected/uncertain; если товары не нужны для ответа, верни пустые массивы. Если выполнен новый поиск, классифицируй все его товары; в selected включай только товары из нового поиска, а прошлые товары вне него можно упомянуть в rejected или uncertain. Используй source_evidence из результатов поиска как данные именно этой карточки: если они однозначно отвечают на вопрос о точной модификации, не запрашивай те же факты повторно и не обращайся в сеть за их подтверждением. При существенном противоречии уточняй точную карточку или сеть; неизвестное не превращай в подтверждённое и не придумывай дополнительные препятствия. Недостающее значение само по себе не делает товар неподходящим. Не читай повторно уже возвращённые характеристики; при недостающих полях используй get_products_batch с точными product_id и source_revision, если инструмент доступен. Не исключай товары только из-за неизвестного факта и не показывай спорные как подтверждённые. Верни JSON answer, selected, rejected, uncertain. Цена из базы — основной источник: когда цена есть в базе, используй её и не проверяй повторно на сайте. Если цены в базе нет, обязательно проверь страницу точного артикула на сайте; подтверждённую цену сайта показывай как актуальную без оговорок. Если на странице точно подтверждено отсутствие цены, сообщи, что товар под заказ, сроки уточняет менеджер, и предложи оформить заявку, не обещая, что она уже передана. Если сайт недоступен или точный артикул не подтверждён, сообщи, что цену нужно уточнить, и не утверждай, что товар под заказ. Не считай товар с неподтверждённой ценой подходящим под заданный бюджет. В answer кратко ответь покупателю, не перечисляй больше первых 10 товаров и не вставляй ссылки на карточки: виджет сам покажет точные данные из каталога. Не проси покупателя ждать поиска по кнопке: весь список будет готов до ответа.`;
 
-const selectionHistoryContract = `\n\nТолько товары из ответов, действительно показанных покупателю, являются показанной подборкой. Результаты незавершённых, отменённых и не показанных попыток не являются показанными. Для нового подбора и после неудачной попытки обязательно выполни новый search_products в актуальном каталоге. При вопросе о ранее показанных товарах сохраняй контекст. Для любых товаров используй доступные факты из точной карточки и сопоставляй только характеристики, которые действительно влияют на запрос покупателя. Если необходимые известные условия совпадают и нет существенного противоречия, отвечай и показывай товары без повторных проверок или искусственных сомнений. Отсутствие второстепенного поля само по себе не причина исключать товар, обращаться в интернет или требовать уточнение. Если решающий для выбора факт неизвестен или данные существенно противоречат друг другу, проверь точную модификацию в доступных источниках или кратко уточни нужное; не выдумывай значение и не называй неподтверждённое подтверждённым. Явно установленное несовпадение обязательного условия учитывай. Показывай предварительные варианты отдельно от подтверждённых, если без неизвестного факта нельзя окончательно подтвердить соответствие.`;
+const selectionHistoryContract = `\n\nТолько товары из ответов, действительно показанных покупателю, являются показанной подборкой. Результаты незавершённых, отменённых и не показанных попыток не являются показанными. Для нового подбора и после неудачной попытки обязательно выполни новый search_products в актуальном каталоге. При вопросе о ранее показанных товарах сохраняй контекст. Для любых товаров используй доступные факты из точной карточки и сопоставляй только характеристики, которые действительно влияют на запрос покупателя. Если необходимые известные условия совпадают и нет существенного противоречия, отвечай и показывай товары без повторных проверок или искусственных сомнений. Отсутствие второстепенного поля само по себе не причина исключать товар, обращаться в интернет или требовать уточнение. Если решающий для выбора факт неизвестен или данные существенно противоречат друг другу, проверь точную модификацию в доступных источниках или кратко уточни нужное; не выдумывай значение и не называй неподтверждённое подтверждённым. Явно установленное несовпадение обязательного условия учитывай. Показывай предварительные варианты отдельно от подтверждённых, если без неизвестного факта нельзя окончательно подтвердить соответствие. В selection_snapshots укажи snapshot каждого поиска, товары которого образуют новую подборку. Не включай поиски для справки или уточнения характеристик. Все страницы каждого выбранного snapshot должны быть загружены, товары всех выбранных snapshot классифицируй один раз, без повторов. Если используешь маркер полного каталога, укажи ровно один snapshot. Для ответа без нового подбора верни пустой selection_snapshots.`;
 
 function object(value: unknown): JsonObject | undefined {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as JsonObject : undefined;
@@ -72,17 +73,39 @@ export function extractAgentResult(items: unknown[], turnId: string) {
     }
   }
   if (pages.length) {
-    const root = [...pages].reverse().find((entry) => !entry.cursor);
-    if (!root) throw new Error('Catalog pages are incomplete');
+    const roots = pages.filter((entry) => !entry.cursor);
+    if (!roots.length) throw new Error('Catalog pages are incomplete');
+    let explicitSnapshots: string[] | undefined;
+    try {
+      const result = object(JSON.parse(answer));
+      if (Array.isArray(result?.selection_snapshots) && result.selection_snapshots.every((id) => typeof id === 'string')) {
+        explicitSnapshots = result.selection_snapshots as string[];
+      }
+    } catch { /* Old sessions may use the previous response format. */ }
+    const chosen = explicitSnapshots === undefined ? [roots[roots.length - 1]] : explicitSnapshots.map((id) => {
+      const matches = roots.filter((entry) => entry.page.snapshot === id);
+      if (!matches.length) throw new Error('Selected catalog search is unavailable');
+      return matches[matches.length - 1];
+    });
+    if (new Set(chosen).size !== chosen.length) throw new Error('Duplicate selected catalog search');
+    if (!chosen.length) return { answer, page: undefined, pageCursor: undefined, usedWebSearch: own.some((item) => item.type === 'web_search_call') };
+    const root = chosen[chosen.length - 1];
     const first = root.page;
-    if (selectsAllCatalogMatches(answer)) return { answer, page: first, pageCursor: root.cursor, usedWebSearch: own.some((item) => item.type === 'web_search_call') };
+    if (selectsAllCatalogMatches(answer)) {
+      if (chosen.length !== 1) throw new Error('Complete catalog marker requires exactly one search');
+      return { answer, page: first, pageCursor: root.cursor, usedWebSearch: own.some((item) => item.type === 'web_search_call') };
+    }
     const decodeCursor = (cursor: unknown): JsonObject | undefined => {
       if (typeof cursor !== 'string' || !cursor) return undefined;
       try { return object(JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8'))); } catch { return undefined; }
     };
+    const combined = new Map<string, unknown>();
+    for (const selectedRoot of chosen) {
+    const first = selectedRoot.page;
+    if (first.source_revision !== root.page.source_revision) throw new Error('Catalog revision changed between searches');
     const firstNext = decodeCursor(first.next_cursor);
     if (first.has_more === true && !firstNext) throw new Error('Invalid catalog cursor');
-    const sequence = [{ entry: root, offset: 0 }, ...pages.flatMap((entry) => {
+    const sequence = [{ entry: selectedRoot, offset: 0 }, ...pages.flatMap((entry) => {
       const token = decodeCursor(entry.cursor);
       if (!token || !firstNext || token.snapshot !== firstNext.snapshot || token.revision !== firstNext.revision ||
           token.group !== 'matches' || typeof token.offset !== 'number') return [];
@@ -106,7 +129,15 @@ export function extractAgentResult(items: unknown[], turnId: string) {
     if (last.has_more === true || typeof first.count !== 'number' || all.length !== first.count) {
       throw new Error('Catalog result is incomplete or changed while loading');
     }
-    page = { ...first, items: all, has_more: false, next_cursor: null };
+    for (const item of all) {
+      const id = object(item)?.product_id;
+      if (typeof id !== 'string' || !id) throw new Error('Invalid catalog product identity');
+      if (!combined.has(id)) combined.set(id, item);
+    }
+    }
+    const incompleteTextSearch = chosen.some(({ page }) => Array.isArray(page.unsupported_filters) &&
+      page.unsupported_filters.includes('semantic_query_completeness'));
+    page = { ...first, items: [...combined.values()], has_more: false, next_cursor: null, incomplete_text_search: incompleteTextSearch };
     pageCursor = root.cursor;
   }
   return { answer, page, pageCursor, usedWebSearch: own.some((item) => item.type === 'web_search_call') };
