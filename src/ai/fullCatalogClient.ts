@@ -16,7 +16,7 @@ export async function readFullCatalogSnapshot(firstPage: JsonObject, signal?: Ab
       typeof criteria.query !== 'string' || criteria.query.trim()) {
     throw new Error('Catalog did not establish complete structured filter coverage');
   }
-  const keys = ['category', 'min_nominal_kw', 'max_nominal_kw', 'max_price_rub'] as const;
+  const keys = ['category', 'min_nominal_kw', 'max_nominal_kw', 'max_price_rub', 'cutting_diameters_mm', 'max_cutting_diameter_mm'] as const;
   for (const key of keys) {
     const value = criteria[key];
     if (value !== null && value !== undefined && !same(value, filters[key])) throw new Error('Catalog filter coverage mismatch');
@@ -25,7 +25,8 @@ export async function readFullCatalogSnapshot(firstPage: JsonObject, signal?: Ab
   if (base.protocol !== 'https:' || base.hostname !== 'catalog-search-production.up.railway.app') throw new Error('Catalog URL is not allowed');
   const request = { query: criteria.query, category: criteria.category,
     min_nominal_kw: criteria.min_nominal_kw ?? null, max_nominal_kw: criteria.max_nominal_kw ?? null,
-    max_price_rub: criteria.max_price_rub ?? null, expected_revision: firstPage.source_revision };
+    max_price_rub: criteria.max_price_rub ?? null, ...(criteria.cutting_diameters_mm === undefined ? {} : { cutting_diameters_mm: criteria.cutting_diameters_mm }),
+    ...(criteria.max_cutting_diameter_mm === undefined ? {} : { max_cutting_diameter_mm: criteria.max_cutting_diameter_mm }), expected_revision: firstPage.source_revision };
   const response = await transport(new URL('/search-full', base), {
     method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${config.BAKAUT_MCP_TOKEN}` },
     body: JSON.stringify(request), signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(10_000)]) : AbortSignal.timeout(10_000)

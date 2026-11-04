@@ -23,6 +23,8 @@ function object(value: unknown): JsonObject | undefined {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as JsonObject : undefined;
 }
 
+const cuttingContract = `\nДля режущих дисков используй cutting_evidence как данные исходной карточки точной модификации. Максимальный диаметр машины не означает единственный допустимый размер. При известном максимуме найди кандидатов одним вызовом search_products(category="Режущие диски", query="", max_cutting_diameter_mm=максимум); точные размеры используй только когда они действительно заданы. Это проверяет только диаметр: посадку, допустимые размеры, маркировку скорости, материал и другие существенные условия проверяй отдельно по карточкам или другим источникам. Не утверждай совместимость при неизвестных данных и сообщай о неподтверждённых диаметрах из unknown. Результаты поиска машины служат справкой; не классифицируй их как продаваемые диски, классифицируй кандидатов из последнего поиска дисков. Не используй маркер всех совпадений, если совместимость не установлена. Наличие на складе неизвестно, пока не подтверждено.`;
+
 /** Preserve every saved tool and widen only the existing catalog MCP allowlist. */
 export function enableCatalogBatchTool(value: unknown): unknown[] | undefined {
   if (!Array.isArray(value)) return undefined;
@@ -141,23 +143,23 @@ export class PlatformAgentClient {
       const turns = await this.request(`/agents/sessions/${encodeURIComponent(sessionId)}/turns?limit=1&order=desc`, input.signal);
       previousTurnId = object(Array.isArray(turns.data) ? turns.data[0] : undefined)?.id;
       const previous = typeof previousTurnId === 'string' ? previousTurnId : null;
-      await input.onBeforeSubmit?.(sessionId, previous, false, input.message + contract);
-      await this.submitMessage(sessionId, input.message + contract, input.idempotencyKey, input.signal);
+      await input.onBeforeSubmit?.(sessionId, previous, false, input.message + contract + cuttingContract);
+      await this.submitMessage(sessionId, input.message + contract + cuttingContract, input.idempotencyKey, input.signal);
       await input.onSubmitted?.(sessionId, previous);
     } else {
       const saved = await this.request(`/agents/${encodeURIComponent(this.agentId)}`, input.signal);
       if (typeof saved.instructions !== 'string') throw new Error('Saved agent instructions are unavailable');
       const updatedTools = enableCatalogBatchTool(saved.tools);
       const session = await this.request('/agents/sessions', input.signal, {
-        agent_id: this.agentId, agent: { instructions: `${saved.instructions}\n\n${contract}`, text: { format: outputFormat },
-          ...(updatedTools ? { tools: updatedTools } : {}) }, environment: { type: 'none' }, input: input.message + contract,
+        agent_id: this.agentId, agent: { instructions: `${saved.instructions}\n\n${contract}\n\n${cuttingContract}`, text: { format: outputFormat },
+          ...(updatedTools ? { tools: updatedTools } : {}) }, environment: { type: 'none' }, input: input.message + contract + cuttingContract,
         ...(this.vaultIds.length ? { vault_ids: this.vaultIds } : {})
       }, input.idempotencyKey);
       if (typeof session.id !== 'string' || !session.id) throw new Error('Platform agent session ID missing');
       sessionId = session.id;
       try {
         await input.onSession?.(sessionId);
-        await input.onBeforeSubmit?.(sessionId, null, true, input.message + contract);
+        await input.onBeforeSubmit?.(sessionId, null, true, input.message + contract + cuttingContract);
       } catch (error) {
         // The initial input has already started, so failure to durably record its
         // identity must not leave an unobservable paid run behind.

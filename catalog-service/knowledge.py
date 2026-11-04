@@ -8,6 +8,7 @@ SUMMARY_COLUMNS='id,sku,title,category,url,price,powers,source,sha'
 REMOTE_EVIDENCE_RE=re.compile(r'дистанционн.{0,30}(?:управ|пульт)|(?:управ|пульт).{0,30}дистанционн|(?:\bик\b|инфракрасн).{0,30}(?:управ|пульт)|(?:управ|пульт).{0,30}(?:\bик\b|инфракрасн)|радиоуправ|радио[- ]?пульт|remote\s*control|(?:bluetooth.{0,20}(?:пульт|управ|радио)|(?:пульт|управ|радио).{0,20}bluetooth)|пульт.{0,15}\bду\b|\bду\b.{0,15}пульт',re.I)
 def norm(s):return unicodedata.normalize('NFKC',str(s)).casefold().replace('ё','е').strip()
 class Knowledge:
+    cutting_facts_cache={}
     def __init__(self,retrieval_backend='fts'):
         if retrieval_backend!='fts':raise ValueError('Unsupported retrieval backend')
         self.db=sqlite3.connect('file:'+DB.resolve().as_posix()+'?mode=ro',uri=True);self.db.row_factory=sqlite3.Row
@@ -29,8 +30,34 @@ class Knowledge:
         return {'attributes':facts,'description_excerpts':snippets}
     def compact(self,r,notes=None,evidence=None):
         result={'product_id':r['id'],'name':r['title'],'sku':r['sku'],'category':r['category'],'price_rub':r['price'],'url':r['url'],'nominal_electrical_power':json.loads(r['powers']),'conditions':notes or []}
+        technical=self.cutting_evidence(r)
+        if technical:result['cutting_evidence']=technical
         if evidence is not None:result['source_evidence']=evidence
         return result
+    def cutting_evidence(self,r):
+        """Expose source-labelled cutting facts, without inferring compatibility."""
+        category=norm(r['category'])
+        if category not in ('алмазные диски','абразивные диски','швонарезчики и резчики'):return None
+        cache_key=(self.revision,r['id'],r['sha'])
+        if cache_key in self.cutting_facts_cache:return self.cutting_facts_cache[cache_key]
+        raw=json.loads(self.row(r['id'])['raw']);attrs=raw.get('характеристики') or {}
+        if not isinstance(attrs,dict):
+            self.cutting_facts_cache[cache_key]=None
+            return None
+        keys={
+            'diameter':('диаметр режущего диска, мм','диаметр диска, мм','наружный диаметр, мм','максимальный диаметр режущего диска (диаметр алмазного кольца), мм','максимальный диаметр режущего диска в данной комплектации, мм','минимальный диаметр режущего диска, мм','минимальный диаметр диска, мм','диапазон диаметров применяемых дисков'),
+            'bore':('диаметр посадочного отверстия, мм','посадка, мм','посадочный диаметр, мм','посадочный диаметр диска, мм','посадочное отверстие, мм','особенности посадки по oem','сменные втулки под посадочное отверстие диска'),
+            'materials':('оптимальные материалы по oem','оптимальные материалы','материал резки','материалы по текущему oem gs50s','материалы по каталогу husqvarna 2021','подбор материала по oem cat2021','допустимые материалы и ограничения','не рекомендованные материалы по каталогу oem 2021','режим и назначение инструмента'),
+            'speed':('требуемый скоростной рейтинг диска 350 мм','требуемая маркировка скорости диска 300 мм, об./мин','требование к допустимой скорости диска','скоростная маркировка рекомендуемого диска, об/мин','скорость диска, об/мин'),
+        }
+        wanted={key:group for group,names in keys.items() for key in names}
+        result={}
+        for key,value in attrs.items():
+            group=wanted.get(norm(key))
+            if group and value is not None and str(value).strip():
+                result.setdefault(group,[]).append({'field':str(key),'raw':str(value)})
+        self.cutting_facts_cache[cache_key]=result or None
+        return self.cutting_facts_cache[cache_key]
     def exact(self,identifier):
         key=norm(identifier)
         if not key:return []
@@ -74,7 +101,7 @@ class Knowledge:
             if r['price'] is None:return 'needs_check',['нет цены для проверки бюджета']
             if r['price']>budget:return 'excluded',[]
         return 'matches',notes
-    def search_products(self,query='',category=None,min_nominal_kw=None,max_nominal_kw=None,max_price_rub=None,cursor=None,group='matches'):
+    def search_products(self,query='',category=None,min_nominal_kw=None,max_nominal_kw=None,max_price_rub=None,cursor=None,group='matches',cutting_diameters_mm=None,max_cutting_diameter_mm=None):
         start_time=time.perf_counter()
         if cursor:
             try:
@@ -96,16 +123,38 @@ class Knowledge:
             max_price_rub=float(max_price_rub) if max_price_rub is not None else None
             if min_nominal_kw is not None and max_nominal_kw is not None and min_nominal_kw>max_nominal_kw:raise ValueError('invalid range')
             structured=any(x is not None for x in (min_nominal_kw,max_nominal_kw,max_price_rub))
+            if cutting_diameters_mm is not None or max_cutting_diameter_mm is not None:
+                if structured or query.strip() or norm(category) not in ('алмазные диски','абразивные диски','режущие диски'):
+                    raise ValueError('Diameter search requires a disc category and no other search filters')
+                if cutting_diameters_mm is not None:
+                    if max_cutting_diameter_mm is not None or not isinstance(cutting_diameters_mm,list) or not 1<=len(cutting_diameters_mm)<=10 or any(isinstance(x,bool) or not isinstance(x,(int,float)) or not math.isfinite(x) or x<=0 for x in cutting_diameters_mm):raise ValueError('Invalid disc diameters')
+                    cutting_diameters_mm=sorted(set(float(x) for x in cutting_diameters_mm))
+                if max_cutting_diameter_mm is not None:
+                    if isinstance(max_cutting_diameter_mm,bool) or not isinstance(max_cutting_diameter_mm,(int,float)) or not math.isfinite(max_cutting_diameter_mm) or max_cutting_diameter_mm<=0:raise ValueError('Invalid maximum disc diameter')
+                    max_cutting_diameter_mm=float(max_cutting_diameter_mm)
             allrows=self.db.execute('SELECT '+SUMMARY_COLUMNS+' FROM products ORDER BY price IS NULL,price,title,id').fetchall()
             categories=sorted({r['category'] for r in allrows});category_lookup={norm(x):x for x in categories}
             if category:
                 if norm(category) in ('генератор','генераторы','generators'):allrows=[r for r in allrows if norm(r['category']) in ('бензиновые генераторы','дизельные генераторы','газовые генераторы','инверторные генераторы','сварочные генераторы')]
+                elif norm(category)=='режущие диски':allrows=[r for r in allrows if norm(r['category']) in ('алмазные диски','абразивные диски')]
                 elif norm(category) in category_lookup:
                     category=category_lookup[norm(category)];allrows=[r for r in allrows if r['category']==category]
                 else:return {'status':'category_not_found','categories':categories}
             if (min_nominal_kw is not None or max_nominal_kw is not None) and not category:return {'status':'category_required','message':'Для номинальной электрической мощности укажите категорию генераторов','categories':categories}
             groups={'matches':[],'needs_check':[],'unknown':[]};excluded=0;source_scan_complete=False;candidate_basis='semantic_top_results'
-            if structured:
+            if cutting_diameters_mm is not None or max_cutting_diameter_mm is not None:
+                for r in allrows:
+                    item=self.compact(r);facts=item.get('cutting_evidence',{}).get('diameter',[])
+                    values=[]
+                    for fact in facts:
+                        value=fact['raw'].strip().replace(',','.')
+                        if re.fullmatch(r'\d+(?:\.\d+)?(?:\s*мм)?',value,re.I):values.append(float(re.sub(r'\s*мм$','',value,flags=re.I)))
+                    if len(set(values))!=1 or len(values)!=len(facts):
+                        item['conditions'].append('диаметр не подтверждён однозначно');groups['unknown'].append(item)
+                    elif (cutting_diameters_mm is not None and values[0] in cutting_diameters_mm) or (max_cutting_diameter_mm is not None and values[0]<=max_cutting_diameter_mm):groups['matches'].append(item)
+                    else:excluded+=1
+                complete=True;universe=len(allrows);source_scan_complete=True;candidate_basis='structured_disc_diameter'
+            elif structured:
                 # Never use a vector top-k subset as the candidate universe for numeric filters.
                 for r in allrows:
                     status,notes=self.classify(r,min_nominal_kw,max_nominal_kw,max_price_rub)
@@ -136,10 +185,12 @@ class Knowledge:
                 elif not query.strip():matches=allrows
                 groups['matches']=[self.compact(r,evidence=self.source_evidence(r,query)) for r in matches];complete=bool(exact) or not query.strip();universe=len(allrows)
             criteria={'query':query,'category':category,'min_nominal_kw':min_nominal_kw,'max_nominal_kw':max_nominal_kw,'max_price_rub':max_price_rub}
+            if cutting_diameters_mm is not None:criteria['cutting_diameters_mm']=cutting_diameters_mm
+            if max_cutting_diameter_mm is not None:criteria['max_cutting_diameter_mm']=max_cutting_diameter_mm
             sid=hashlib.sha256(json.dumps([self.revision,criteria],sort_keys=True,ensure_ascii=False).encode()).hexdigest()[:24]
             snapshot={'groups':groups,'criteria':criteria,'snapshot':sid,'complete':complete,'universe':universe,'excluded':excluded,'source_scan_complete':source_scan_complete,'candidate_basis':candidate_basis};self.snapshots[sid]=snapshot;offset=0
         if group not in snapshot['groups']:raise ValueError('invalid group')
-        items=snapshot['groups'][group];next_offset=offset+10
+        items=snapshot['groups'][group];next_offset=offset+(100 if 'cutting_diameters_mm' in snapshot['criteria'] or 'max_cutting_diameter_mm' in snapshot['criteria'] else 10)
         next_cursor=base64.urlsafe_b64encode(json.dumps({'snapshot':snapshot['snapshot'],'revision':self.revision,'criteria':snapshot['criteria'],'offset':next_offset,'group':group}).encode()).decode().rstrip('=') if next_offset<len(items) else None
         criteria=snapshot['criteria']
         applied={key:value for key,value in criteria.items() if key!='query' and value is not None}
