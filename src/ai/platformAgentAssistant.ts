@@ -94,7 +94,23 @@ function reconcileCitations(answer: string, candidates: ProductCard[]) {
   }).join('\n');
 }
 
-function classifyPage(raw: string, candidates: ProductCard[], history: ProductCard[], hasSearch: boolean) {
+class CatalogClassificationError extends Error {}
+
+async function currentCatalogRevision(signal?: AbortSignal): Promise<string> {
+  const base = new URL(config.BAKAUT_CATALOG_URL);
+  if (base.protocol !== 'https:' || base.hostname !== 'catalog-search-production.up.railway.app') {
+    throw new Error('Catalog URL is not allowed');
+  }
+  const response = await fetch(new URL('/health', base), {
+    signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(5000)]) : AbortSignal.timeout(5000)
+  });
+  if (!response.ok) throw new Error('Catalog revision is unavailable');
+  const health = await response.json() as { status?: unknown; revision?: unknown };
+  if (health.status !== 'ok' || typeof health.revision !== 'string' || !health.revision) throw new Error('Catalog revision is unavailable');
+  return health.revision;
+}
+
+function classifyPage(raw: string, candidates: ProductCard[], history: ProductCard[], hasSearch: boolean, shownIds: Set<string>) {
   let result: Record<string, unknown>;
   try { result = JSON.parse(raw) as Record<string, unknown>; } catch { throw new Error('Agent classification is not valid JSON'); }
   if (!result || typeof result !== 'object' || typeof result.answer !== 'string' || !result.answer.trim()) throw new Error('Agent answer is invalid');
@@ -110,8 +126,9 @@ function classifyPage(raw: string, candidates: ProductCard[], history: ProductCa
   if (new Set(classified).size !== classified.length ||
       classified.some((id) => !pageIds.has(id) && !historicalIds.has(id)) ||
       (hasSearch && ([...pageIds].some((id) => !classified.includes(id)) ||
-        [...selected].some((id) => !pageIds.has(id))))) {
-    throw new Error('Agent classification does not account for the catalog page');
+        [...selected].some((id) => !pageIds.has(id)))) ||
+      (!hasSearch && [...selected].some((id) => !shownIds.has(id)))) {
+    throw new CatalogClassificationError('Agent classification does not account for the catalog page');
   }
   const cards = (hasSearch ? candidates : history).filter((card) => selected.has(card.id));
   return { answer: reconcileCitations(result.answer, cards), cards };
@@ -157,12 +174,21 @@ export class PlatformAgentAssistant {
     const classifiedIds = [parsed.selected, parsed.rejected, parsed.uncertain].flatMap((value) => Array.isArray(value) ? value : []);
     const currentIds = new Set(candidates.map((card) => card.id));
     let history: ProductCard[] = [];
+    const shownIds = new Set<string>();
+    const shownRevisions = new Map<string, string>();
     if (!selectsAllCatalogMatches(result.answer) && classifiedIds.some((id) => !currentIds.has(id))) {
       // All previously delivered results belong to this session. Use the most
       // recent copy of each card, while never inventing unknown identities.
-      const messages = await this.conversations.listMessages(input.sessionId, 80);
+      const messages = await this.conversations.listMessages(input.sessionId, null);
       const byId = new Map<string, ProductCard>();
       for (const message of [...messages].reverse()) {
+        const shown = message.metadata?.productCards;
+        if (Array.isArray(shown)) for (const card of shown as ProductCard[]) {
+          if (card && typeof card.id === 'string' && !shownIds.has(card.id)) {
+            shownIds.add(card.id);
+            if (typeof message.metadata?.catalogRevision === 'string') shownRevisions.set(card.id, message.metadata.catalogRevision);
+          }
+        }
         const savedGroups = [message.metadata?.productCards, message.metadata?.catalogCandidates];
         for (const saved of savedGroups) {
           if (!Array.isArray(saved)) continue;
@@ -180,7 +206,14 @@ export class PlatformAgentAssistant {
       }
       history = [...byId.values()];
     }
-    const classified = classifyPage(result.answer, candidates, history, Boolean(page));
+    const classified = classifyPage(result.answer, candidates, history, Boolean(page), shownIds);
+    let catalogRevision = typeof page?.source_revision === 'string' ? page.source_revision : undefined;
+    if (!page && classified.cards.length && config.BAKAUT_CATALOG_URL) {
+      catalogRevision = await currentCatalogRevision(input.signal);
+      if (classified.cards.some((card) => shownRevisions.get(card.id) !== catalogRevision)) {
+        throw new CatalogClassificationError('Agent classification does not account for the catalog page: catalog revision changed or unknown');
+      }
+    }
     let answer = classified.answer;
     let cards = await enrichMissingPrices(classified.cards, input.signal);
     const pendingPage = page && Array.isArray(page.pending_price_items) ? { items: page.pending_price_items } : undefined;
@@ -209,7 +242,7 @@ export class PlatformAgentAssistant {
         sourceUrl: checked.priceSource === 'site' ? checked.sourceUrl : undefined, observedAt: checked.priceObservedAt };
     });
     const metadata = { runtimeMode: 'openai_platform_agent' as const, runtimeModeReason: 'sole_runtime', productCards: cards,
-      catalogCandidates: page && !selectsAllCatalogMatches(result.answer) ? candidates : undefined, priceAudit, cardDisplay, needStateSnapshot: input.needState,
+      catalogCandidates: page && !selectsAllCatalogMatches(result.answer) ? candidates : undefined, catalogRevision, priceAudit, cardDisplay, needStateSnapshot: input.needState,
       platformAgentUsage: result.usage, platformAgentTurnId: result.turnId, usedWebSearch: result.usedWebSearch };
     const responsePayload: ChatResponsePayload = { turnId: input.turnId, answer, needState: input.needState,
       productCards: cards, cardDisplay, usedWebSearch: result.usedWebSearch, metadata };
@@ -244,13 +277,14 @@ export class PlatformAgentAssistant {
       const row = stored.rows[0];
       const client = new PlatformAgentClient(config.OPENAI_API_KEY, config.OPENAI_PLATFORM_AGENT_ID,
         config.OPENAI_PLATFORM_AGENT_VAULT_ID ? [config.OPENAI_PLATFORM_AGENT_VAULT_ID] : []);
-      const reservation = await assertOpenAIUsageBudget('platform_agent', 'platform_agent', 50_000);
+      let reservation = await assertOpenAIUsageBudget('platform_agent', 'platform_agent', 50_000);
       let submittedText = '';
+      let submissionKey = input.turnId;
       const submission: { current: { sessionId: string; previousTurnId: string | null } | null } = { current: null };
       const checkpoint = async (id: string, previousTurnId: string | null, submitted: boolean) => {
         await this.conversations.upsertTurnCheckpoint({ sessionId: input.sessionId, turnId: input.turnId!, executionOwner: ownerId,
           checkpoint: 'platform_agent_submission', status: 'running',
-          payload: { agentSessionId: id, previousTurnId, reservation, submitted, submittedText } });
+          payload: { agentSessionId: id, previousTurnId, reservation, submitted, submittedText, idempotencyKey: submissionKey } });
       };
       let result: Awaited<ReturnType<PlatformAgentClient['waitForTurn']>> | null = null;
       try {
@@ -259,8 +293,30 @@ export class PlatformAgentAssistant {
         onSession: async (id) => { await pool.query('INSERT INTO platform_agent_sessions(session_id,agent_session_id) VALUES($1,$2) ON CONFLICT(session_id) DO NOTHING', [input.sessionId, id]); },
         onBeforeSubmit: async (id, previousTurnId, submitted, text) => { submission.current = { sessionId: id, previousTurnId }; submittedText = text; await checkpoint(id, previousTurnId, submitted); },
         onSubmitted: async (id, previousTurnId) => checkpoint(id, previousTurnId, true) });
-      return await this.saveResult({ sessionId: input.sessionId, turnId: input.turnId, ownerId, result, reservation, prior: [],
-        needState: session.needState, onDelta: input.onDelta, signal: input.signal });
+      try {
+        return await this.saveResult({ sessionId: input.sessionId, turnId: input.turnId, ownerId, result, reservation, prior: [],
+          needState: session.needState, onDelta: input.onDelta, signal: input.signal });
+      } catch (error) {
+        if (!(error instanceof CatalogClassificationError) || input.signal?.aborted) throw error;
+        // Retry once with a new catalog search. A failed, undisplayed selection
+        // is not buyer-visible history and must never be treated as confirmed.
+        reservation = await assertOpenAIUsageBudget('platform_agent', 'platform_agent', 50_000);
+        const agentSessionId = result.sessionId;
+        submissionKey = `${input.turnId}-catalog-retry`;
+        result = null;
+        result = await client.run({ sessionId: agentSessionId, idempotencyKey: submissionKey, signal: input.signal,
+          message: `Предыдущий ответ не был показан покупателю: его список товаров не прошёл проверку. Для ответа на исходный вопрос заново вызови search_products, проверь актуальные карточки и классифицируй все товары новой выдачи. Не считай товары предыдущих неудачных попыток показанными. Исходный вопрос покупателя: ${input.userMessage}`,
+          onBeforeSubmit: async (id, previousTurnId, submitted, text) => { submission.current = { sessionId: id, previousTurnId }; submittedText = text; await checkpoint(id, previousTurnId, submitted); },
+          onSubmitted: async (id, previousTurnId) => checkpoint(id, previousTurnId, true) });
+        if (!result.page) {
+          const usageRecord = { id: result.turnId, usage: result.usage };
+          bindOpenAIUsageReservation(usageRecord, reservation);
+          await recordOpenAIUsageOnce('platform_agent', result.model, usageRecord);
+          throw new CatalogClassificationError('Catalog retry did not return a fresh search');
+        }
+        return await this.saveResult({ sessionId: input.sessionId, turnId: input.turnId, ownerId, result, reservation, prior: [],
+          needState: session.needState, onDelta: input.onDelta, signal: input.signal });
+      }
       } catch (error) {
         if (!input.signal?.aborted || input.signal.reason === 'platform_agent_explicit_cancel' || !submission.current) throw error;
         const alreadySaved = await this.completed(input.sessionId, input.turnId);
@@ -268,6 +324,12 @@ export class PlatformAgentAssistant {
         const graceSignal = AbortSignal.timeout(25_000);
         result ??= await client.settleAtDeadline({ ...submission.current, signal: graceSignal });
         if (!result) throw error;
+        if (submissionKey !== input.turnId && !result.page) {
+          const usageRecord = { id: result.turnId, usage: result.usage };
+          bindOpenAIUsageReservation(usageRecord, reservation);
+          await recordOpenAIUsageOnce('platform_agent', result.model, usageRecord);
+          throw new CatalogClassificationError('Catalog retry did not return a fresh search');
+        }
         return await this.saveResult({ sessionId: input.sessionId, turnId: input.turnId, ownerId, result, reservation, prior: [],
           needState: session.needState, recovered: true, onDelta: input.onDelta, signal: graceSignal });
       }
@@ -308,7 +370,8 @@ export class PlatformAgentAssistant {
           } else {
           if (data.submitted === false) {
             if (typeof data.submittedText !== 'string') throw new Error('Saved agent submission is incomplete');
-            await client.submitMessage(data.agentSessionId, data.submittedText, input.turnId, input.signal);
+            await client.submitMessage(data.agentSessionId, data.submittedText,
+              typeof data.idempotencyKey === 'string' ? data.idempotencyKey : input.turnId, input.signal);
           }
           result = await client.waitForTurn({ sessionId: data.agentSessionId, previousTurnId: data.previousTurnId, signal: input.signal });
           }
@@ -316,6 +379,12 @@ export class PlatformAgentAssistant {
           if (!input.signal?.aborted || input.signal.reason === 'platform_agent_explicit_cancel') throw error;
           result = await client.settleAtDeadline({ sessionId: data.agentSessionId, previousTurnId: data.previousTurnId, signal: AbortSignal.timeout(25_000) });
           if (!result) throw error;
+        }
+        if (data.idempotencyKey === `${input.turnId}-catalog-retry` && !result.page) {
+          const usageRecord = { id: result.turnId, usage: result.usage };
+          bindOpenAIUsageReservation(usageRecord, typeof data.reservation === 'string' ? data.reservation : null);
+          await recordOpenAIUsageOnce('platform_agent', result.model, usageRecord);
+          throw new CatalogClassificationError('Catalog retry did not return a fresh search');
         }
         return await this.saveResult({ sessionId: input.sessionId, turnId: input.turnId, ownerId, result,
           reservation: typeof data.reservation === 'string' ? data.reservation : null,

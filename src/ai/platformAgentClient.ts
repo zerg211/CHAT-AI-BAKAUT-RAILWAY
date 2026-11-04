@@ -19,6 +19,8 @@ const outputFormat = { type: 'json_schema', schema: {
 
 const contract = `\n\nСлужебная инструкция виджета заменяет прежние указания о постраничной выдаче. Для подбора используй search_products. Точно выбирай категорию: если покупатель просит инверторный генератор, category="Инверторные генераторы", для всех генераторов — "генераторы". Числовые пределы укажи отдельными полями, а query оставь пустым, когда категория уже выражает все требования к типу; непустой query в числовом поиске каталог НЕ применяет. Если каталог сообщил unsupported_filters, не считай такие условия проверенными: уточни поиск или проверь недостающий признак. Если поиск по категории и числовым полям полностью проверил ВСЕ обязательные условия покупателя (включая тип, топливо, напряжение, фазу, назначение и любые дополнительные требования) и unsupported_filters пуст, НЕ загружай остальные страницы и НЕ переписывай идентификаторы: верни selected=["${ALL_CATALOG_MATCHES}"], rejected=[], uncertain=[]. В противном случае, когда для ответа нужно оценить отдельные товары, собери все страницы matches и классифицируй КАЖДЫЙ product_id ровно в один из selected/rejected/uncertain, проверяя существенные неизвестные признаки по карточкам или в сети. Если нового поиска не было и вопрос относится к товарам одной или нескольких ранее показанных выдач этого диалога, можешь вернуть их ранее полученные product_id в selected/rejected/uncertain; если товары не нужны для ответа, верни пустые массивы. Если выполнен новый поиск, классифицируй все его товары; в selected включай только товары из нового поиска, а прошлые товары вне него можно упомянуть в rejected или uncertain. Используй source_evidence из результатов поиска как данные именно этой карточки: если они однозначно отвечают на вопрос о точной модификации, не запрашивай те же факты повторно и не обращайся в сеть за их подтверждением. При противоречии, другой модификации или неполных данных уточняй точную карточку или сеть; неизвестное не превращай в подтверждённое. Не читай повторно уже возвращённые характеристики; при недостающих полях используй get_products_batch с точными product_id и source_revision, если инструмент доступен. Не исключай товары только из-за неизвестного факта и не показывай спорные как подтверждённые. Верни JSON answer, selected, rejected, uncertain. Цена из базы — основной источник: когда цена есть в базе, используй её и не проверяй повторно на сайте. Если цены в базе нет, обязательно проверь страницу точного артикула на сайте; подтверждённую цену сайта показывай как актуальную без оговорок. Если на странице точно подтверждено отсутствие цены, сообщи, что товар под заказ, сроки уточняет менеджер, и предложи оформить заявку, не обещая, что она уже передана. Если сайт недоступен или точный артикул не подтверждён, сообщи, что цену нужно уточнить, и не утверждай, что товар под заказ. Не считай товар с неподтверждённой ценой подходящим под заданный бюджет. В answer кратко ответь покупателю, не перечисляй больше первых 10 товаров и не вставляй ссылки на карточки: виджет сам покажет точные данные из каталога. Не проси покупателя ждать поиска по кнопке: весь список будет готов до ответа.`;
 
+const selectionHistoryContract = `\n\nТолько товары из ответов, действительно показанных покупателю, являются показанной подборкой. Результаты незавершённых, отменённых и не показанных попыток не являются показанными. Для нового подбора и после неудачной попытки обязательно выполни новый search_products в актуальном каталоге. При вопросе о ранее показанных товарах сохраняй контекст и не выдавай непроверенную совместимость за подтверждённую.`;
+
 function object(value: unknown): JsonObject | undefined {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as JsonObject : undefined;
 }
@@ -141,23 +143,23 @@ export class PlatformAgentClient {
       const turns = await this.request(`/agents/sessions/${encodeURIComponent(sessionId)}/turns?limit=1&order=desc`, input.signal);
       previousTurnId = object(Array.isArray(turns.data) ? turns.data[0] : undefined)?.id;
       const previous = typeof previousTurnId === 'string' ? previousTurnId : null;
-      await input.onBeforeSubmit?.(sessionId, previous, false, input.message + contract);
-      await this.submitMessage(sessionId, input.message + contract, input.idempotencyKey, input.signal);
+      await input.onBeforeSubmit?.(sessionId, previous, false, input.message + contract + selectionHistoryContract);
+      await this.submitMessage(sessionId, input.message + contract + selectionHistoryContract, input.idempotencyKey, input.signal);
       await input.onSubmitted?.(sessionId, previous);
     } else {
       const saved = await this.request(`/agents/${encodeURIComponent(this.agentId)}`, input.signal);
       if (typeof saved.instructions !== 'string') throw new Error('Saved agent instructions are unavailable');
       const updatedTools = enableCatalogBatchTool(saved.tools);
       const session = await this.request('/agents/sessions', input.signal, {
-        agent_id: this.agentId, agent: { instructions: `${saved.instructions}\n\n${contract}`, text: { format: outputFormat },
-          ...(updatedTools ? { tools: updatedTools } : {}) }, environment: { type: 'none' }, input: input.message + contract,
+        agent_id: this.agentId, agent: { instructions: `${saved.instructions}\n\n${contract}${selectionHistoryContract}`, text: { format: outputFormat },
+          ...(updatedTools ? { tools: updatedTools } : {}) }, environment: { type: 'none' }, input: input.message + contract + selectionHistoryContract,
         ...(this.vaultIds.length ? { vault_ids: this.vaultIds } : {})
       }, input.idempotencyKey);
       if (typeof session.id !== 'string' || !session.id) throw new Error('Platform agent session ID missing');
       sessionId = session.id;
       try {
         await input.onSession?.(sessionId);
-        await input.onBeforeSubmit?.(sessionId, null, true, input.message + contract);
+        await input.onBeforeSubmit?.(sessionId, null, true, input.message + contract + selectionHistoryContract);
       } catch (error) {
         // The initial input has already started, so failure to durably record its
         // identity must not leave an unobservable paid run behind.

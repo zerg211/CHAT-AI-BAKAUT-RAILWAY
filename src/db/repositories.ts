@@ -2554,7 +2554,7 @@ export class ConversationRepository {
     return result.rowCount ? mapAssistantFeedbackQueueItem(result.rows[0]) : null;
   }
 
-  async listMessages(sessionId: string, limit = 80) {
+  async listMessages(sessionId: string, limit: number | null = 80) {
     const result = await this.db.query(
       `SELECT * FROM (
          SELECT * FROM messages WHERE session_id = $1 ORDER BY created_at DESC LIMIT $2
