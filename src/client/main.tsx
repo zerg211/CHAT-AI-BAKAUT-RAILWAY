@@ -1381,6 +1381,35 @@ function App() {
     setChatHydrationState('ready');
   }
 
+  async function startNewChat() {
+    if (busy || restoringChat) return;
+    const previous = sessionId ?? safeStorageGet(safeBrowserStorage('sessionStorage'), 'bakaut_session_id');
+    const visitor = safeStorageGet(safeBrowserStorage('localStorage'), 'bakaut_visitor_id');
+    setBusy(true);
+    try {
+      if (previous && visitor) {
+        const response = await fetch(`${apiBase}/api/chat/sessions/${previous}/close`, {
+          method: 'POST', headers: { 'x-bakaut-visitor-id': visitor }, signal: AbortSignal.timeout(10_000)
+        });
+        if (!response.ok && response.status !== 404) throw new Error('close failed');
+      }
+      if (previous) abandonSavedChat(safeBrowserStorage('sessionStorage'), previous);
+      initialSessionIdRef.current = null;
+      setSessionId(null);
+      setArchivedChats([]);
+      setMessages([{ id: id(), role: 'assistant', content: 'Здравствуйте. Помогу быстро подобрать оборудование под задачу и покажу подходящие варианты из каталога.', createdAt: nowIso() }]);
+      setInput('');
+      setActiveTurn(null);
+      setSessionUnavailable(false);
+      setError('');
+      setChatHydrationState('ready');
+    } catch {
+      setError('Не удалось начать новый чат. Попробуйте ещё раз.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
   function showUnavailableSession() {
     setSessionUnavailable(true);
     setChatHydrationState('error');
@@ -1713,8 +1742,13 @@ function App() {
           <h1>AI-консультант</h1>
           <p className="header-subtitle">Подбор строительного и силового оборудования</p>
         </div>
-        <span className={busy || restoringChat ? 'status busy' : 'status'}>
-          {restoringChat ? 'Восстанавливаю' : busy ? 'Отвечаю' : 'Онлайн'}
+        <span className="header-actions">
+          <span className={busy || restoringChat ? 'status busy' : 'status'}>
+            {restoringChat ? 'Восстанавливаю' : busy ? 'Отвечаю' : 'Онлайн'}
+          </span>
+          <button className="new-chat-button" type="button" onClick={() => void startNewChat()} disabled={busy || restoringChat}>
+            Новый чат
+          </button>
         </span>
       </header>
 

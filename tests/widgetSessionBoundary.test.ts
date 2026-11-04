@@ -55,6 +55,29 @@ async function draft(text: string) {
 }
 
 describe('rendered widget session boundary', () => {
+  it('shows a new chat button and closes the old session before clearing the buyer view', async () => {
+    const button = [...document.querySelectorAll('button')].find((item) => item.textContent === 'Новый чат')!;
+    expect(button).toBeTruthy();
+    expect(document.body.textContent).toContain(history[1].content);
+    fetcher.mockImplementation(async (url: string) => url.endsWith('/close')
+      ? Response.json({ ok: true })
+      : url.endsWith('/messages') ? Response.json({ messages: history }) : new Response(null, { status: 200 }));
+    await act(async () => button.click());
+    expect(fetcher).toHaveBeenCalledWith(expect.stringContaining(`/sessions/${oldId}/close`), expect.objectContaining({ method: 'POST' }));
+    expect(sessionStorage.getItem('bakaut_session_id')).toBeNull();
+    expect(document.body.textContent).not.toContain(history[1].content);
+    expect(document.querySelector('details')).toBeNull();
+  });
+
+  it('keeps the current chat when closing it fails', async () => {
+    const button = [...document.querySelectorAll('button')].find((item) => item.textContent === 'Новый чат')!;
+    fetcher.mockImplementation(async () => new Response(null, { status: 503 }));
+    await act(async () => button.click());
+    expect(sessionStorage.getItem('bakaut_session_id')).toBe(oldId);
+    expect(document.body.textContent).toContain(history[1].content);
+    expect(document.body.textContent).toContain('Не удалось начать новый чат');
+  });
+
   it('separates and paginates verified on-request products in restored history', async () => {
     await act(async () => root.unmount());
     const cards = [
