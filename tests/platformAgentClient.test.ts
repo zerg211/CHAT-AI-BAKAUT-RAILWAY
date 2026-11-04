@@ -103,6 +103,20 @@ assert 'price_current' not in k.get_product('0')
     expect(result.page?.items).toEqual([{ product_id: 'p1' }, { product_id: 'p2' }]);
     expect(result.page?.has_more).toBe(false);
   });
+  it('reads every page from nested Platform MCP tool outputs', () => {
+    const cursor = Buffer.from(JSON.stringify({ snapshot: 's', revision: 'r', group: 'matches', offset: 1 })).toString('base64url');
+    const first = { status: 'ok', snapshot: 's', group: 'matches', source_revision: 'r', criteria: {}, count: 2,
+      items: [{ product_id: 'a' }], has_more: true, next_cursor: cursor };
+    const last = { ...first, items: [{ product_id: 'b' }], has_more: false, next_cursor: null };
+    const call = (page: unknown, args: unknown) => ({ turn_id: 't', type: 'mcp_call', name: 'search_products',
+      arguments: args, status: 'completed', output: { content: [{ type: 'text', text: JSON.stringify({
+        content: [{ type: 'text', text: JSON.stringify(page) }], structuredContent: null, isError: false
+      }) }] } });
+    const answer = JSON.stringify({ answer: 'Подобрал', selected: ['a', 'b'], rejected: [], uncertain: [], selection_snapshots: ['s'] });
+    const result = extractAgentResult([call(first, {}), call(last, { cursor }),
+      { turn_id: 't', role: 'assistant', phase: 'final_answer', content: [{ type: 'output_text', text: answer }] }], 't');
+    expect(result.page?.items).toEqual([{ product_id: 'a' }, { product_id: 'b' }]);
+  });
   it('fails instead of presenting an incomplete list as complete', () => {
     const next = Buffer.from(JSON.stringify({ snapshot: 's1', revision: 'r1', group: 'matches', offset: 1 })).toString('base64url');
     const page = { group: 'matches', count: 20, items: [{ product_id: 'p1' }], has_more: true, next_cursor: next };
@@ -142,7 +156,10 @@ assert 'price_current' not in k.get_product('0')
       { data: [{ id: 'current', status: 'completed' }, { id: 'prior', status: 'completed' }], has_more: false },
       { data: [
         { turn_id: 'other', type: 'mcp_call', name: 'search_products', status: 'completed', output: { structuredContent: { status: 'ok', items: [{ product_id: 'forged' }] } } },
-        { turn_id: 'prior', type: 'mcp_call', name: 'search_products', status: 'completed', output: { structuredContent: { status: 'ok', items: [{ product_id: 'old', name: 'Old' }] } } }
+        { turn_id: 'prior', type: 'mcp_call', name: 'search_products', status: 'completed', output: { content: [{ type: 'text', text: JSON.stringify({
+          content: [{ type: 'text', text: JSON.stringify({ status: 'ok', items: [{ product_id: 'old', name: 'Old' }] }) }],
+          structuredContent: null, isError: false
+        }) }] } }
       ], has_more: false }
     ];
     const transport = vi.fn(async (_url: RequestInfo | URL) => new Response(JSON.stringify(replies.shift()), { status: 200 }));
