@@ -281,6 +281,31 @@ export function extractAgentResult(items: unknown[], turnId: string) {
     page = { ...first, items: [...combined.values()], has_more: false, next_cursor: null, incomplete_text_search: incompleteTextSearch };
     pageCursor = root.cursor;
   }
+  if (!page && [declared?.selected, declared?.rejected, declared?.uncertain]
+    .some((ids) => Array.isArray(ids) && ids.length)) {
+    const products = new Map<string, JsonObject>();
+    let revision: string | undefined;
+    for (const item of own) {
+      if (item.type !== 'mcp_call' || item.name !== 'get_product' || item.status !== 'completed') continue;
+      const result = catalogToolPayload(item.output);
+      if (!result || !['found', 'ambiguous'].includes(String(result.status))) continue;
+      if (typeof result.source_revision === 'string') {
+        if (revision && revision !== result.source_revision) throw new Error('Catalog revision changed between product lookups');
+        revision = result.source_revision;
+      }
+      const candidates = result.status === 'found' ? [result] : result.candidates;
+      if (!Array.isArray(candidates)) continue;
+      for (const value of candidates) {
+        const product = object(value);
+        if (typeof product?.product_id === 'string') products.set(product.product_id, product);
+      }
+    }
+    const declaredIds = [declared?.selected, declared?.rejected, declared?.uncertain]
+      .flatMap((ids) => Array.isArray(ids) ? ids : []);
+    if (products.size && declaredIds.every((id) => typeof id === 'string' && products.has(id))) {
+      page = { status: 'ok', items: [...products.values()], source_revision: revision };
+    }
+  }
   return { answer, page, pageCursor, usedWebSearch: own.some((item) => item.type === 'web_search_call') };
 }
 

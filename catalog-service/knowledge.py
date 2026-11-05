@@ -61,10 +61,11 @@ class Knowledge:
                     return False
                 matches=[self.row(r['id']) for r in self.db.execute('SELECT id,title FROM products')
                          if contains_model(r['title'])]
-        if len(matches)!=1:return {'status':'ambiguous' if matches else 'not_found','candidates':[self.compact(r) for r in matches]}
+        if len(matches)!=1:return {'status':'ambiguous' if matches else 'not_found','source_revision':self.revision,
+                                   'candidates':[self.compact(r) for r in matches]}
         r=matches[0];d=json.loads(r['raw'])
         # Full original attributes are returned for the exact product. Images never inflate model context.
-        result={'status':'found','product_id':r['id'],'name':r['title'],'sku':r['sku'],'url':r['url'],'category':r['category'],'source_file':r['source'],'source_sha256':r['sha'],'price_rub':r['price'],'price_source':'catalog' if r['price'] is not None else 'unknown','stock':'unknown'}
+        result={'status':'found','source_revision':self.revision,'product_id':r['id'],'name':r['title'],'sku':r['sku'],'url':r['url'],'category':r['category'],'source_file':r['source'],'source_sha256':r['sha'],'price_rub':r['price'],'price_source':'catalog' if r['price'] is not None else 'unknown','stock':'unknown'}
         if fields:
             aliases={**result,'nominal_electrical_power':json.loads(r['powers']),'conditions':[],'attributes':d.get('характеристики',{}),'description':d.get('описание',''),'documents':d.get('документы',[]),'brand':d.get('бренд')}
             result['fields']={k:aliases.get(k,d.get(k,(d.get('характеристики') or {}).get(k))) for k in fields}
