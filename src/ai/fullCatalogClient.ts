@@ -69,7 +69,8 @@ async function readSemanticSelection(page: JsonObject, signal: AbortSignal | und
   }
   diagnosticEvent('catalog.semantic_snapshot.validated', { candidateCount: page.candidate_count,
     selectedCount: page.selected_count, uncertainCount: page.uncertain_count, rejectedCount: page.rejected_count });
-  return { ...page, items: body.items, count: body.items.length, has_more: false, next_cursor: null };
+  return { ...page, items: body.items.slice(0, selectedCount),
+    uncertain_items: body.items.slice(selectedCount), count: selectedCount, has_more: false, next_cursor: null };
 }
 
 async function readSemanticSelections(page: JsonObject, signal: AbortSignal | undefined, transport: typeof fetch): Promise<JsonObject> {
@@ -80,7 +81,7 @@ async function readSemanticSelections(page: JsonObject, signal: AbortSignal | un
   if (revisions.size !== 1 || !revisions.has(page.source_revision)) throw new Error('Semantic catalog revisions differ');
   const loaded = await Promise.all(selections.map((item) => readSemanticSelection(item, signal, transport)));
   const byId = new Map<string, JsonObject>();
-  for (const selection of loaded) for (const raw of selection.items as unknown[]) {
+  for (const selection of loaded) for (const raw of [...selection.items as unknown[], ...selection.uncertain_items as unknown[]]) {
     const item = asObject(raw)!;
     const id = item.product_id as string;
     const previous = byId.get(id);
@@ -91,11 +92,12 @@ async function readSemanticSelections(page: JsonObject, signal: AbortSignal | un
     const priceB = typeof b.price_rub === 'number' ? b.price_rub : Number.POSITIVE_INFINITY;
     return priceA - priceB || String(a.name ?? '').localeCompare(String(b.name ?? ''), 'ru');
   };
-  const items = [...byId.values()].filter((item) => item.match_status !== 'uncertain').sort(sort)
-    .concat([...byId.values()].filter((item) => item.match_status === 'uncertain').sort(sort));
+  const items = [...byId.values()].filter((item) => item.match_status !== 'uncertain').sort(sort);
+  const uncertainItems = [...byId.values()].filter((item) => item.match_status === 'uncertain').sort(sort);
   const budgets = selections.map((item) => asObject(item.criteria)?.max_price_rub);
   const sharedBudget = budgets.every((value) => same(value, budgets[0])) ? budgets[0] : null;
-  return { ...page, items, count: items.length, criteria: { max_price_rub: sharedBudget },
+  return { ...page, items, uncertain_items: uncertainItems, count: items.length,
+    criteria: { max_price_rub: sharedBudget },
     has_more: false, next_cursor: null };
 }
 

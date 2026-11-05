@@ -260,7 +260,7 @@ export class PlatformAgentAssistant {
     const uncertainPage = page && Array.isArray(page.uncertain_items) ? { items: page.uncertain_items } : undefined;
     const [pending, unresolved] = await diagnosticSpan('catalog.prices', async () => Promise.all([
       enrichMissingPrices(cardsFromPage(pendingPage), input.signal),
-      enrichMissingPrices(cardsFromPage(uncertainPage), input.signal)
+      semanticPages.length ? cardsFromPage(uncertainPage) : enrichMissingPrices(cardsFromPage(uncertainPage), input.signal)
     ]));
     const criteria = page && page.criteria && typeof page.criteria === 'object' ? page.criteria as Record<string, unknown> : undefined;
     const budget = typeof criteria?.max_price_rub === 'number' && Number.isFinite(criteria.max_price_rub) ? criteria.max_price_rub : null;
@@ -276,7 +276,7 @@ export class PlatformAgentAssistant {
       if (onRequest.length) answer += `\n\nУ ${onRequest.length} товаров под заказ цена не указана, поэтому соответствие бюджету нужно уточнить.`;
       if (unknownPrice.length) answer += `\n\nУ ${unknownPrice.length} товаров цену пока не удалось проверить.`;
       if (unknownPower.length) answer += `\n\nЕщё у ${unknownPower.length} моделей мощность указана неполно или противоречиво.`;
-    } else if (unresolved.length) {
+    } else if (unresolved.length && !semanticPages.length) {
       cards = [...cards, ...unresolved.map((card) => ({ ...card, matchStatus: 'uncertain' as const }))];
       answer += `\n\nЕщё у ${unresolved.length} моделей решающие характеристики требуют уточнения.`;
     }

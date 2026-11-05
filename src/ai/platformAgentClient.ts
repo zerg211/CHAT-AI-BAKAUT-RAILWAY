@@ -213,6 +213,7 @@ export function extractAgentResult(items: unknown[], turnId: string, prefetch?: 
     .map((item) => catalogToolPayload(item.output));
   if (semantic.some((result) => !result)) throw new Error('Semantic catalog output is malformed');
   if (semantic.length && snapshots.length) {
+    if (typeof declared?.answer !== 'string' || !declared.answer.trim()) throw new Error('Semantic answer is invalid');
     if (new Set(snapshots).size !== snapshots.length) throw new Error('Duplicate semantic catalog snapshot');
     const matches = snapshots.map((snapshot) => {
       const found = semantic.filter((result) => result?.status === 'ok' && result.snapshot === snapshot);
@@ -222,8 +223,13 @@ export function extractAgentResult(items: unknown[], turnId: string, prefetch?: 
     if (matches.some((page) => page.source_revision !== matches[0].source_revision)) {
       throw new Error('Catalog revision changed between semantic selections');
     }
-    if (!selectsAllCatalogMatches(answer)) throw new Error('Semantic selection requires complete catalog marker');
-    return { answer, page: matches.length === 1 ? matches[0] : {
+    const completeAnswer = selectsAllCatalogMatches(answer) ? answer : JSON.stringify({
+      ...declared,
+      answer: matches.some((page) => typeof page.selected_count === 'number' && page.selected_count > 0)
+        ? 'Нашёл подходящие товары в каталоге.' : declared?.answer,
+      selected: [ALL_CATALOG_MATCHES], rejected: [], uncertain: [], selection_snapshots: snapshots
+    });
+    return { answer: completeAnswer, page: matches.length === 1 ? matches[0] : {
       status: 'ok', selection_mode: 'semantic_multi', selections: matches,
       source_revision: matches[0].source_revision }, pageCursor: undefined,
       usedWebSearch: own.some((item) => item.type === 'web_search_call') };
