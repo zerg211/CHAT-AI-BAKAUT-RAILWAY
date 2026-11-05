@@ -34,7 +34,8 @@ function cardsFromPage(page: Record<string, unknown> | undefined): ProductCard[]
       price: typeof p.price_rub === 'number' && Number.isFinite(p.price_rub) && p.price_rub > 0 ? p.price_rub : null,
       priceSource: typeof p.price_rub === 'number' && Number.isFinite(p.price_rub) && p.price_rub > 0 ? 'catalog' : undefined,
       currency: 'RUB', sourceUrl, specs: { article: typeof p.sku === 'string' ? p.sku : '' }, reasons,
-      caveats: Array.isArray(p.conditions) ? p.conditions.filter((x): x is string => typeof x === 'string') : [] };
+      caveats: Array.isArray(p.conditions) ? p.conditions.filter((x): x is string => typeof x === 'string') : [],
+      ...(p.match_status === 'uncertain' ? { matchStatus: 'uncertain' as const } : {}) };
   });
 }
 
@@ -176,6 +177,18 @@ export class PlatformAgentAssistant {
       throw new CatalogClassificationError('Complete catalog selection requires a fresh search');
     }
     let page = result.page;
+    if (page?.selection_mode === 'semantic') {
+      if (typeof page.run_id !== 'string' || typeof page.model !== 'string' ||
+          typeof page.input_tokens !== 'number' || typeof page.output_tokens !== 'number') {
+        throw new Error('Semantic catalog usage is unavailable');
+      }
+      const semanticUsage = { id: page.run_id, service_tier: 'default', usage: {
+        input_tokens: page.input_tokens, output_tokens: page.output_tokens,
+        total_tokens: page.input_tokens + page.output_tokens,
+        input_tokens_details: { cached_tokens: typeof page.cached_input_tokens === 'number' ? page.cached_input_tokens : 0 }
+      } };
+      await recordOpenAIUsageOnce('semantic_catalog', page.model, semanticUsage);
+    }
     if (selectsAllCatalogMatches(result.answer)) {
       try {
         page = await diagnosticSpan('catalog.snapshot', async () => readFullCatalogSnapshot(result.page ?? {}, input.signal));
@@ -333,7 +346,7 @@ export class PlatformAgentAssistant {
         submissionKey = `${input.turnId}-catalog-retry`;
         result = null;
         result = await diagnosticSpan('assistant.execution', async () => client.run({ sessionId: agentSessionId, idempotencyKey: submissionKey, signal: input.signal,
-          message: `Предыдущий ответ не был показан покупателю: его список товаров не прошёл проверку. Для ответа на исходный вопрос заново вызови search_products, проверь актуальные карточки и классифицируй все товары новой выдачи. Не считай товары предыдущих неудачных попыток показанными. Исходный вопрос покупателя: ${input.userMessage}`,
+          message: `Предыдущий ответ не был показан покупателю: его список товаров не прошёл проверку. Для ответа на исходный вопрос заново вызови подходящий инструмент каталога: semantic_select_products для смыслового условия или search_products для одних числовых условий. Не считай товары предыдущих неудачных попыток показанными. Исходный вопрос покупателя: ${input.userMessage}`,
           onBeforeSubmit: async (id, previousTurnId, submitted, text) => { submission.current = { sessionId: id, previousTurnId }; submittedText = text; await checkpoint(id, previousTurnId, submitted); },
           onSubmitted: async (id, previousTurnId) => checkpoint(id, previousTurnId, true) }));
         if (!result.page) {

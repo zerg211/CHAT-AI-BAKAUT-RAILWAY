@@ -46,7 +46,7 @@ describe('site chat and platform agent', () => {
     const answer = await new PlatformAgentAssistant(repo).generateAnswer({ sessionId: 'chat', turnId: 'turn', userMessage: 'Найди диск' });
     expect(state.run).toHaveBeenCalledTimes(2);
     expect(state.run.mock.calls[1][0]).toMatchObject({ sessionId: 'agent-session', idempotencyKey: 'turn-catalog-retry' });
-    expect(state.run.mock.calls[1][0].message).toContain('заново вызови search_products');
+    expect(state.run.mock.calls[1][0].message).toContain('заново вызови подходящий инструмент каталога');
     expect(answer.answer).toBe('Новый результат');
     expect(answer.productCards.map((card) => card.id)).toEqual(['fresh']);
   });
