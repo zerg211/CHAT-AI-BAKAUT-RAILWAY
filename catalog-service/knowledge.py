@@ -44,7 +44,12 @@ class Knowledge:
         return [self.row(ident) for ident in ids]
     def get_product(self,identifier,fields=None):
         matches=self.exact(identifier)
-        if len(matches)!=1:return {'status':'ambiguous' if matches else 'not_found','candidates':[self.compact(r) for r in matches[:10]]}
+        if not matches:
+            key=re.sub(r'\W+','',norm(identifier))
+            if len(key)>=4 and re.search(r'[a-zа-я]',key) and re.search(r'\d',key):
+                matches=[self.row(r['id']) for r in self.db.execute('SELECT id,title FROM products')
+                         if key in re.sub(r'\W+','',norm(r['title']))]
+        if len(matches)!=1:return {'status':'ambiguous' if matches else 'not_found','candidates':[self.compact(r) for r in matches]}
         r=matches[0];d=json.loads(r['raw'])
         # Full original attributes are returned for the exact product. Images never inflate model context.
         result={'status':'found','product_id':r['id'],'name':r['title'],'sku':r['sku'],'url':r['url'],'category':r['category'],'source_file':r['source'],'source_sha256':r['sha'],'price_rub':r['price'],'price_source':'catalog' if r['price'] is not None else 'unknown','stock':'unknown'}
