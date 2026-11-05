@@ -95,7 +95,15 @@ def semantic_rank_products(query:str,offset:int=0,page_size:int=50)->CallToolRes
 @server.tool(structured_output=False)
 def semantic_select_products(requirement:str,category:str,min_nominal_kw:float|None=None,max_nominal_kw:float|None=None,max_price_rub:float|None=None)->CallToolResult:
     """Check every product in the named category against one buyer requirement. For several relevant categories call once per category. Return a compact complete classification, a short preview, and source revision. No top-k cutoff. The chat server loads all cards directly."""
-    return compact_result(select_products(Knowledge('fts'),requirement,category,min_nominal_kw,max_nominal_kw,max_price_rub))
+    kb=Knowledge('fts')
+    try:
+        path=os.environ['BAKAUT_EMBEDDING_DB_PATH']
+        ranked,usage=cached_ranking(requirement,path,Path(path).stat().st_mtime_ns,kb.revision)
+        if len(ranked)!=kb.db.execute('SELECT COUNT(*) FROM products').fetchone()[0]:
+            raise ValueError('Embedding ranking lost a catalog product')
+        return compact_result(select_products(kb,requirement,category,min_nominal_kw,max_nominal_kw,
+            max_price_rub,ranking=ranked,embedding_tokens=usage))
+    finally:kb.db.close()
 @server.custom_route('/health',methods=['GET'])
 async def health(request):
     kb=Knowledge('fts');root=Path(__file__).parent
