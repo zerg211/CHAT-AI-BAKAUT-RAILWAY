@@ -1,0 +1,15 @@
+{
+  "status": "PASS_PILOT_ONLY",
+  "source_revision": "be94be56c60567e683082be462d3981f19d9eba11e7775021bcdbf212061f070",
+  "products": 100,
+  "fields": 4335,
+  "search_rows": 4335,
+  "independent_readback_mismatches": 0,
+  "document_links_preserved": 37,
+  "index_bytes": 3743744,
+  "index_sha256": "F5DC3236939C37A99A343B4DEA17F4C98713C6A46EE550F7B4C07E5CF7D2BA00",
+  "first_article": "00-00000273",
+  "last_article": "026119",
+  "production_bot_changed": false,
+  "suitability_verified": false
+}
