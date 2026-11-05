@@ -8,6 +8,27 @@ import { spawnSync } from 'node:child_process';
 vi.mock('../src/config.js', () => ({ config: { BAKAUT_MCP_TOKEN: 'mock-catalog-token', BAKAUT_CATALOG_URL: 'https://catalog-search-production.up.railway.app' } }));
 
 describe('Platform agent result', () => {
+  it('resolves model names despite spacing in the original title without hiding variants', () => {
+    const script = `
+import sys,sqlite3,json
+sys.path.insert(0,'catalog-service')
+from knowledge import Knowledge
+k=Knowledge.__new__(Knowledge)
+k.db=sqlite3.connect(':memory:')
+k.db.row_factory=sqlite3.Row
+k.db.execute('CREATE TABLE products (id TEXT,sku TEXT,title TEXT,category TEXT,url TEXT,price REAL,powers TEXT,source TEXT,sha TEXT,raw TEXT)')
+for ident,title in [('a','Бензорез Husqvarna K 770/12"'),('b','Бензорез Husqvarna K 770 Rescue'),('c','Бензорез Husqvarna K 970'),('d','Бензорез Husqvarna K 7700'),('e','Generator TEST G7000')]:
+    k.db.execute('INSERT INTO products VALUES (?,?,?,?,?,?,?,?,?,?)',(ident,ident,title,'Резчики','https://example.test/'+ident,100,'[]','s','h','{}'))
+result=k.get_product('Husqvarna K770')
+assert result['status']=='ambiguous' and {item['product_id'] for item in result['candidates']}=={'a','b'}
+assert k.get_product('K770')['status']=='ambiguous'
+assert k.get_product('Husqvarna K 970')['status']=='found'
+assert k.get_product('G700')['status']=='not_found'
+`;
+    const run = spawnSync(process.platform === 'win32' ? 'python' : 'python3', ['-c', script], { encoding: 'utf8' });
+    expect(run.stderr).toBe('');
+    expect(run.status).toBe(0);
+  });
   it('returns text matches beyond 30 and 100 without claiming semantic completeness', () => {
     const script = `
 import sys,sqlite3,json
