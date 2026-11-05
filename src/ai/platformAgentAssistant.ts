@@ -195,6 +195,21 @@ export class PlatformAgentAssistant {
         input_tokens_details: { cached_tokens: typeof selection.cached_input_tokens === 'number' ? selection.cached_input_tokens : 0 }
       } };
       await recordOpenAIUsageOnce('semantic_catalog', selection.model, semanticUsage);
+      const lookup = selection.cache_lookup_usage;
+      if (lookup && typeof lookup === 'object' && !Array.isArray(lookup)) {
+        const check = lookup as Record<string, unknown>;
+        if (typeof check.run_id !== 'string' || typeof check.model !== 'string' ||
+            typeof check.input_tokens !== 'number' || typeof check.output_tokens !== 'number') {
+          throw new Error('Semantic cache verification usage is invalid');
+        }
+        await recordOpenAIUsageOnce('semantic_catalog_cache_check', check.model, {
+          id: check.run_id, service_tier: 'default', usage: {
+            input_tokens: check.input_tokens, output_tokens: check.output_tokens,
+            total_tokens: check.input_tokens + check.output_tokens,
+            input_tokens_details: { cached_tokens: typeof check.cached_input_tokens === 'number' ? check.cached_input_tokens : 0 }
+          }
+        });
+      }
     }
     if (selectsAllCatalogMatches(result.answer)) {
       try {

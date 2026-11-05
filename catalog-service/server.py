@@ -1,4 +1,5 @@
-import hmac,json,os,hashlib,sqlite3,base64
+import hmac,json,os,hashlib,sqlite3,base64,threading,urllib.request
+from collections import OrderedDict
 from functools import lru_cache
 from pathlib import Path
 from starlette.responses import JSONResponse
@@ -8,7 +9,7 @@ from mcp.server.transport_security import TransportSecuritySettings
 from knowledge import Knowledge
 from get_products_batch import get_products_batch as read_product_batch
 from embedding_index import EmbeddingIndex,embed_query
-from semantic_selector import select_products
+from semantic_selector import MODEL as SELECTOR_MODEL,select_products
 import uvicorn
 TOKEN=os.environ['BAKAUT_MCP_TOKEN']
 EXPECTED_REVISION=os.environ['BAKAUT_EXPECTED_REVISION']
@@ -54,6 +55,56 @@ def cached_semantic_selection(revision,path,mtime_ns,requirement,category,min_no
         return select_products(kb,requirement,category,min_nominal_kw,max_nominal_kw,
             max_price_rub,ranking=ranked,embedding_tokens=usage)
     finally:kb.db.close()
+
+_selection_aliases=OrderedDict()
+_selection_alias_lock=threading.Lock()
+
+def equivalent_cached_requirement(requirement,known):
+    """Reuse a result only when the model confirms identical product eligibility."""
+    body=json.dumps({'model':SELECTOR_MODEL,'reasoning':{'effort':'low'},
+        'instructions':('Compare the new buyer requirement with the numbered previous requirements. '
+            'Return an index only if BOTH requirements would include and exclude exactly the same products. '
+            'Different model, size, material, use, negation, or other condition means no match. '
+            'If unsure, return null. Return only JSON: {"index":integer_or_null}.'),
+        'input':json.dumps({'new':requirement,'previous':known},ensure_ascii=False),
+        'max_output_tokens':800},ensure_ascii=False).encode()
+    request=urllib.request.Request('https://api.openai.com/v1/responses',data=body,method='POST',
+        headers={'Authorization':'Bearer '+os.environ['OPENAI_API_KEY'],'Content-Type':'application/json'})
+    try:
+        with urllib.request.urlopen(request,timeout=12) as response:result=json.load(response)
+        if result.get('status')!='completed':return None,None
+        output=''.join(part.get('text','') for item in result.get('output',[])
+            for part in item.get('content',[]) if part.get('type')=='output_text')
+        index=json.loads(output).get('index')
+        if isinstance(index,bool) or not isinstance(index,int) or not 0<=index<len(known):return None,None
+        usage=result.get('usage') or {}
+        return known[index],{'run_id':result['id'],'model':SELECTOR_MODEL,
+            'input_tokens':int(usage.get('input_tokens') or 0),
+            'output_tokens':int(usage.get('output_tokens') or 0),
+            'cached_input_tokens':int((usage.get('input_tokens_details') or {}).get('cached_tokens') or 0)}
+    except (OSError,ValueError,KeyError,TimeoutError):
+        return None,None
+
+def selection_with_cache(revision,path,mtime_ns,requirement,category,min_nominal_kw,max_nominal_kw,max_price_rub):
+    base=(revision,path,mtime_ns,category,min_nominal_kw,max_nominal_kw,max_price_rub)
+    key=(base,requirement)
+    with _selection_alias_lock:
+        alias=_selection_aliases.get(key)
+        known=list(dict.fromkeys(source for (candidate_base,_),source in reversed(_selection_aliases.items())
+            if candidate_base==base))[:32] if alias is None else []
+    lookup=None
+    if alias is None and known:
+        alias,lookup=equivalent_cached_requirement(requirement,known)
+    source=alias or requirement
+    selection=cached_semantic_selection(revision,path,mtime_ns,source,category,
+        min_nominal_kw,max_nominal_kw,max_price_rub)
+    with _selection_alias_lock:
+        _selection_aliases[key]=source
+        _selection_aliases.move_to_end(key)
+        while len(_selection_aliases)>128:_selection_aliases.popitem(last=False)
+    if source!=requirement:
+        return {**selection,'cache_hit':True,**({'cache_lookup_usage':lookup} if lookup else {})}
+    return selection
 
 def ranked_products(query,offset=0,page_size=50):
     if not isinstance(query,str) or not query.strip():raise ValueError('query must be a nonempty string')
@@ -111,7 +162,7 @@ def semantic_select_products(requirement:str,category:str,min_nominal_kw:float|N
     try:revision=kb.revision
     finally:kb.db.close()
     path=os.environ['BAKAUT_EMBEDDING_DB_PATH']
-    return compact_result(cached_semantic_selection(revision,path,Path(path).stat().st_mtime_ns,
+    return compact_result(selection_with_cache(revision,path,Path(path).stat().st_mtime_ns,
         requirement,category,min_nominal_kw,max_nominal_kw,max_price_rub))
 @server.custom_route('/health',methods=['GET'])
 async def health(request):
