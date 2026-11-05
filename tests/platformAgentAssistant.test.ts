@@ -225,6 +225,20 @@ describe('site chat and platform agent', () => {
       answer: JSON.stringify({ answer: 'Ответ', selected: ['not-shown'], rejected: [], uncertain: [] }) });
     await expect(new PlatformAgentAssistant(repo).generateAnswer({ sessionId: 'chat', turnId: 'turn', userMessage: 'Какая?' })).rejects.toThrow('did not return a fresh search');
   });
+  it('does not treat a hidden uncertain card as previously shown', async () => {
+    state.listMessages.mockResolvedValue([{ metadata: { productCards: [
+      { id: 'hidden', name: 'Сомнительный товар', matchStatus: 'uncertain', specs: {} }
+    ] } }]);
+    state.run
+      .mockResolvedValueOnce({ sessionId: 'agent-session', turnId: 'old-result',
+        answer: JSON.stringify({ answer: 'Подходит', selected: ['hidden'], rejected: [], uncertain: [] }) })
+      .mockResolvedValueOnce({ sessionId: 'agent-session', turnId: 'fresh-result',
+        page: { items: [{ product_id: 'fresh', name: 'Подтверждённый товар', price_rub: 100 }] },
+        answer: JSON.stringify({ answer: 'Найден товар', selected: ['fresh'], rejected: [], uncertain: [] }) });
+    const result = await new PlatformAgentAssistant(repo).generateAnswer({ sessionId: 'chat', turnId: 'turn', userMessage: 'Что из показанного подходит?' });
+    expect(state.run).toHaveBeenCalledTimes(2);
+    expect(result.productCards.map((card) => card.id)).toEqual(['fresh']);
+  });
   it('resolves older product results across later selections in the same session', async () => {
     state.listMessages.mockResolvedValue([
       { metadata: { productCards: [{ id: 'plate', name: 'Виброплита', price: 100, specs: {}, currency: 'RUB' }], catalogCandidates: [{ id: 'reviewed', name: 'Проверенная', price: 150, specs: {}, currency: 'RUB' }] } },

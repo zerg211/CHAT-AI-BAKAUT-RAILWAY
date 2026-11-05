@@ -637,15 +637,17 @@ async function sendAssistantFeedback(sessionId: string, messageId: string, ratin
 
 const CARDS_PER_PAGE = 10;
 
-function ProductCards({ cards }: { cards: ProductCard[] }) {
+function ProductCards({ cards, showUncertain = false }: { cards: ProductCard[]; showUncertain?: boolean }) {
   const [visibleCount, setVisibleCount] = useState(CARDS_PER_PAGE);
-  const visible = cards.slice(0, visibleCount);
-  const hiddenCount = cards.length - visible.length;
+  const displayCards = showUncertain ? cards : cards.filter((card) => card.matchStatus !== 'uncertain');
+  const visible = displayCards.slice(0, visibleCount);
+  const hiddenCount = displayCards.length - visible.length;
   const confirmed = visible.filter((card) => !card.priceOnRequest && card.matchStatus !== 'uncertain');
   const onRequest = visible.filter((card) => card.priceOnRequest && card.matchStatus !== 'uncertain');
   const uncertain = visible.filter((card) => card.matchStatus === 'uncertain');
+  if (!displayCards.length) return null;
   return <>
-    <div className="product-panel-head"><span>Товары</span><span>{visible.length} из {cards.length}</span></div>
+    <div className="product-panel-head"><span>{showUncertain ? 'Товары' : 'Подходящие товары'}</span><span>{visible.length} из {displayCards.length}</span></div>
     {confirmed.length ? <ProductCardGroup cards={confirmed} title="Подходящие варианты" /> : null}
     {onRequest.length ? <ProductCardGroup cards={onRequest} title="Под заказ — цену и сроки уточнит менеджер" /> : null}
     {uncertain.length ? <ProductCardGroup cards={uncertain} title="Возможные варианты — нужно уточнить соответствие" /> : null}
@@ -1150,7 +1152,7 @@ function AdminApp() {
                           ))}
                         </div>
                       ) : null}
-                      {metadata.productCards?.length ? <ProductCards cards={metadata.productCards} /> : null}
+                      {metadata.productCards?.length ? <ProductCards cards={metadata.productCards} showUncertain /> : null}
                     </article>
                   );
                 })}

@@ -221,7 +221,7 @@ export class PlatformAgentAssistant {
       for (const message of [...messages].reverse()) {
         const shown = message.metadata?.productCards;
         if (Array.isArray(shown)) for (const card of shown as ProductCard[]) {
-          if (card && typeof card.id === 'string' && !shownIds.has(card.id)) {
+          if (card && typeof card.id === 'string' && card.matchStatus !== 'uncertain' && !shownIds.has(card.id)) {
             shownIds.add(card.id);
             if (typeof message.metadata?.catalogRevision === 'string') shownRevisions.set(card.id, message.metadata.catalogRevision);
           }
@@ -275,10 +275,10 @@ export class PlatformAgentAssistant {
         .map((card) => ({ ...card, matchStatus: 'uncertain' as const }))];
       if (onRequest.length) answer += `\n\nУ ${onRequest.length} товаров под заказ цена не указана, поэтому соответствие бюджету нужно уточнить.`;
       if (unknownPrice.length) answer += `\n\nУ ${unknownPrice.length} товаров цену пока не удалось проверить.`;
-      if (unknownPower.length) answer += `\n\nЕщё у ${unknownPower.length} моделей мощность указана неполно или противоречиво; они показаны отдельно для уточнения.`;
+      if (unknownPower.length) answer += `\n\nЕщё у ${unknownPower.length} моделей мощность указана неполно или противоречиво.`;
     } else if (unresolved.length) {
       cards = [...cards, ...unresolved.map((card) => ({ ...card, matchStatus: 'uncertain' as const }))];
-      answer += `\n\nЕщё у ${unresolved.length} моделей решающие характеристики требуют уточнения; они показаны отдельно.`;
+      answer += `\n\nЕщё у ${unresolved.length} моделей решающие характеристики требуют уточнения.`;
     }
     const ids = [...candidates, ...pending, ...unresolved].map((card) => card.id);
     if (new Set(ids).size !== ids.length || ids.some((id) => input.prior.includes(id))) throw new Error('Duplicate catalog product page');
