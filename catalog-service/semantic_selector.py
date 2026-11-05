@@ -85,10 +85,10 @@ def _groups(products, requirement, full):
     return groups
 
 
-def _classify_group(group, requirement, effort):
+def _classify_group(group, requirement):
     items = [{'n': index, **view} for index, (_, view) in enumerate(group)]
     body = json.dumps({
-        'model': MODEL, 'reasoning': {'effort': effort},
+        'model': MODEL, 'reasoning': {'effort': 'low'},
         'instructions': INSTRUCTIONS,
         'input': 'Buyer requirement: ' + requirement + '\nProduct facts: ' + json.dumps(items, ensure_ascii=False),
         'max_output_tokens': max(4000, len(group) * 200),
@@ -128,7 +128,7 @@ def _classify_group(group, requirement, effort):
 def _classify(products, requirement, full):
     groups = _groups(products, requirement, full)
     with concurrent.futures.ThreadPoolExecutor(max_workers=WORKERS) as executor:
-        results = list(executor.map(lambda group: _classify_group(group, requirement, 'medium' if full else 'low'), groups))
+        results = list(executor.map(lambda group: _classify_group(group, requirement), groups))
     decisions = {}
     for group, (labels, _, _, _) in zip(groups, results):
         for (product, _), label in zip(group, labels):
