@@ -45,10 +45,22 @@ class Knowledge:
     def get_product(self,identifier,fields=None):
         matches=self.exact(identifier)
         if not matches:
-            key=re.sub(r'\W+','',norm(identifier))
+            words=re.findall(r'\w+',norm(identifier))
+            key=''.join(words)
             if len(key)>=4 and re.search(r'[a-zа-я]',key) and re.search(r'\d',key):
+                def contains_model(title):
+                    parts=re.findall(r'\w+',norm(title))
+                    for start in range(len(parts)):
+                        position=start
+                        for wanted in words:
+                            value=''
+                            while position<len(parts) and len(value)<len(wanted):
+                                value+=parts[position];position+=1
+                            if value!=wanted:break
+                        else:return True
+                    return False
                 matches=[self.row(r['id']) for r in self.db.execute('SELECT id,title FROM products')
-                         if key in re.sub(r'\W+','',norm(r['title']))]
+                         if contains_model(r['title'])]
         if len(matches)!=1:return {'status':'ambiguous' if matches else 'not_found','candidates':[self.compact(r) for r in matches]}
         r=matches[0];d=json.loads(r['raw'])
         # Full original attributes are returned for the exact product. Images never inflate model context.
