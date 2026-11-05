@@ -161,14 +161,6 @@ def select_products(knowledge, requirement, category, min_nominal_kw=None, max_n
     unresolved = [product for product in products if first[product['id']]['label'] != 'yes']
     second, input_two, output_two, cached_two = _classify(unresolved, requirement, True) if unresolved else ({}, 0, 0, 0)
     decisions = {**first, **second}
-    cited = [{'id': product['id'], 'name': 'Product',
-              'facts': [('Source fact', decisions[product['id']]['evidence'])]}
-             for product in products if decisions[product['id']]['label'] != 'unknown']
-    verified, input_check, output_check, cached_check = _classify(cited, requirement, True) if cited else ({}, 0, 0, 0)
-    for product in cited:
-        ident = product['id']
-        if verified[ident]['label'] != decisions[ident]['label']:
-            decisions[ident] = {'label': 'unknown', 'evidence': None}
     selected, uncertain, rejected = [], [], []
     for (item, numeric_status), product in zip(candidates, products):
         decision = decisions[product['id']]
@@ -202,7 +194,7 @@ def select_products(knowledge, requirement, category, min_nominal_kw=None, max_n
             'rejected_count': len(rejected),
             'items': first_cards, 'group': 'matches', 'count': len(selected),
             'source_scan_complete': True, 'numeric_scan_complete': snapshot['complete'],
-            'run_id': str(uuid.uuid4()), 'model': MODEL, 'input_tokens': input_one + input_two + input_check,
-            'cached_input_tokens': cached_one + cached_two + cached_check,
-            'output_tokens': output_one + output_two + output_check,
+            'run_id': str(uuid.uuid4()), 'model': MODEL, 'input_tokens': input_one + input_two,
+            'cached_input_tokens': cached_one + cached_two,
+            'output_tokens': output_one + output_two,
             'retrieval_ms': round((time.perf_counter() - started) * 1000, 2)}
