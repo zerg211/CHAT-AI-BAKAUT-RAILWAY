@@ -62,10 +62,11 @@ _selection_alias_lock=threading.Lock()
 def equivalent_cached_requirement(requirement,known):
     """Reuse a result only when the model confirms identical product eligibility."""
     body=json.dumps({'model':SELECTOR_MODEL,'reasoning':{'effort':'low'},
-        'instructions':('Compare the new buyer requirement with the numbered previous requirements. '
-            'Return an index only if BOTH requirements would include and exclude exactly the same products. '
+        'instructions':('Compare the new buyer requirement with the previous requirements. '
+            'Copy the EXACT text of one previous requirement into "match" only if both requirements '
+            'would include and exclude exactly the same products. '
             'Different model, size, material, use, negation, or other condition means no match. '
-            'If unsure, return null. Return only JSON: {"index":integer_or_null}.'),
+            'If unsure, return null. Return only JSON: {"match":previous_requirement_text_or_null}.'),
         'input':json.dumps({'new':requirement,'previous':known},ensure_ascii=False),
         'max_output_tokens':800},ensure_ascii=False).encode()
     request=urllib.request.Request('https://api.openai.com/v1/responses',data=body,method='POST',
@@ -75,10 +76,10 @@ def equivalent_cached_requirement(requirement,known):
         if result.get('status')!='completed':return None,None
         output=''.join(part.get('text','') for item in result.get('output',[])
             for part in item.get('content',[]) if part.get('type')=='output_text')
-        index=json.loads(output).get('index')
-        if isinstance(index,bool) or not isinstance(index,int) or not 0<=index<len(known):return None,None
+        match=json.loads(output).get('match')
+        if not isinstance(match,str) or match not in known:return None,None
         usage=result.get('usage') or {}
-        return known[index],{'run_id':result['id'],'model':SELECTOR_MODEL,
+        return match,{'run_id':result['id'],'model':SELECTOR_MODEL,
             'input_tokens':int(usage.get('input_tokens') or 0),
             'output_tokens':int(usage.get('output_tokens') or 0),
             'cached_input_tokens':int((usage.get('input_tokens_details') or {}).get('cached_tokens') or 0)}
