@@ -84,8 +84,8 @@ def semantic_rank_products(query:str,offset:int=0,page_size:int=50)->CallToolRes
     """Rank ALL 4324 original cards by meaning. Pages are transport only: next_offset reaches every card. Ranking discovers candidates; it does not prove eligibility or complete selection. Check exact card data and structured filters before recommending."""
     return compact_result(ranked_products(query,offset,page_size))
 @server.tool(structured_output=False)
-def semantic_select_products(requirement:str,category:str|None=None,min_nominal_kw:float|None=None,max_nominal_kw:float|None=None,max_price_rub:float|None=None)->CallToolResult:
-    """Check every product in a category against one buyer requirement; omit category to scan the whole catalog. Return a compact complete classification, a short preview, and source revision. No top-k cutoff. The agent must use the full-selection marker with this snapshot; the chat server loads all cards directly."""
+def semantic_select_products(requirement:str,category:str,min_nominal_kw:float|None=None,max_nominal_kw:float|None=None,max_price_rub:float|None=None)->CallToolResult:
+    """Check every product in the named category against one buyer requirement. For several relevant categories call once per category. Return a compact complete classification, a short preview, and source revision. No top-k cutoff. The chat server loads all cards directly."""
     return compact_result(select_products(Knowledge('fts'),requirement,category,min_nominal_kw,max_nominal_kw,max_price_rub))
 @server.custom_route('/health',methods=['GET'])
 async def health(request):

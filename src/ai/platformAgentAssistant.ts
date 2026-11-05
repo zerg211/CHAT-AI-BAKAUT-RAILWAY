@@ -177,17 +177,20 @@ export class PlatformAgentAssistant {
       throw new CatalogClassificationError('Complete catalog selection requires a fresh search');
     }
     let page = result.page;
-    if (page?.selection_mode === 'semantic') {
-      if (typeof page.run_id !== 'string' || typeof page.model !== 'string' ||
-          typeof page.input_tokens !== 'number' || typeof page.output_tokens !== 'number') {
+    const semanticPages = page?.selection_mode === 'semantic' ? [page] :
+      page?.selection_mode === 'semantic_multi' && Array.isArray(page.selections) ? page.selections : [];
+    for (const raw of semanticPages) {
+      const selection = raw as Record<string, unknown>;
+      if (typeof selection.run_id !== 'string' || typeof selection.model !== 'string' ||
+          typeof selection.input_tokens !== 'number' || typeof selection.output_tokens !== 'number') {
         throw new Error('Semantic catalog usage is unavailable');
       }
-      const semanticUsage = { id: page.run_id, service_tier: 'default', usage: {
-        input_tokens: page.input_tokens, output_tokens: page.output_tokens,
-        total_tokens: page.input_tokens + page.output_tokens,
-        input_tokens_details: { cached_tokens: typeof page.cached_input_tokens === 'number' ? page.cached_input_tokens : 0 }
+      const semanticUsage = { id: selection.run_id, service_tier: 'default', usage: {
+        input_tokens: selection.input_tokens, output_tokens: selection.output_tokens,
+        total_tokens: selection.input_tokens + selection.output_tokens,
+        input_tokens_details: { cached_tokens: typeof selection.cached_input_tokens === 'number' ? selection.cached_input_tokens : 0 }
       } };
-      await recordOpenAIUsageOnce('semantic_catalog', page.model, semanticUsage);
+      await recordOpenAIUsageOnce('semantic_catalog', selection.model, semanticUsage);
     }
     if (selectsAllCatalogMatches(result.answer)) {
       try {
