@@ -78,7 +78,7 @@ describe('rendered widget session boundary', () => {
     expect(document.body.textContent).toContain('Не удалось начать новый чат');
   });
 
-  it('separates and paginates verified on-request products in restored history', async () => {
+  it('paginates confirmed goods and hides unverified cards from restored buyer history', async () => {
     await act(async () => root.unmount());
     const cards = [
       ...Array.from({ length: 12 }, (_, i) => ({ id: `matched-${i}`, name: `Подходит ${i}`, price: 90000, specs: {}, reasons: [], caveats: [] })),
@@ -92,13 +92,15 @@ describe('rendered widget session boundary', () => {
     root = actual.createRoot(document.getElementById('root')!);
     await act(async () => root.render(mounted.element as React.ReactNode));
     expect(document.querySelectorAll('.product-card')).toHaveLength(10);
+    expect(document.body.textContent).toContain('10 из 24');
     expect(document.body.textContent).not.toContain('Заказ 0');
     await act(async () => (document.querySelector('.product-more') as HTMLButtonElement).click());
     expect(document.querySelectorAll('.product-card')).toHaveLength(20);
     expect(document.body.textContent).toContain('Под заказ — цену и сроки уточнит менеджер');
     await act(async () => (document.querySelector('.product-more') as HTMLButtonElement).click());
-    expect(document.querySelectorAll('.product-card')).toHaveLength(25);
-    expect(document.body.textContent).toContain('Возможные варианты — нужно уточнить соответствие');
+    expect(document.querySelectorAll('.product-card')).toHaveLength(24);
+    expect(document.body.textContent).not.toContain('Возможный');
+    expect(document.querySelector('.product-more')).toBeNull();
   });
 
   it('blocks silent continuation and preserves history and draft across explicit new chat', async () => {
