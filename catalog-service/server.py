@@ -68,6 +68,15 @@ def ranked_products(query,offset=0,page_size=50):
 
 def compact_result(data):return CallToolResult(content=[TextContent(type='text',text=json.dumps(data,ensure_ascii=False,separators=(',',':')))])
 @server.tool(structured_output=False)
+def list_categories()->CallToolResult:
+    """List the current catalog categories and product counts for choosing where to search. This does not select products."""
+    kb=Knowledge('fts')
+    try:
+        rows=kb.db.execute('SELECT category, COUNT(*) AS count FROM products GROUP BY category ORDER BY category').fetchall()
+        return compact_result({'status':'ok','source_revision':kb.revision,
+            'categories':[{'name':row['category'],'count':row['count']} for row in rows]})
+    finally:kb.db.close()
+@server.tool(structured_output=False)
 def search_products(query:str='',category:str|None=None,min_nominal_kw:float|None=None,max_nominal_kw:float|None=None,max_price_rub:float|None=None,cursor:str|None=None,group:str='matches')->CallToolResult:
     """Search catalog. Generator category choices: Инверторные генераторы, Бензиновые генераторы, Дизельные генераторы, Газовые генераторы, Сварочные генераторы; генераторы includes all five. For numeric filters choose the most precise actual category: numeric search does not apply query text, reported in unsupported_filters. applied_filters lists only enforced constraints. Unknown or conflicting fields remain separately grouped. Text matching is evidence, not proof of an arbitrary property; source_scan_complete does not cover all synonyms. Page results have stable revision, snapshot and next_cursor."""
     return compact_result(Knowledge('fts').search_products(query,category,min_nominal_kw,max_nominal_kw,max_price_rub,cursor,group))

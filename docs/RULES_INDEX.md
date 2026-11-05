@@ -16,6 +16,7 @@
 - `ARCHITECTURE.md` — runtime и граница LLM/кода;
 - `DOMAIN_AGENT_BLUEPRINT.md` — целевая предметная область, источники знаний и граница обучения/RAG;
 - `ASSISTANT_BEHAVIOR.md` — ожидаемое поведение покупательского диалога;
+- `PLATFORM_AGENT_INSTRUCTIONS.txt` — инструкции, сохранённые у действующего агента OpenAI Platform;
 - `SALES_MANAGER_BEHAVIOR_POLICY.md` — бизнес-политика менеджера;
 - `CATALOG_PIPELINE.md` — каталог, freshness и embeddings;
 - `EVALS.md` — локальные проверки и evals;
