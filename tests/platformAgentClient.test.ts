@@ -41,6 +41,17 @@ assert k.get_product('G700')['status']=='not_found'
     expect(result.page?.items).toEqual(candidates);
     expect(result.page?.source_revision).toBe('rev');
   });
+  it('does not make unrelated product lookups part of the answer selection', () => {
+    const products = ['a', 'b'].map((product_id) => ({ product_id, name: product_id, price_rub: 100 }));
+    const answer = JSON.stringify({ answer: 'Подробнее о товаре A', selected: ['a'], rejected: [], uncertain: [] });
+    const result = extractAgentResult([
+      ...products.map((product) => ({ turn_id: 't', type: 'mcp_call', name: 'get_product', status: 'completed',
+        output: { structuredContent: { status: 'found', source_revision: 'rev', candidates: [], ...product } } })),
+      { turn_id: 't', role: 'assistant', phase: 'final_answer', content: [{ type: 'output_text', text: answer }] }
+    ], 't');
+    expect(result.page?.items).toHaveLength(1);
+    expect((result.page?.items as Array<{ product_id: string }>)[0].product_id).toBe('a');
+  });
   it('returns text matches beyond 30 and 100 without claiming semantic completeness', () => {
     const script = `
 import sys,sqlite3,json
