@@ -131,7 +131,8 @@ function object(value: unknown): JsonObject | undefined {
 function catalogToolPayload(value: unknown, depth = 0): JsonObject | undefined {
   const output = object(value);
   if (!output || depth > 4 || output.isError === true) return undefined;
-  if (Array.isArray(output.items)) return output;
+  if (Array.isArray(output.items) ||
+      (typeof output.status === 'string' && output.status !== 'ok')) return output;
   const structured = catalogToolPayload(output.structuredContent, depth + 1);
   if (structured) return structured;
   if (!Array.isArray(output.content)) return undefined;
