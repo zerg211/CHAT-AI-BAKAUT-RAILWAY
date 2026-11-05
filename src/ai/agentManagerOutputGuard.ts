@@ -94,6 +94,7 @@ function publicCard(card: ProductCard): ProductCard {
     ...(card.category !== undefined ? { category: card.category } : {}),
     ...(card.price !== undefined ? { price: card.price } : {}),
     ...(card.priceOnRequest === true && card.price == null ? { priceOnRequest: true } : {}),
+    ...(card.matchStatus === 'uncertain' ? { matchStatus: 'uncertain' as const } : {}),
     ...(card.currency !== undefined ? { currency: card.currency } : {}),
     ...(card.imageUrl !== undefined ? { imageUrl: card.imageUrl } : {}),
     ...(card.sourceUrl !== undefined ? { sourceUrl: card.sourceUrl } : {}),
