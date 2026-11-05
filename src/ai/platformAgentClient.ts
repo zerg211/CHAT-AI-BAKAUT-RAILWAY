@@ -303,7 +303,9 @@ export function extractAgentResult(items: unknown[], turnId: string) {
     const declaredIds = [declared?.selected, declared?.rejected, declared?.uncertain]
       .flatMap((ids) => Array.isArray(ids) ? ids : []);
     if (products.size && declaredIds.every((id) => typeof id === 'string' && products.has(id))) {
-      page = { status: 'ok', items: [...products.values()], source_revision: revision };
+      const classified = new Set(declaredIds);
+      page = { status: 'ok', items: [...products.values()].filter((product) => classified.has(product.product_id)),
+        source_revision: revision };
     }
   }
   return { answer, page, pageCursor, usedWebSearch: own.some((item) => item.type === 'web_search_call') };
