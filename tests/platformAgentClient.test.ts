@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { configureCatalogTools, extractAgentResult, PlatformAgentClient } from '../src/ai/platformAgentClient.js';
 import { normalizePublicCardDisplay, normalizePublicProductCards } from '../src/shared/publicChatHistory.js';
-import { ALL_CATALOG_MATCHES } from '../src/ai/catalogDecision.js';
+import { ALL_CATALOG_MATCHES, selectsAllCatalogMatches } from '../src/ai/catalogDecision.js';
 import { readExactMentionPrefetch, readFullCatalogSnapshot } from '../src/ai/fullCatalogClient.js';
 import { spawnSync } from 'node:child_process';
 
@@ -197,11 +197,29 @@ assert 'price_current' not in k.get_product('0')
     const transport = vi.fn(async () => new Response(JSON.stringify({ status: 'ok', source_revision: 'rev',
       items: [{ product_id: 'p1' }, { product_id: 'p2' }, { product_id: 'p3', match_status: 'uncertain' }] }), { status: 200 })) as unknown as typeof fetch;
     const hydrated = await readFullCatalogSnapshot(result.page!, undefined, transport);
-    expect((hydrated.items as unknown[]).length).toBe(3);
+    expect((hydrated.items as unknown[]).length).toBe(2);
+    expect((hydrated.uncertain_items as unknown[]).length).toBe(1);
     expect(transport).toHaveBeenCalledOnce();
     const [, options] = vi.mocked(transport).mock.calls[0] as [URL, RequestInit];
     expect(JSON.parse(String(options.body))).toMatchObject({ snapshot: 'semantic-snap', status_blob: 'JQ', candidate_count: 4 });
     await expect(readFullCatalogSnapshot({ ...selection, candidate_count: 5 }, undefined, transport)).rejects.toThrow('coverage');
+  });
+
+  it('uses a completed semantic snapshot when the agent forgets the complete-list marker', () => {
+    const selection = { status: 'ok', selection_mode: 'semantic', source_scan_complete: true,
+      numeric_scan_complete: true, source_revision: 'rev', snapshot: 'disk-snap', candidate_count: 2,
+      selected_count: 1, uncertain_count: 1, rejected_count: 0, status_blob: 'CQ',
+      criteria: { category: 'Алмазные диски', requirement: 'для резчика' }, items: [{ product_id: 'disk' }] };
+    const result = extractAgentResult([
+      { turn_id: 't', type: 'mcp_call', name: 'semantic_select_products', status: 'completed',
+        output: { structuredContent: selection } },
+      { turn_id: 't', role: 'assistant', phase: 'final_answer', content: [{ type: 'output_text',
+        text: JSON.stringify({ answer: 'Ничего нет', selected: [], rejected: [], uncertain: [],
+          selection_snapshots: ['disk-snap'] }) }] }
+    ], 't');
+    expect(selectsAllCatalogMatches(result.answer)).toBe(true);
+    expect(JSON.parse(result.answer).answer).toBe('Нашёл подходящие товары в каталоге.');
+    expect(result.page).toEqual(selection);
   });
 
   it('combines complete semantic selections from separate categories before showing products', async () => {
@@ -225,7 +243,8 @@ assert 'price_current' not in k.get_product('0')
         [{ product_id: 'b1', name: 'B', price_rub: 100 }, { product_id: 'b2', name: 'B?', price_rub: 400, match_status: 'uncertain' }] }), { status: 200 });
     }) as unknown as typeof fetch;
     const loaded = await readFullCatalogSnapshot(result.page!, undefined, transport);
-    expect((loaded.items as Array<{ product_id: string }>).map((item) => item.product_id)).toEqual(['b1', 'a1', 'a2', 'b2']);
+    expect((loaded.items as Array<{ product_id: string }>).map((item) => item.product_id)).toEqual(['b1', 'a1']);
+    expect((loaded.uncertain_items as Array<{ product_id: string }>).map((item) => item.product_id)).toEqual(['a2', 'b2']);
     expect(transport).toHaveBeenCalledTimes(2);
   });
 
