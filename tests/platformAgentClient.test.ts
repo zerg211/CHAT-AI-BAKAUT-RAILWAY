@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { configureCatalogTools, extractAgentResult, PlatformAgentClient } from '../src/ai/platformAgentClient.js';
 import { normalizePublicCardDisplay, normalizePublicProductCards } from '../src/shared/publicChatHistory.js';
 import { ALL_CATALOG_MATCHES } from '../src/ai/catalogDecision.js';
-import { readFullCatalogSnapshot } from '../src/ai/fullCatalogClient.js';
+import { readExactMentionPrefetch, readFullCatalogSnapshot } from '../src/ai/fullCatalogClient.js';
 import { spawnSync } from 'node:child_process';
 
 vi.mock('../src/config.js', () => ({ config: { BAKAUT_MCP_TOKEN: 'mock-catalog-token', BAKAUT_CATALOG_URL: 'https://catalog-search-production.up.railway.app' } }));
@@ -25,6 +25,9 @@ assert result['status']=='ambiguous' and {item['product_id'] for item in result[
 assert k.get_product('K770')['status']=='ambiguous'
 assert k.get_product('Husqvarna K 970')['status']=='found'
 assert k.get_product('G700')['status']=='not_found'
+mentioned=k.mentioned_products('Сравните Husqvarna K770 с K970')
+assert mentioned['count']==3 and {item['product_id'] for item in mentioned['items']}=={'a','b','c'}
+assert all(item['source_revision']=='rev' and item['status']=='found' for item in mentioned['items'])
 `;
     const run = spawnSync(process.platform === 'win32' ? 'python' : 'python3', ['-c', script], { encoding: 'utf8' });
     expect(run.stderr).toBe('');
@@ -40,6 +43,66 @@ assert k.get_product('G700')['status']=='not_found'
     ], 't');
     expect(result.page?.items).toEqual(candidates);
     expect(result.page?.source_revision).toBe('rev');
+  });
+  it('uses every exact prefetched identity and ignores unrelated reference reads', () => {
+    const candidates = ['a', 'b'].map((product_id) => ({ product_id, name: product_id, status: 'found', source_revision: 'rev' }));
+    const prefetch = { source_revision: 'rev', items: candidates };
+    const answer = JSON.stringify({ answer: 'Два варианта', selected: ['a'], rejected: [], uncertain: ['b'], selection_snapshots: [] });
+    const result = extractAgentResult([
+      { turn_id: 't', type: 'mcp_call', name: 'get_product', status: 'completed',
+        output: { structuredContent: { status: 'found', source_revision: 'rev', product_id: 'reference', name: 'Reference' } } },
+      { turn_id: 't', role: 'assistant', phase: 'final_answer', content: [{ type: 'output_text', text: answer }] }
+    ], 't', prefetch);
+    expect(result.page?.selection_mode).toBe('exact_prefetch');
+    expect((result.page?.items as Array<{ product_id: string }>).map((item) => item.product_id)).toEqual(['a', 'b']);
+    const missing = extractAgentResult([{ turn_id: 't', role: 'assistant', phase: 'final_answer',
+      content: [{ type: 'output_text', text: JSON.stringify({ answer: 'Один', selected: ['a'], rejected: [], uncertain: [], selection_snapshots: [] }) }] }], 't', prefetch);
+    expect(missing.page).toBeUndefined();
+    const unrelated = extractAgentResult([
+      { turn_id: 't', type: 'mcp_call', name: 'get_product', status: 'completed',
+        output: { structuredContent: { status: 'found', source_revision: 'rev', product_id: 'reference', name: 'Reference' } } },
+      { turn_id: 't', role: 'assistant', phase: 'final_answer', content: [{ type: 'output_text',
+        text: JSON.stringify({ answer: 'Reference', selected: ['reference'], rejected: [], uncertain: [], selection_snapshots: [] }) }] }
+    ], 't', prefetch);
+    expect(unrelated.page).toBeUndefined();
+  });
+  it('validates exact prefetch revisions and keeps all returned identities', async () => {
+    const items = ['a', 'b'].map((product_id) => ({ status: 'found', source_revision: 'rev', product_id,
+      name: product_id, matched_aliases: ['k770'] }));
+    const transport = vi.fn(async () => new Response(JSON.stringify({ status: 'ok', match_basis: 'exact_model_or_sku_mention',
+      source_revision: 'rev', count: 2, items }), { status: 200 })) as unknown as typeof fetch;
+    const prefetch = await readExactMentionPrefetch('Покажи K770', undefined, transport);
+    expect(prefetch?.items.map((item) => item.product_id)).toEqual(['a', 'b']);
+    expect(transport).toHaveBeenCalledOnce();
+  });
+  it('puts exact source fields in the first Platform Agent input without another catalog call', async () => {
+    const prefetch = { source_revision: 'rev', items: ['a', 'b'].map((product_id, index) => ({
+      status: 'found', source_revision: 'rev', product_id, name: `K 770 ${index}`, sku: product_id,
+      source_file: `${product_id}.json`, source_sha256: 'sha', matched_aliases: ['k770'],
+      attributes: { 'Масса без режущего оборудования': index ? '10,1 кг' : '10,0 кг' }
+    })) };
+    let submitted = '';
+    const transport = vi.fn(async (url: string, init?: RequestInit) => {
+      const path = new URL(url).pathname;
+      if (path === '/v1/agents/agent') return new Response(JSON.stringify({ instructions: 'Saved instructions', tools: [] }));
+      if (path === '/v1/agents/sessions' && init?.method === 'POST') {
+        submitted = JSON.stringify(JSON.parse(String(init.body)).input);
+        return new Response(JSON.stringify({ id: 'sess' }));
+      }
+      if (path === '/v1/agents/sessions/sess') return new Response(JSON.stringify({ agent: { model: 'gpt-6-luna' } }));
+      if (path.endsWith('/turns')) return new Response(JSON.stringify({ data: [{ id: 'turn', status: 'completed' }] }));
+      if (path.endsWith('/items')) return new Response(JSON.stringify({ data: [{ turn_id: 'turn', role: 'assistant', phase: 'final_answer',
+        content: [{ type: 'output_text', text: JSON.stringify({ answer: 'Два варианта', selected: ['a', 'b'], rejected: [], uncertain: [], selection_snapshots: [] }) }] }] }));
+      throw new Error(`Unexpected request ${path}`);
+    }) as unknown as typeof fetch;
+    const result = await new PlatformAgentClient('key', 'agent', [], transport).run({
+      message: 'Сравните K770 по массе', idempotencyKey: 'turn', prefetch
+    });
+    expect(submitted).toContain('Масса без режущего оборудования');
+    expect(submitted).toContain('10,0 кг');
+    expect(submitted).toContain('10,1 кг');
+    expect((result.page?.items as Array<{ product_id: string }>).map((item) => item.product_id)).toEqual(['a', 'b']);
+    expect(transport).toHaveBeenCalledTimes(5);
   });
   it('does not make unrelated product lookups part of the answer selection', () => {
     const products = ['a', 'b'].map((product_id) => ({ product_id, name: product_id, price_rub: 100 }));

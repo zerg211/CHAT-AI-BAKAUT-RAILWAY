@@ -72,6 +72,31 @@ class Knowledge:
         else:
             result.update(brand=d.get('бренд'),attributes=d.get('характеристики',{}),description=d.get('описание',''),documents=d.get('документы',[]))
         return result
+    def mentioned_products(self,message):
+        """Return every card whose exact SKU or model token occurs in the message."""
+        if not isinstance(message,str) or not message.strip() or len(message)>2000:
+            raise ValueError('message must be a nonempty string of at most 2000 characters')
+        words=re.findall(r'\w+',norm(message))
+        utterance={''.join(words[start:start+width]) for start in range(len(words)) for width in (1,2,3)}
+        found=[]
+        for row in self.db.execute('SELECT id,sku,title FROM products'):
+            title_words=re.findall(r'\w+',norm(row['title']))
+            aliases=set()
+            for index,word in enumerate(title_words):
+                if re.fullmatch(r'[a-zа-я]{1,8}\d{2,}[a-zа-я0-9]*',word):
+                    aliases.add(word)
+                if index+1<len(title_words) and word.isalpha() and 1<=len(word)<=8 and re.fullmatch(r'\d{3,}[a-zа-я]*',title_words[index+1]):
+                    aliases.add(word+title_words[index+1])
+            sku=norm(row['sku']) if row['sku'] else ''
+            if len(sku)>=5:aliases.add(''.join(re.findall(r'\w+',sku)))
+            matched=sorted(aliases & utterance)
+            if matched:
+                product=self.get_product(row['id'])
+                if product['status']!='found' or product['product_id']!=row['id']:
+                    raise ValueError('Exact product lookup changed')
+                found.append({**product,'matched_aliases':matched})
+        return {'status':'ok','source_revision':self.revision,'match_basis':'exact_model_or_sku_mention',
+                'count':len(found),'items':found}
     def classify(self,r,lo,hi,budget):
         if budget is not None and r['price'] is not None and r['price']>budget:return 'excluded',[]
         facts=json.loads(r['powers']);known=[f for f in facts if f['kw'] is not None and f['mode']!='per_phase']

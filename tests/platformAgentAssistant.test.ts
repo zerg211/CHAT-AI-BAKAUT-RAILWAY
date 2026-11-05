@@ -2,7 +2,7 @@ import { runWithDiagnostics, type DiagnosticEvent } from '../src/observability/d
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const state = vi.hoisted(() => ({
-  price: vi.fn(), history: vi.fn(), run: vi.fn(), wait: vi.fn(), settle: vi.fn(), submit: vi.fn(), full: vi.fn(), checkpoints: vi.fn(), renew: vi.fn(), query: vi.fn(), transactionQuery: vi.fn(), release: vi.fn(),
+  price: vi.fn(), history: vi.fn(), run: vi.fn(), wait: vi.fn(), settle: vi.fn(), submit: vi.fn(), full: vi.fn(), prefetch: vi.fn(), checkpoints: vi.fn(), renew: vi.fn(), query: vi.fn(), transactionQuery: vi.fn(), release: vi.fn(),
   commitMessage: vi.fn(), listMessages: vi.fn(), claim: vi.fn(), releaseLease: vi.fn(), getTurn: vi.fn(), getSession: vi.fn()
 }));
 vi.mock('../src/config.js', () => ({ config: { OPENAI_API_KEY: 'test', OPENAI_PLATFORM_AGENT_ID: 'agent-test' } }));
@@ -12,7 +12,7 @@ vi.mock('../src/db/repositories.js', () => ({ ConversationRepository: class {
 } }));
 vi.mock('../src/ai/platformAgentClient.js', () => ({ PlatformAgentClient: class { run = state.run; findHistoricalCandidates = state.history; waitForTurn = state.wait; settleAtDeadline = state.settle; submitMessage = state.submit; } }));
 vi.mock('../src/catalog/currentSitePrice.js', () => ({ readSitePriceObservation: state.price }));
-vi.mock('../src/ai/fullCatalogClient.js', () => ({ readFullCatalogSnapshot: state.full }));
+vi.mock('../src/ai/fullCatalogClient.js', () => ({ readFullCatalogSnapshot: state.full, readExactMentionPrefetch: state.prefetch }));
 vi.mock('../src/ai/openaiUsageGuard.js', () => ({ assertOpenAIUsageBudget: vi.fn(async () => 'reservation'), bindOpenAIUsageReservation: vi.fn(), recordOpenAIUsageOnce: vi.fn(async () => undefined) }));
 vi.mock('../src/ai/agentManagerOrchestrator.js', () => ({ TurnExecutionInProgressError: class extends Error {} }));
 import { PlatformAgentAssistant } from '../src/ai/platformAgentAssistant.js';
@@ -24,6 +24,7 @@ describe('site chat and platform agent', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     state.price.mockImplementation(async (product: { id: string }) => ({ status: 'unknown', productId: product.id }));
+    state.prefetch.mockResolvedValue(null);
     state.listMessages.mockResolvedValue([]);
     state.history.mockResolvedValue([]);
     state.getTurn.mockResolvedValue(null);
@@ -57,6 +58,24 @@ describe('site chat and platform agent', () => {
       answer: JSON.stringify({ answer: 'Есть вариант для уточнения', selected: [], rejected: ['no'], uncertain: ['maybe'] }) });
     const answer = await new PlatformAgentAssistant(repo).generateAnswer({ sessionId: 'chat', turnId: 'turn', userMessage: 'Что подходит?' });
     expect(answer.productCards).toEqual([expect.objectContaining({ id: 'maybe', matchStatus: 'uncertain' })]);
+  });
+  it('passes exact catalog evidence into the first agent submission and verifies its revision', async () => {
+    const prefetch = { source_revision: 'rev', items: [{ status: 'found', source_revision: 'rev',
+      product_id: 'a', name: 'K 770', price_rub: 100, matched_aliases: ['k770'] }] };
+    state.prefetch.mockResolvedValue(prefetch);
+    state.run.mockResolvedValue({ sessionId: 'agent-session', turnId: 'agent-turn',
+      page: { status: 'ok', selection_mode: 'exact_prefetch', source_revision: 'rev', items: prefetch.items },
+      answer: JSON.stringify({ answer: 'Есть K 770', selected: ['a'], rejected: [], uncertain: [], selection_snapshots: [] }) });
+    Object.assign(config, { BAKAUT_CATALOG_URL: 'https://catalog-search-production.up.railway.app' });
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => ({ status: 'ok', revision: 'rev' }) })));
+    try {
+      const answer = await new PlatformAgentAssistant(repo).generateAnswer({ sessionId: 'chat', turnId: 'turn', userMessage: 'Покажи K770' });
+      expect(state.run.mock.calls[0][0].prefetch).toEqual(prefetch);
+      expect(answer.productCards.map((card) => card.id)).toEqual(['a']);
+    } finally {
+      Object.assign(config, { BAKAUT_CATALOG_URL: undefined });
+      vi.unstubAllGlobals();
+    }
   });
   it('refreshes a shown selection after the catalog revision changes', async () => {
     Object.assign(config, { BAKAUT_CATALOG_URL: 'https://catalog-search-production.up.railway.app' });
@@ -146,6 +165,16 @@ describe('site chat and platform agent', () => {
     expect(state.run).not.toHaveBeenCalled();
     expect(answer.productCards.map((card) => card.id)).toEqual(['new']);
     expect(state.commitMessage).toHaveBeenCalledWith(expect.objectContaining({ recovered: true }));
+  });
+  it('carries the exact prefetch through turn recovery', async () => {
+    const prefetch = { source_revision: 'rev', items: [{ product_id: 'a', name: 'K 770' }] };
+    state.getTurn.mockResolvedValueOnce(null).mockResolvedValueOnce({ id: 'turn', status: 'answering', deadlineAt: new Date(Date.now() + 60_000).toISOString() });
+    state.checkpoints.mockResolvedValue([{ checkpoint: 'platform_agent_submission', payload: {
+      agentSessionId: 'agent-session', previousTurnId: 'turn-before', reservation: 'reservation', prefetch } }]);
+    state.wait.mockResolvedValue({ sessionId: 'agent-session', turnId: 'agent-turn',
+      answer: JSON.stringify({ answer: 'Готово', selected: [], rejected: [], uncertain: [], selection_snapshots: [] }) });
+    await new PlatformAgentAssistant(repo).recoverTurn({ sessionId: 'chat', turnId: 'turn' });
+    expect(state.wait.mock.calls[0][0].prefetch).toEqual(prefetch);
   });
   it('retries only the uncertain submission with the saved idempotency key and exact text', async () => {
     state.getTurn.mockResolvedValueOnce(null).mockResolvedValueOnce({ id: 'turn', status: 'answering', deadlineAt: new Date(Date.now() + 60_000).toISOString() });
