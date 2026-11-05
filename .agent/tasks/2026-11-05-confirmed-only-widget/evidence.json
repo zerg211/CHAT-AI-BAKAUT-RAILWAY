@@ -1,0 +1,24 @@
+{
+  "task": "2026-11-05-confirmed-only-widget",
+  "site": "https://bakautprof.ru/",
+  "pullRequest": 91,
+  "mergeSha": "b8656f2db4ed6683ff3dbca558c776297b761ccc",
+  "checks": {
+    "targetedTestsPassed": 32,
+    "typecheck": "PASS",
+    "railwayChatDeployment": "SUCCESS",
+    "buyerInitialCounter": "10 из 144",
+    "buyerFinalCounter": "144 из 144",
+    "buyerUncertainGroupVisibleAtEnd": false,
+    "showMoreVisibleAtEnd": false,
+    "adminDisplay": "code-inspected"
+  },
+  "acceptance": {
+    "AC1": "PASS",
+    "AC2": "PASS",
+    "AC3": "PASS: code inspection",
+    "AC4": "PASS: restored live widget conversation",
+    "AC5": "PASS"
+  },
+  "limitation": "The 144 selected cards were not all independently audited for paving-tile suitability."
+}
