@@ -231,10 +231,10 @@ export async function recordOpenAIUsage(stage: string, model: string, response: 
     client = await pool.connect();
     await client.query('BEGIN');
     let alreadyRecorded = false;
-    if (stage === 'platform_agent' && responseId) {
+    if ((stage === 'platform_agent' || stage === 'semantic_catalog') && responseId) {
       // A recovered request reads the same provider turn, not a new model call.
       // Serialize duplicate accounting without changing the global usage ledger.
-      await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [`platform_agent:${responseId}`]);
+      await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [`${stage}:${responseId}`]);
       const existing = await client.query(
         'SELECT 1 FROM openai_usage_events WHERE stage = $1 AND response_id = $2 LIMIT 1', [stage, responseId]
       );

@@ -1,4 +1,4 @@
-import hmac,json,os,hashlib,sqlite3
+import hmac,json,os,hashlib,sqlite3,base64
 from functools import lru_cache
 from pathlib import Path
 from starlette.responses import JSONResponse
@@ -8,6 +8,7 @@ from mcp.server.transport_security import TransportSecuritySettings
 from knowledge import Knowledge
 from get_products_batch import get_products_batch as read_product_batch
 from embedding_index import EmbeddingIndex,embed_query
+from semantic_selector import select_products
 import uvicorn
 TOKEN=os.environ['BAKAUT_MCP_TOKEN']
 EXPECTED_REVISION=os.environ['BAKAUT_EXPECTED_REVISION']
@@ -82,10 +83,14 @@ def get_products_batch(identifiers:list[str],fields:list[str],expected_revision:
 def semantic_rank_products(query:str,offset:int=0,page_size:int=50)->CallToolResult:
     """Rank ALL 4324 original cards by meaning. Pages are transport only: next_offset reaches every card. Ranking discovers candidates; it does not prove eligibility or complete selection. Check exact card data and structured filters before recommending."""
     return compact_result(ranked_products(query,offset,page_size))
+@server.tool(structured_output=False)
+def semantic_select_products(requirement:str,category:str|None=None,min_nominal_kw:float|None=None,max_nominal_kw:float|None=None,max_price_rub:float|None=None)->CallToolResult:
+    """Check every product in a category against one buyer requirement; omit category to scan the whole catalog. Return a compact complete classification, a short preview, and source revision. No top-k cutoff. The agent must use the full-selection marker with this snapshot; the chat server loads all cards directly."""
+    return compact_result(select_products(Knowledge('fts'),requirement,category,min_nominal_kw,max_nominal_kw,max_price_rub))
 @server.custom_route('/health',methods=['GET'])
 async def health(request):
     kb=Knowledge('fts');root=Path(__file__).parent
-    code_hash=hashlib.sha256(b''.join((root/name).read_bytes() for name in ('server.py','knowledge.py','get_products_batch.py','embedding_index.py'))).hexdigest()
+    code_hash=hashlib.sha256(b''.join((root/name).read_bytes() for name in ('server.py','knowledge.py','get_products_batch.py','embedding_index.py','semantic_selector.py'))).hexdigest()
     index_path=os.environ.get('BAKAUT_EMBEDDING_DB_PATH')
     index_status='unavailable';index_cards=0
     if index_path and Path(index_path).is_file():
@@ -122,6 +127,53 @@ async def search_full(request):
         result.update(snapshot=snapshot['snapshot'],groups=groups,has_more=False)
         return JSONResponse(result)
     except (ValueError,KeyError,TypeError) as e:return JSONResponse({'status':'invalid_request','error':str(e)},status_code=400)
+@server.custom_route('/semantic-selection',methods=['POST'])
+async def semantic_selection(request):
+    """Rebuild and hydrate a semantic selection from its compact status code."""
+    try:
+        body=await request.json()
+        if not isinstance(body,dict) or set(body)!={'criteria','status_blob','candidate_count','snapshot','expected_revision'}:
+            raise ValueError('Invalid selection request')
+        criteria=body['criteria']
+        if not isinstance(criteria,dict) or set(criteria)!={'requirement','category','min_nominal_kw','max_nominal_kw','max_price_rub'}:
+            raise ValueError('Invalid selection criteria')
+        if not isinstance(body['candidate_count'],int) or not 0<=body['candidate_count']<=4324:
+            raise ValueError('Invalid candidate count')
+        if not isinstance(body['status_blob'],str) or len(body['status_blob'])>1500:
+            raise ValueError('Invalid status code')
+        kb=Knowledge('fts')
+        if body['expected_revision']!=kb.revision:
+            return JSONResponse({'status':'revision_changed','source_revision':kb.revision},status_code=409)
+        page=kb.search_products(category=criteria['category'],min_nominal_kw=criteria['min_nominal_kw'],
+            max_nominal_kw=criteria['max_nominal_kw'],max_price_rub=criteria['max_price_rub'])
+        if page.get('status')!='ok':raise ValueError('Catalog category changed')
+        snapshot=kb.snapshots[page['snapshot']]
+        candidates=[item for group in ('matches','needs_check','unknown') for item in snapshot['groups'][group]]
+        if len(candidates)!=body['candidate_count'] or snapshot['criteria']['category']!=criteria['category']:
+            raise ValueError('Catalog candidate universe changed')
+        packed=base64.urlsafe_b64decode(body['status_blob']+'='*(-len(body['status_blob'])%4))
+        if len(packed)!=(len(candidates)+3)//4:raise ValueError('Invalid status code length')
+        selected=[];uncertain=[];rejected=[]
+        for index,item in enumerate(candidates):
+            code=(packed[index//4]>>(2*(index%4)))&3
+            if code==1:selected.append(item['product_id'])
+            elif code==2:uncertain.append(item['product_id'])
+            elif code==0:rejected.append(item['product_id'])
+            else:raise ValueError('Invalid product status')
+        fingerprint=hashlib.sha256(json.dumps([kb.revision,criteria,selected,uncertain,rejected],
+            ensure_ascii=False,sort_keys=True).encode()).hexdigest()[:24]
+        if fingerprint!=body['snapshot']:raise ValueError('Selection fingerprint mismatch')
+        result=[]
+        uncertain_ids=set(uncertain)
+        for ident in selected+uncertain:
+            row=kb.row(ident)
+            if row is None:raise ValueError('Selected product is absent from catalog')
+            item=kb.compact(row)
+            if ident in uncertain_ids:item['match_status']='uncertain'
+            result.append(item)
+        return JSONResponse({'status':'ok','source_revision':kb.revision,'items':result})
+    except (ValueError,KeyError,TypeError) as error:
+        return JSONResponse({'status':'invalid_request','error':str(error)},status_code=400)
 inner=server.streamable_http_app()
 class Auth:
     async def __call__(self,scope,receive,send):

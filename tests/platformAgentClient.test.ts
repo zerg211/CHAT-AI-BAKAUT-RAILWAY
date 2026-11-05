@@ -48,7 +48,7 @@ assert 'price_current' not in k.get_product('0')
     const updated = enableCatalogBatchTool(tools);
     expect(updated?.[0]).toEqual(tools[0]);
     expect(updated?.[1]).toMatchObject({ credential_id: 'vault-credential', transport: tools[1].transport,
-      allowed_tools: ['search_products', 'get_product', 'get_products_batch', 'semantic_rank_products'] });
+      allowed_tools: ['search_products', 'get_product', 'get_products_batch', 'semantic_rank_products', 'semantic_select_products'] });
     expect(tools[1].allowed_tools).toEqual(['search_products', 'get_product']);
   });
   it('keeps the first catalog page when the agent delegates all matching results to the catalog', () => {
@@ -72,6 +72,28 @@ assert 'price_current' not in k.get_product('0')
     expect(page.items).toEqual(full.groups.matches);
     await expect(readFullCatalogSnapshot({ ...first, unsupported_filters: ['query'] }, undefined, transport)).rejects.toThrow('coverage');
     expect(transport).toHaveBeenCalledOnce();
+  });
+
+  it('loads all semantic matches and uncertain products by exact ID, rejecting incomplete coverage', async () => {
+    const selection = { status: 'ok', selection_mode: 'semantic', source_scan_complete: true, numeric_scan_complete: true,
+      source_revision: 'rev', snapshot: 'semantic-snap', candidate_count: 4,
+      criteria: { requirement: 'для работы с плиткой', category: 'Виброплиты' },
+      selected_count: 2, uncertain_count: 1, rejected_count: 1, status_blob: 'JQ', items: [{ product_id: 'p1' }] };
+    const answer = JSON.stringify({ answer: 'Подобрал', selected: [ALL_CATALOG_MATCHES], rejected: [], uncertain: [],
+      selection_snapshots: ['semantic-snap'] });
+    const call = { turn_id: 't', type: 'mcp_call', name: 'semantic_select_products', status: 'completed',
+      output: { content: [{ type: 'text', text: JSON.stringify({ content: [{ type: 'text', text: JSON.stringify(selection) }] }) }] } };
+    const reply = { turn_id: 't', role: 'assistant', phase: 'final_answer', content: [{ type: 'output_text', text: answer }] };
+    const result = extractAgentResult([call, reply], 't');
+    expect(result.page).toEqual(selection);
+    const transport = vi.fn(async () => new Response(JSON.stringify({ status: 'ok', source_revision: 'rev',
+      items: [{ product_id: 'p1' }, { product_id: 'p2' }, { product_id: 'p3', match_status: 'uncertain' }] }), { status: 200 })) as unknown as typeof fetch;
+    const hydrated = await readFullCatalogSnapshot(result.page!, undefined, transport);
+    expect((hydrated.items as unknown[]).length).toBe(3);
+    expect(transport).toHaveBeenCalledOnce();
+    const [, options] = vi.mocked(transport).mock.calls[0] as [URL, RequestInit];
+    expect(JSON.parse(String(options.body))).toMatchObject({ snapshot: 'semantic-snap', status_blob: 'JQ', candidate_count: 4 });
+    await expect(readFullCatalogSnapshot({ ...selection, candidate_count: 5 }, undefined, transport)).rejects.toThrow('coverage');
   });
 
   it('passes only price-only review candidates for website verification', async () => {
@@ -219,7 +241,7 @@ assert 'price_current' not in k.get_product('0')
     const request = JSON.parse(String(options.body));
     expect(request).toMatchObject({ agent_id: 'saved-agent', vault_ids: ['vault-id'], agent: { instructions: expect.stringContaining('Исходные инструкции агента'), text: { format: { type: 'json_schema' } } } });
     expect(request.agent.instructions).toContain('без общих оговорок о возможной неактуальности');
-    expect(request.agent.instructions).toContain('не ограничивай подбор одним видом без основания в запросе');
+    expect(request.agent.instructions).toContain('не ограничивай поиск одной категорией');
     expect(onSession).toHaveBeenCalledWith('new-session');
     expect(result.answer).toBe('Ответ');
   });
