@@ -96,6 +96,31 @@ assert 'price_current' not in k.get_product('0')
     await expect(readFullCatalogSnapshot({ ...selection, candidate_count: 5 }, undefined, transport)).rejects.toThrow('coverage');
   });
 
+  it('combines complete semantic selections from separate categories before showing products', async () => {
+    const selection = (snapshot: string, category: string) => ({ status: 'ok', selection_mode: 'semantic',
+      source_scan_complete: true, numeric_scan_complete: true, source_revision: 'rev', snapshot,
+      candidate_count: 2, selected_count: 1, uncertain_count: 1, rejected_count: 0, status_blob: 'CQ',
+      criteria: { requirement: 'для бетона', category, min_nominal_kw: null, max_nominal_kw: null, max_price_rub: null },
+      items: [{ product_id: category + '-preview' }] });
+    const call = (value: unknown) => ({ turn_id: 't', type: 'mcp_call', name: 'semantic_select_products', status: 'completed',
+      output: { structuredContent: value } });
+    const answer = JSON.stringify({ answer: 'Есть диски', selected: [ALL_CATALOG_MATCHES], rejected: [], uncertain: [],
+      selection_snapshots: ['a', 'b'] });
+    const result = extractAgentResult([call(selection('a', 'Алмазные диски')), call(selection('b', 'Абразивные диски')),
+      { turn_id: 't', role: 'assistant', phase: 'final_answer', content: [{ type: 'output_text', text: answer }] }], 't');
+    expect(result.page?.selection_mode).toBe('semantic_multi');
+    const transport = vi.fn(async (_url: URL | RequestInfo, options?: RequestInit) => {
+      const category = JSON.parse(String(options?.body)).criteria.category;
+      const first = category === 'Алмазные диски';
+      return new Response(JSON.stringify({ status: 'ok', source_revision: 'rev', items: first ?
+        [{ product_id: 'a1', name: 'A', price_rub: 200 }, { product_id: 'a2', name: 'A?', price_rub: 300, match_status: 'uncertain' }] :
+        [{ product_id: 'b1', name: 'B', price_rub: 100 }, { product_id: 'b2', name: 'B?', price_rub: 400, match_status: 'uncertain' }] }), { status: 200 });
+    }) as unknown as typeof fetch;
+    const loaded = await readFullCatalogSnapshot(result.page!, undefined, transport);
+    expect((loaded.items as Array<{ product_id: string }>).map((item) => item.product_id)).toEqual(['b1', 'a1', 'a2', 'b2']);
+    expect(transport).toHaveBeenCalledTimes(2);
+  });
+
   it('passes only price-only review candidates for website verification', async () => {
     const criteria = { query: '', category: 'Генераторы', min_nominal_kw: 5, max_nominal_kw: 6, max_price_rub: 100000 };
     const first = { criteria, applied_filters: { category: criteria.category, min_nominal_kw: 5, max_nominal_kw: 6, max_price_rub: 100000 },

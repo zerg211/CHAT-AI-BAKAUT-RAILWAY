@@ -42,11 +42,39 @@ async function readSemanticSelection(page: JsonObject, signal: AbortSignal | und
   return { ...page, items: body.items, count: body.items.length, has_more: false, next_cursor: null };
 }
 
+async function readSemanticSelections(page: JsonObject, signal: AbortSignal | undefined, transport: typeof fetch): Promise<JsonObject> {
+  if (!Array.isArray(page.selections) || page.selections.length < 2 ||
+      page.selections.some((item) => !asObject(item))) throw new Error('Semantic catalog selections are invalid');
+  const selections = page.selections as JsonObject[];
+  const revisions = new Set(selections.map((item) => item.source_revision));
+  if (revisions.size !== 1 || !revisions.has(page.source_revision)) throw new Error('Semantic catalog revisions differ');
+  const loaded = await Promise.all(selections.map((item) => readSemanticSelection(item, signal, transport)));
+  const byId = new Map<string, JsonObject>();
+  for (const selection of loaded) for (const raw of selection.items as unknown[]) {
+    const item = asObject(raw)!;
+    const id = item.product_id as string;
+    const previous = byId.get(id);
+    if (!previous || (previous.match_status === 'uncertain' && item.match_status !== 'uncertain')) byId.set(id, item);
+  }
+  const sort = (a: JsonObject, b: JsonObject) => {
+    const priceA = typeof a.price_rub === 'number' ? a.price_rub : Number.POSITIVE_INFINITY;
+    const priceB = typeof b.price_rub === 'number' ? b.price_rub : Number.POSITIVE_INFINITY;
+    return priceA - priceB || String(a.name ?? '').localeCompare(String(b.name ?? ''), 'ru');
+  };
+  const items = [...byId.values()].filter((item) => item.match_status !== 'uncertain').sort(sort)
+    .concat([...byId.values()].filter((item) => item.match_status === 'uncertain').sort(sort));
+  const budgets = selections.map((item) => asObject(item.criteria)?.max_price_rub);
+  const sharedBudget = budgets.every((value) => same(value, budgets[0])) ? budgets[0] : null;
+  return { ...page, items, count: items.length, criteria: { max_price_rub: sharedBudget },
+    has_more: false, next_cursor: null };
+}
+
 /** Read the full, already filtered snapshot without sending each product back through the model. */
 export async function readFullCatalogSnapshot(firstPage: JsonObject, signal?: AbortSignal, transport: typeof fetch = fetch): Promise<JsonObject> {
   return diagnosticSpan('catalog.full_snapshot', async () => {
   if (!config.BAKAUT_MCP_TOKEN) throw new Error('Catalog access is not configured');
   if (firstPage.selection_mode === 'semantic') return readSemanticSelection(firstPage, signal, transport);
+  if (firstPage.selection_mode === 'semantic_multi') return readSemanticSelections(firstPage, signal, transport);
   const criteria = asObject(firstPage.criteria);
   const filters = asObject(firstPage.applied_filters);
   const unsupported = firstPage.unsupported_filters;

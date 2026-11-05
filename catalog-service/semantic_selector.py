@@ -137,8 +137,8 @@ def _classify(products, requirement, full):
 def select_products(knowledge, requirement, category, min_nominal_kw=None, max_nominal_kw=None, max_price_rub=None):
     if not isinstance(requirement, str) or not requirement.strip() or len(requirement) > 600:
         raise ValueError('A nonempty buyer requirement is required')
-    if category is not None and (not isinstance(category, str) or not category.strip()):
-        raise ValueError('Invalid product category')
+    if not isinstance(category, str) or not category.strip():
+        raise ValueError('A product category is required')
     started = time.perf_counter()
     page = knowledge.search_products(category=category, min_nominal_kw=min_nominal_kw,
         max_nominal_kw=max_nominal_kw, max_price_rub=max_price_rub)
