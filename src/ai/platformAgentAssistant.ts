@@ -253,7 +253,11 @@ export class PlatformAgentAssistant {
     }
     let cards = await diagnosticSpan('catalog.prices', async () => enrichMissingPrices(classified.cards, input.signal));
     const pendingPage = page && Array.isArray(page.pending_price_items) ? { items: page.pending_price_items } : undefined;
-    const pending = await diagnosticSpan('catalog.prices', async () => enrichMissingPrices(cardsFromPage(pendingPage), input.signal));
+    const uncertainPage = page && Array.isArray(page.uncertain_items) ? { items: page.uncertain_items } : undefined;
+    const [pending, unresolved] = await diagnosticSpan('catalog.prices', async () => Promise.all([
+      enrichMissingPrices(cardsFromPage(pendingPage), input.signal),
+      enrichMissingPrices(cardsFromPage(uncertainPage), input.signal)
+    ]));
     const criteria = page && page.criteria && typeof page.criteria === 'object' ? page.criteria as Record<string, unknown> : undefined;
     const budget = typeof criteria?.max_price_rub === 'number' && Number.isFinite(criteria.max_price_rub) ? criteria.max_price_rub : null;
     if (budget !== null && selectsAllCatalogMatches(result.answer)) {
@@ -261,18 +265,24 @@ export class PlatformAgentAssistant {
       cards = [...cards, ...additional];
       if (additional.length) answer += `\n\nПосле проверки цен на сайте дополнительно подходят товаров: ${additional.length}.`;
       const onRequest = pending.filter((card) => card.priceOnRequest);
-      cards = [...cards, ...onRequest];
-      const unknown = pending.filter((card) => !card.priceOnRequest && card.price == null).length;
-      if (onRequest.length) answer += `\n\nТовары под заказ: ${onRequest.length}. Их цена и соответствие бюджету не подтверждены; сроки уточнит менеджер. Предлагаем оформить заявку.`;
-      if (unknown) answer += `\n\nНе удалось проверить цену ещё ${unknown} товаров, поэтому их соответствие бюджету неизвестно.`;
+      const unknownPrice = pending.filter((card) => !card.priceOnRequest && card.price == null);
+      const unknownPower = unresolved.filter((card) => card.price == null || card.price <= budget);
+      cards = [...cards, ...[...onRequest, ...unknownPrice, ...unknownPower]
+        .map((card) => ({ ...card, matchStatus: 'uncertain' as const }))];
+      if (onRequest.length) answer += `\n\nУ ${onRequest.length} товаров под заказ цена не указана, поэтому соответствие бюджету нужно уточнить.`;
+      if (unknownPrice.length) answer += `\n\nУ ${unknownPrice.length} товаров цену пока не удалось проверить.`;
+      if (unknownPower.length) answer += `\n\nЕщё у ${unknownPower.length} моделей мощность указана неполно или противоречиво; они показаны отдельно для уточнения.`;
+    } else if (unresolved.length) {
+      cards = [...cards, ...unresolved.map((card) => ({ ...card, matchStatus: 'uncertain' as const }))];
+      answer += `\n\nЕщё у ${unresolved.length} моделей решающие характеристики требуют уточнения; они показаны отдельно.`;
     }
-    const ids = [...candidates, ...pending].map((card) => card.id);
+    const ids = [...candidates, ...pending, ...unresolved].map((card) => card.id);
     if (new Set(ids).size !== ids.length || ids.some((id) => input.prior.includes(id))) throw new Error('Duplicate catalog product page');
     if (page?.has_more === true && typeof page.next_cursor !== 'string') throw new Error('Catalog continuation cursor missing');
     if (Buffer.byteLength(JSON.stringify(cards), 'utf8') > 4_000_000) throw new Error('Complete catalog result exceeds response size');
     const cardDisplay = cards.length ? { initialVisibleCount: Math.min(10, cards.length), hasMore: false } : undefined;
-    const checkedById = new Map([...cards, ...pending].map((card) => [card.id, card]));
-    const priceAudit = [...classified.cards, ...pending].map((original) => {
+    const checkedById = new Map([...cards, ...pending, ...unresolved].map((card) => [card.id, card]));
+    const priceAudit = [...classified.cards, ...pending, ...unresolved].map((original) => {
       const checked = checkedById.get(original.id) ?? original;
       return { productId: checked.id, status: checked.priceSource === 'site' ? (checked.priceOnRequest ? 'on_request' : 'priced') : checked.priceSource === 'catalog' ? 'catalog' : 'unknown',
         sourceUrl: checked.priceSource === 'site' ? checked.sourceUrl : undefined, observedAt: checked.priceObservedAt };

@@ -134,6 +134,39 @@ assert 'price_current' not in k.get_product('0')
     const transport = vi.fn(async () => new Response(JSON.stringify(body), { status: 200 })) as unknown as typeof fetch;
     const page = await readFullCatalogSnapshot(first, undefined, transport);
     expect(page.pending_price_items).toEqual([priceOnly]);
+    expect(page.uncertain_items).toEqual([
+      { ...conflict, match_status: 'uncertain' }, { ...unknown, match_status: 'uncertain' }
+    ]);
+  });
+
+  it('hydrates complete numeric searches from two categories without losing candidates', async () => {
+    const first = (category: string, snapshot: string) => ({ status: 'ok', group: 'matches',
+      criteria: { query: '', category, min_nominal_kw: 5, max_nominal_kw: 6, max_price_rub: 100000 },
+      applied_filters: { category, min_nominal_kw: 5, max_nominal_kw: 6, max_price_rub: 100000 },
+      unsupported_filters: [], numeric_scan_complete: true, source_revision: 'rev', snapshot,
+      count: 1, items: [{ product_id: snapshot }], has_more: false });
+    const a = first('Бензиновые генераторы', 'a');
+    const b = first('Инверторные генераторы', 'b');
+    const answer = JSON.stringify({ answer: 'Подобрал', selected: [ALL_CATALOG_MATCHES], rejected: [], uncertain: [],
+      selection_snapshots: ['a', 'b'] });
+    const call = (page: unknown) => ({ turn_id: 't', type: 'mcp_call', name: 'search_products', arguments: {},
+      status: 'completed', output: { structuredContent: page } });
+    const result = extractAgentResult([call(a), call(b),
+      { turn_id: 't', role: 'assistant', phase: 'final_answer', content: [{ type: 'output_text', text: answer }] }], 't');
+    expect(result.page?.selection_mode).toBe('numeric_multi');
+    const transport = vi.fn(async (_url: URL | RequestInfo, options?: RequestInit) => {
+      const category = JSON.parse(String(options?.body)).category;
+      const benzine = category === 'Бензиновые генераторы';
+      const page = benzine ? a : b;
+      return new Response(JSON.stringify({ ...page, has_more: false,
+        counts: { matches: 1, needs_check: 0, unknown: benzine ? 1 : 0 },
+        groups: { matches: [{ product_id: benzine ? 'a1' : 'b1', price_rub: benzine ? 50000 : 40000 }],
+          needs_check: [], unknown: benzine ? [{ product_id: 'a2', price_rub: 30000 }] : [] } }), { status: 200 });
+    }) as unknown as typeof fetch;
+    const loaded = await readFullCatalogSnapshot(result.page!, undefined, transport);
+    expect((loaded.items as Array<{ product_id: string }>).map((item) => item.product_id)).toEqual(['b1', 'a1']);
+    expect(loaded.uncertain_items).toEqual([{ product_id: 'a2', price_rub: 30000, match_status: 'uncertain' }]);
+    expect(transport).toHaveBeenCalledTimes(2);
   });
 
   it('collects all pages of the current turn and ignores earlier turns', () => {

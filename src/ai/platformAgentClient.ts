@@ -231,8 +231,10 @@ export function extractAgentResult(items: unknown[], turnId: string) {
     const root = chosen[chosen.length - 1];
     const first = root.page;
     if (selectsAllCatalogMatches(answer)) {
-      if (chosen.length !== 1) throw new Error('Complete catalog marker requires exactly one search');
-      return { answer, page: first, pageCursor: root.cursor, usedWebSearch: own.some((item) => item.type === 'web_search_call') };
+      return { answer, page: chosen.length === 1 ? first : {
+        status: 'ok', selection_mode: 'numeric_multi', selections: chosen.map((entry) => entry.page),
+        source_revision: first.source_revision }, pageCursor: root.cursor,
+        usedWebSearch: own.some((item) => item.type === 'web_search_call') };
     }
     const decodeCursor = (cursor: unknown): JsonObject | undefined => {
       if (typeof cursor !== 'string' || !cursor) return undefined;

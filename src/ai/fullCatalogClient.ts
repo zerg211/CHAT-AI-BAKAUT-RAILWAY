@@ -69,12 +69,41 @@ async function readSemanticSelections(page: JsonObject, signal: AbortSignal | un
     has_more: false, next_cursor: null };
 }
 
+async function readNumericSelections(page: JsonObject, signal: AbortSignal | undefined, transport: typeof fetch): Promise<JsonObject> {
+  if (!Array.isArray(page.selections) || page.selections.length < 2 ||
+      page.selections.some((item) => !asObject(item) || asObject(item)?.source_revision !== page.source_revision)) {
+    throw new Error('Numeric catalog selections are invalid');
+  }
+  const loaded = await Promise.all((page.selections as JsonObject[])
+    .map((item) => readFullCatalogSnapshot(item, signal, transport)));
+  const confirmed = new Map<string, JsonObject>();
+  const pending = new Map<string, JsonObject>();
+  const uncertain = new Map<string, JsonObject>();
+  for (const selection of loaded) {
+    for (const item of selection.items as JsonObject[]) confirmed.set(item.product_id as string, item);
+    for (const item of selection.pending_price_items as JsonObject[]) pending.set(item.product_id as string, item);
+    for (const item of selection.uncertain_items as JsonObject[]) uncertain.set(item.product_id as string, item);
+  }
+  for (const id of confirmed.keys()) { pending.delete(id); uncertain.delete(id); }
+  for (const id of pending.keys()) uncertain.delete(id);
+  const budgets = loaded.map((item) => asObject(item.criteria)?.max_price_rub);
+  if (!budgets.every((value) => same(value, budgets[0]))) throw new Error('Numeric catalog budgets differ');
+  const ordered = (values: Map<string, JsonObject>) => [...values.values()].sort((a, b) =>
+    (typeof a.price_rub === 'number' ? a.price_rub : Infinity) -
+    (typeof b.price_rub === 'number' ? b.price_rub : Infinity) ||
+    String(a.name ?? '').localeCompare(String(b.name ?? ''), 'ru'));
+  return { ...page, items: ordered(confirmed), count: confirmed.size,
+    pending_price_items: ordered(pending), uncertain_items: ordered(uncertain),
+    criteria: { max_price_rub: budgets[0] }, has_more: false, next_cursor: null };
+}
+
 /** Read the full, already filtered snapshot without sending each product back through the model. */
 export async function readFullCatalogSnapshot(firstPage: JsonObject, signal?: AbortSignal, transport: typeof fetch = fetch): Promise<JsonObject> {
   return diagnosticSpan('catalog.full_snapshot', async () => {
   if (!config.BAKAUT_MCP_TOKEN) throw new Error('Catalog access is not configured');
   if (firstPage.selection_mode === 'semantic') return readSemanticSelection(firstPage, signal, transport);
   if (firstPage.selection_mode === 'semantic_multi') return readSemanticSelections(firstPage, signal, transport);
+  if (firstPage.selection_mode === 'numeric_multi') return readNumericSelections(firstPage, signal, transport);
   const criteria = asObject(firstPage.criteria);
   const filters = asObject(firstPage.applied_filters);
   const unsupported = firstPage.unsupported_filters;
@@ -118,7 +147,12 @@ export async function readFullCatalogSnapshot(firstPage: JsonObject, signal?: Ab
     return item && (item.price_rub === null || item.price_rub === undefined) &&
       Array.isArray(item.conditions) && item.conditions.length === 1 && item.conditions[0] === 'нет цены для проверки бюджета';
   });
-  diagnosticEvent('catalog.full_snapshot.validated', { itemCount: items.length, unknownCount: pendingPriceItems.length, sourceRevision:firstPage.source_revision,snapshotId:firstPage.snapshot });
-  return { ...firstPage, items, pending_price_items: pendingPriceItems, has_more: false, next_cursor: null };
+  const pendingIds = new Set(pendingPriceItems.map((value) => asObject(value)?.product_id));
+  const uncertainItems = [...groups.needs_check as JsonObject[], ...groups.unknown as JsonObject[]]
+    .filter((item) => !pendingIds.has(item.product_id))
+    .map((item) => ({ ...item, match_status: 'uncertain' }));
+  diagnosticEvent('catalog.full_snapshot.validated', { itemCount: items.length, unknownCount: pendingPriceItems.length + uncertainItems.length, sourceRevision:firstPage.source_revision,snapshotId:firstPage.snapshot });
+  return { ...firstPage, items, pending_price_items: pendingPriceItems,
+    uncertain_items: uncertainItems, has_more: false, next_cursor: null };
   });
 }
