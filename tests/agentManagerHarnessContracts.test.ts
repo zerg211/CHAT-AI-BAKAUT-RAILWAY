@@ -228,8 +228,8 @@ describe('runtime harness contracts', () => {
 
   it('sends verified on-request status with the product in the customer stream', () => {
     const response = buildPublicCustomerResponse({ answer: 'Товар под заказ', needState: {}, usedWebSearch: false,
-      productCards: [{ id: 'order', name: 'Под заказ', price: null, priceOnRequest: true, specs: {}, reasons: [], caveats: [] }] } as never);
-    expect(response.productCards).toEqual([expect.objectContaining({ id: 'order', price: null, priceOnRequest: true })]);
+      productCards: [{ id: 'order', name: 'Под заказ', price: null, priceOnRequest: true, matchStatus: 'uncertain', specs: {}, reasons: [], caveats: [] }] } as never);
+    expect(response.productCards).toEqual([expect.objectContaining({ id: 'order', price: null, priceOnRequest: true, matchStatus: 'uncertain' })]);
   });
 
   it('blocks internal runtime vocabulary in customer text', () => {
