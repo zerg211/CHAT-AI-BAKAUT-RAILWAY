@@ -16,6 +16,7 @@ from knowledge import Knowledge
 k=Knowledge.__new__(Knowledge)
 k.db=sqlite3.connect(':memory:')
 k.db.row_factory=sqlite3.Row
+k.revision='rev'
 k.db.execute('CREATE TABLE products (id TEXT,sku TEXT,title TEXT,category TEXT,url TEXT,price REAL,powers TEXT,source TEXT,sha TEXT,raw TEXT)')
 for ident,title in [('a','Бензорез Husqvarna K 770/12"'),('b','Бензорез Husqvarna K 770 Rescue'),('c','Бензорез Husqvarna K 970'),('d','Бензорез Husqvarna K 7700'),('e','Generator TEST G7000')]:
     k.db.execute('INSERT INTO products VALUES (?,?,?,?,?,?,?,?,?,?)',(ident,ident,title,'Резчики','https://example.test/'+ident,100,'[]','s','h','{}'))
@@ -28,6 +29,17 @@ assert k.get_product('G700')['status']=='not_found'
     const run = spawnSync(process.platform === 'win32' ? 'python' : 'python3', ['-c', script], { encoding: 'utf8' });
     expect(run.stderr).toBe('');
     expect(run.status).toBe(0);
+  });
+  it('accepts all variants returned by an exact catalog product lookup', () => {
+    const candidates = ['a', 'b', 'c'].map((product_id) => ({ product_id, name: product_id, price_rub: 100 }));
+    const answer = JSON.stringify({ answer: 'Есть три варианта', selected: ['a', 'b', 'c'], rejected: [], uncertain: [], selection_snapshots: [] });
+    const result = extractAgentResult([
+      { turn_id: 't', type: 'mcp_call', name: 'get_product', status: 'completed',
+        output: { structuredContent: { status: 'ambiguous', source_revision: 'rev', candidates } } },
+      { turn_id: 't', role: 'assistant', phase: 'final_answer', content: [{ type: 'output_text', text: answer }] }
+    ], 't');
+    expect(result.page?.items).toEqual(candidates);
+    expect(result.page?.source_revision).toBe('rev');
   });
   it('returns text matches beyond 30 and 100 without claiming semantic completeness', () => {
     const script = `
