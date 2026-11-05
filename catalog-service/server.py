@@ -109,6 +109,21 @@ async def health(request):
     return JSONResponse({'status':'ok','cards':kb.db.execute('select count(*) from products').fetchone()[0],
         'revision':kb.revision,'code_sha256':code_hash,'commit_sha':os.environ.get('RAILWAY_GIT_COMMIT_SHA'),
         'embedding_status':index_status,'embedding_cards':index_cards})
+@server.custom_route('/mentioned-products',methods=['POST'])
+async def mentioned_products(request):
+    supplied=request.headers.get('authorization','')
+    if not hmac.compare_digest(supplied,'Bearer '+TOKEN):
+        return JSONResponse({'status':'unauthorized'},status_code=401)
+    try:
+        body=await request.json()
+        if not isinstance(body,dict) or set(body)!={'message'}:
+            raise ValueError('Expected only message')
+        kb=Knowledge('fts')
+        try:result=kb.mentioned_products(body['message'])
+        finally:kb.db.close()
+        return JSONResponse(result)
+    except (ValueError,TypeError):
+        return JSONResponse({'status':'invalid_request'},status_code=400)
 @server.custom_route('/search-full',methods=['POST'])
 async def search_full(request):
     """Server-side complete selection from one catalog revision, not model pagination."""

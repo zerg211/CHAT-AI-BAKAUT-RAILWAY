@@ -5,6 +5,36 @@ type JsonObject = Record<string, unknown>;
 const asObject = (value: unknown): JsonObject | undefined => value && typeof value === 'object' && !Array.isArray(value) ? value as JsonObject : undefined;
 const same = (left: unknown, right: unknown) => JSON.stringify(left) === JSON.stringify(right);
 
+export type ExactMentionPrefetch = { source_revision: string; items: JsonObject[] };
+
+/** Exact identity evidence only; broad or oversized requests retain the regular agent tools. */
+export async function readExactMentionPrefetch(message: string, signal?: AbortSignal,
+  transport: typeof fetch = fetch): Promise<ExactMentionPrefetch | null> {
+  if (!config.BAKAUT_MCP_TOKEN || !config.BAKAUT_CATALOG_URL || message.length > 2000) return null;
+  const base = new URL(config.BAKAUT_CATALOG_URL);
+  if (base.protocol !== 'https:' || base.hostname !== 'catalog-search-production.up.railway.app') throw new Error('Catalog URL is not allowed');
+  const response = await diagnosticSpan('catalog.exact_prefetch', async () => transport(new URL('/mentioned-products', base), {
+    method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${config.BAKAUT_MCP_TOKEN}` },
+    body: JSON.stringify({ message }),
+    signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(1500)]) : AbortSignal.timeout(1500)
+  }));
+  if (!response.ok) throw new Error(`Exact catalog prefetch failed (${response.status})`);
+  const body = asObject(await response.json());
+  if (!body || body.status !== 'ok' || body.match_basis !== 'exact_model_or_sku_mention' ||
+      typeof body.source_revision !== 'string' || !body.source_revision || !Array.isArray(body.items) ||
+      body.count !== body.items.length || body.items.length > 4324) throw new Error('Invalid exact catalog prefetch');
+  const items = body.items.map(asObject);
+  const ids = items.map((item) => item?.product_id);
+  if (items.some((item) => !item || item.status !== 'found' || item.source_revision !== body.source_revision ||
+      typeof item.name !== 'string' || typeof item.product_id !== 'string' ||
+      !Array.isArray(item.matched_aliases) || !item.matched_aliases.length) ||
+      new Set(ids).size !== ids.length) throw new Error('Invalid exact catalog identities');
+  const evidence = { source_revision: body.source_revision, items: items as JsonObject[] };
+  if (!items.length || Buffer.byteLength(JSON.stringify(evidence), 'utf8') > 128_000) return null;
+  diagnosticEvent('catalog.exact_prefetch.ready', { itemCount: items.length, sourceRevision: body.source_revision });
+  return evidence;
+}
+
 async function readSemanticSelection(page: JsonObject, signal: AbortSignal | undefined, transport: typeof fetch): Promise<JsonObject> {
   const criteria = asObject(page.criteria);
   if (page.status !== 'ok' || page.selection_mode !== 'semantic' || page.source_scan_complete !== true ||
