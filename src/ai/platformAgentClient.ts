@@ -21,7 +21,7 @@ const remoteStatuses = ['queued', 'in_progress', 'running', 'completed', 'failed
   'incomplete', 'requires_action', 'expired'];
 const itemTypes = ['message', 'reasoning', 'mcp_call', 'mcp_list_tools', 'mcp_approval_request', 'function_call',
   'function_call_output', 'web_search_call', 'file_search_call', 'computer_call', 'code_interpreter_call'];
-const toolNames = ['search_products', 'get_product', 'get_products_batch', 'semantic_rank_products', 'semantic_select_products',
+const toolNames = ['list_categories', 'search_products', 'get_product', 'get_products_batch', 'semantic_rank_products', 'semantic_select_products',
   'web_search', 'file_search'];
 function known(value: unknown, allowed: string[]): string {
   return typeof value === 'string' && allowed.includes(value) ? value : 'unknown';
@@ -117,7 +117,7 @@ const outputFormat = { type: 'json_schema', schema: {
   }, required: ['answer', 'selected', 'rejected', 'uncertain', 'selection_snapshots']
 } };
 
-const contract = `\n\nСлужебные правила виджета имеют приоритет над прежними противоречащими инструкциями агента. Для нового подбора с требованием к назначению, материалу, свойству или совместимости вызови semantic_select_products по одному разу для каждой нужной категории: requirement содержит только обязательный смысловой признак, а category указывает точный вид товара. Передай все полученные snapshot в selection_snapshots. Числовые ограничения передай отдельными полями. Если категорию не знаешь, используй semantic_rank_products только для её определения. Слова «недорогой» без суммы не означают ценовой предел; показывай подходящие товары по возрастанию цены. Когда semantic_select_products полностью проверил все нужные категории, верни selected=["${ALL_CATALOG_MATCHES}"], rejected=[], uncertain=[] и все их snapshot в selection_snapshots. Карточки и сомнительные варианты сервер загрузит сам; не перебирай их повторно. Для подбора только по категории и числам используй search_products с пустым query. Маркер полного списка допустим лишь когда каталог подтвердил проверку всех обязательных условий. Если условие неизвестно или существенно противоречиво, отмечай сомнение, не выдавай товар за подтверждённый. Без нового подбора отвечай с учётом показанных ранее товаров. Товарный список не сокращай по своей инициативе: виджет показывает готовые результаты порциями по 10. В answer дай короткий ответ без перечисления карточек и ссылок. Не добавляй общую оговорку о неактуальности цен.`;
+const contract = `\n\nСлужебные правила виджета имеют приоритет над прежними противоречащими инструкциями агента. Для нового подбора с требованием к назначению, материалу, свойству или совместимости вызови semantic_select_products по одному разу для каждой нужной категории: requirement содержит только обязательный смысловой признак, а category указывает точный вид товара. Если нужная категория не ясна, один раз вызови list_categories для выбора категорий; если виды товара названы покупателем, сразу проверяй их без предварительного поиска. Передай все полученные snapshot в selection_snapshots. Числовые ограничения передай отдельными полями. Слова «недорогой» без суммы не означают ценовой предел; показывай подходящие товары по возрастанию цены. Когда semantic_select_products полностью проверил все нужные категории, верни selected=["${ALL_CATALOG_MATCHES}"], rejected=[], uncertain=[] и все их snapshot в selection_snapshots. Карточки и сомнительные варианты сервер загрузит сам; не перебирай их повторно. Для подбора только по категории и числам используй search_products с пустым query. Маркер полного списка допустим лишь когда каталог подтвердил проверку всех обязательных условий. Если условие неизвестно или существенно противоречиво, отмечай сомнение, не выдавай товар за подтверждённый. Без нового подбора отвечай с учётом показанных ранее товаров. Товарный список не сокращай по своей инициативе: виджет показывает готовые результаты порциями по 10. В answer дай короткий ответ без перечисления карточек и ссылок. Не добавляй общую оговорку о неактуальности цен.`;
 
 const selectionHistoryContract = `\n\nТолько товары из ответов, показанных покупателю, составляют историю подбора. При новом подборе используй актуальный каталог. Для semantic_select_products укажи snapshot каждой нужной категории и маркер полного списка; сервер объединит выбранные и сомнительные товары без повторов. Для числового search_products классифицируй все страницы, если маркер полного списка неприменим. При вопросе о прежних товарах сохраняй контекст; если нового подбора нет, selection_snapshots пуст. Не делай повторных проверок уже известных решающих характеристик. При существенном конфликте точной модификации проверь источник; отсутствие второстепенного поля само по себе не основание исключать товар.`;
 
@@ -147,8 +147,7 @@ function catalogToolPayload(value: unknown, depth = 0): JsonObject | undefined {
   return undefined;
 }
 
-/** Preserve every saved tool and widen only the existing catalog MCP allowlist. */
-export function enableCatalogBatchTool(value: unknown): unknown[] | undefined {
+export function configureCatalogTools(value: unknown): unknown[] | undefined {
   if (!Array.isArray(value)) return undefined;
   let changed = false;
   const updated = value.map((item) => {
@@ -156,10 +155,11 @@ export function enableCatalogBatchTool(value: unknown): unknown[] | undefined {
     if (!tool || tool.type !== 'mcp' || tool.server_label !== 'bakaut_catalog' || !Array.isArray(tool.allowed_tools)) return item;
     if (!tool.allowed_tools.every((name) => typeof name === 'string')) return item;
     const allowed = tool.allowed_tools as string[];
-    const missing = ['get_products_batch', 'semantic_rank_products', 'semantic_select_products'].filter((name) => !allowed.includes(name));
-    if (!missing.length) return item;
+    const retained = allowed.filter((name) => name !== 'semantic_rank_products');
+    const missing = ['list_categories', 'get_products_batch', 'semantic_select_products'].filter((name) => !retained.includes(name));
+    if (!missing.length && retained.length === allowed.length) return item;
     changed = true;
-    return { ...tool, allowed_tools: [...tool.allowed_tools, ...missing] };
+    return { ...tool, allowed_tools: [...retained, ...missing] };
   });
   return changed ? updated : undefined;
 }
@@ -387,7 +387,7 @@ export class PlatformAgentClient {
     try {
     if (sessionId) {
       const active = await this.request(`/agents/sessions/${encodeURIComponent(sessionId)}`, input.signal);
-      const updatedTools = enableCatalogBatchTool(object(active.agent)?.tools);
+      const updatedTools = configureCatalogTools(object(active.agent)?.tools);
       if (updatedTools) await this.request(`/agents/sessions/${encodeURIComponent(sessionId)}`, input.signal, { agent: { tools: updatedTools } });
       const turns = await this.request(`/agents/sessions/${encodeURIComponent(sessionId)}/turns?limit=1&order=desc`, input.signal);
       previousTurnId = object(Array.isArray(turns.data) ? turns.data[0] : undefined)?.id;
@@ -398,7 +398,7 @@ export class PlatformAgentClient {
     } else {
       const saved = await this.request(`/agents/${encodeURIComponent(this.agentId)}`, input.signal);
       if (typeof saved.instructions !== 'string') throw new Error('Saved agent instructions are unavailable');
-      const updatedTools = enableCatalogBatchTool(saved.tools);
+      const updatedTools = configureCatalogTools(saved.tools);
       const session = await this.request('/agents/sessions', input.signal, {
         agent_id: this.agentId, agent: { instructions: `${saved.instructions}\n\n${contract}${selectionHistoryContract}${pricePolicy}${coveragePolicy}`, text: { format: outputFormat },
           ...(updatedTools ? { tools: updatedTools } : {}) }, environment: { type: 'none' }, input: input.message + contract + selectionHistoryContract + pricePolicy + coveragePolicy,

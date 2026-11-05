@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { enableCatalogBatchTool, extractAgentResult, PlatformAgentClient } from '../src/ai/platformAgentClient.js';
+import { configureCatalogTools, extractAgentResult, PlatformAgentClient } from '../src/ai/platformAgentClient.js';
 import { normalizePublicCardDisplay, normalizePublicProductCards } from '../src/shared/publicChatHistory.js';
 import { ALL_CATALOG_MATCHES } from '../src/ai/catalogDecision.js';
 import { readFullCatalogSnapshot } from '../src/ai/fullCatalogClient.js';
@@ -42,14 +42,15 @@ assert 'price_current' not in k.get_product('0')
     const cards = normalizePublicProductCards([{ id: 'a', name: 'A', matchStatus: 'uncertain' }]);
     expect(cards[0].matchStatus).toBe('uncertain');
   });
-  it('adds catalog batch and semantic ranking tools while preserving web search and credentials', () => {
+  it('replaces ranking with category discovery while preserving web search and credentials', () => {
     const tools = [{ type: 'web_search', context_size: 'medium' }, { type: 'mcp', server_label: 'bakaut_catalog',
-      credential_id: 'vault-credential', transport: { type: 'http', server_url: 'https://catalog.example/mcp' }, allowed_tools: ['search_products', 'get_product'] }];
-    const updated = enableCatalogBatchTool(tools);
+      credential_id: 'vault-credential', transport: { type: 'http', server_url: 'https://catalog.example/mcp' }, allowed_tools: ['search_products', 'get_product', 'semantic_rank_products'] }];
+    const updated = configureCatalogTools(tools);
     expect(updated?.[0]).toEqual(tools[0]);
     expect(updated?.[1]).toMatchObject({ credential_id: 'vault-credential', transport: tools[1].transport,
-      allowed_tools: ['search_products', 'get_product', 'get_products_batch', 'semantic_rank_products', 'semantic_select_products'] });
-    expect(tools[1].allowed_tools).toEqual(['search_products', 'get_product']);
+      allowed_tools: ['search_products', 'get_product', 'list_categories', 'get_products_batch', 'semantic_select_products'] });
+    expect(tools[1].allowed_tools).toEqual(['search_products', 'get_product', 'semantic_rank_products']);
+    expect(configureCatalogTools(updated)).toBeUndefined();
   });
   it('keeps the first catalog page when the agent delegates all matching results to the catalog', () => {
     const page = { group: 'matches', count: 2, items: [{ product_id: 'p1' }], has_more: true, next_cursor: 'opaque' };
