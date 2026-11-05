@@ -8,6 +8,8 @@ The catalog's current `/health` reported 4,324 cards and revision `be94be56c6056
 
 An independent readback checked all 100 saved source files, all 4,335 field values and all 4,335 search rows against the JSON. It found zero mismatches. The index is 3,743,744 bytes; SHA-256 `F5DC3236939C37A99A343B4DEA17F4C98713C6A46EE550F7B4C07E5CF7D2BA00`. It retains 37 document links across 20 cards. `python -m py_compile` and `git diff --check` passed.
 
+Only five of the 100 cards have a separately named application or purpose field. All 100 have a description. Indexing only application fields would silently lose possible evidence from 95 cards; this pilot preserves those descriptions in full.
+
 AC1 PASS: exactly the first 100 current-revision source cards, with matching hashes and identities.
 
 AC2 PASS: each card's transaction and readback finished before the next card started.

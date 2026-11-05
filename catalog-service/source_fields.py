@@ -13,6 +13,15 @@ EXPECTED_CATALOG_SIZE = 4324
 PILOT_SIZE = 100
 
 
+def unique_fields(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError(f'Duplicate JSON field: {key}')
+        result[key] = value
+    return result
+
+
 def field_rows(value, pointer=''):
     if isinstance(value, dict):
         for key, child in value.items():
@@ -57,7 +66,7 @@ def index_product(target, row, ordinal, catalog_dir):
     if actual_sha != row['sha']:
         raise ValueError(f'Product {ordinal}: source differs from catalog: {source}')
     raw_json = original.decode('utf-8-sig')
-    card = json.loads(raw_json)
+    card = json.loads(raw_json, object_pairs_hook=unique_fields)
     if not isinstance(card, dict) or card != json.loads(row['raw']):
         raise ValueError(f'Product {ordinal}: source content differs from catalog: {source}')
     if (card.get('название') != row['title'] or
