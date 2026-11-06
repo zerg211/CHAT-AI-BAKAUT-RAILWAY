@@ -257,8 +257,12 @@ assert 'price_current' not in k.get_product('0')
     const exploratory = extractAgentResult([call, reply(JSON.stringify({ answer: 'Нужно уточнить задачу',
       selected: [], rejected: [], uncertain: [], selection_snapshots: [] }))], 't');
     expect(exploratory.page).toBeUndefined();
-    expect(() => extractAgentResult([call, reply(JSON.stringify({ answer: 'Есть варианты',
-      selected: [ALL_CATALOG_MATCHES], rejected: [], uncertain: [], selection_snapshots: ['foreign'] }))], 't'))
+    const changedId = extractAgentResult([call, reply(JSON.stringify({ answer: 'Есть варианты',
+      selected: [ALL_CATALOG_MATCHES], rejected: [], uncertain: [], selection_snapshots: ['foreign'] }))], 't');
+    expect(changedId.page).toEqual(selection);
+    expect(JSON.parse(changedId.answer).selection_snapshots).toEqual(['only-snap']);
+    expect(() => extractAgentResult([call, reply(JSON.stringify({ answer: 'Нужно уточнить задачу',
+      selected: [], rejected: [], uncertain: [], selection_snapshots: ['foreign'] }))], 't'))
       .toThrow('unavailable');
   });
 
@@ -290,6 +294,12 @@ assert 'price_current' not in k.get_product('0')
     const result = extractAgentResult([call(selection('a', 'Алмазные диски')), call(selection('b', 'Абразивные диски')),
       { turn_id: 't', role: 'assistant', phase: 'final_answer', content: [{ type: 'output_text', text: answer }] }], 't');
     expect(result.page?.selection_mode).toBe('semantic_multi');
+    const wrongAnswer = JSON.stringify({ answer: 'Есть диски', selected: [ALL_CATALOG_MATCHES], rejected: [],
+      uncertain: [], selection_snapshots: ['a', 'foreign'] });
+    expect(() => extractAgentResult([call(selection('a', 'Алмазные диски')),
+      call(selection('b', 'Абразивные диски')),
+      { turn_id: 't', role: 'assistant', phase: 'final_answer', content: [{ type: 'output_text', text: wrongAnswer }] }], 't'))
+      .toThrow('unavailable');
     const transport = vi.fn(async (_url: URL | RequestInfo, options?: RequestInit) => {
       const category = JSON.parse(String(options?.body)).criteria.category;
       const first = category === 'Алмазные диски';
