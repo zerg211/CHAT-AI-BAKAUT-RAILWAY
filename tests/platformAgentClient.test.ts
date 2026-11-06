@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { configureCatalogTools, extractAgentResult, PlatformAgentClient } from '../src/ai/platformAgentClient.js';
+import { configureCatalogTools, extractAgentResult, PlatformAgentClient, PlatformAgentSessionFailedError } from '../src/ai/platformAgentClient.js';
 import { normalizePublicCardDisplay, normalizePublicProductCards } from '../src/shared/publicChatHistory.js';
 import { ALL_CATALOG_MATCHES, selectsAllCatalogMatches } from '../src/ai/catalogDecision.js';
 import { readExactMentionPrefetch, readFullCatalogSnapshot, reselectFromBuyerMessage } from '../src/ai/fullCatalogClient.js';
@@ -501,6 +501,15 @@ assert 'price_current' not in k.get_product('0')
     const [, options] = transport.mock.calls[2] as unknown as [string, RequestInit];
     expect((options.headers as Record<string, string>)['Idempotency-Key']).toBe('message-id');
     expect(JSON.parse(String(options.body)).events[0].input[0].content[0].text).toContain('Дальше');
+  });
+  it('stops waiting when the agent session fails without creating a turn', async () => {
+    const transport = vi.fn(async (url: string) => new Response(JSON.stringify(
+      url.endsWith('/turns?limit=1&order=desc') ? { data: [] } : { status: 'failed', error: 'An internal error occurred.' }
+    ))) as unknown as typeof fetch;
+    const client = new PlatformAgentClient('key', 'agent', [], transport);
+    await expect(client.waitForTurn({ sessionId: 'failed-session', previousTurnId: null }))
+      .rejects.toBeInstanceOf(PlatformAgentSessionFailedError);
+    expect(transport).toHaveBeenCalledTimes(2);
   });
 
   it('creates a session using the saved agent and stores its ID before polling', async () => {
