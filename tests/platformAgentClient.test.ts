@@ -506,17 +506,59 @@ assert 'price_current' not in k.get_product('0')
     expect(events).toEqual(['agent.session.input.message']);
   });
 
-  it('checks completion again after cancelling a turn that was running at the deadline', async () => {
+  it('lets a running turn finish during deadline recovery without cancelling it', async () => {
     const client = new PlatformAgentClient('test-key', 'agent-id');
-    const latest = vi.spyOn(client, 'latestTurn').mockResolvedValueOnce({ id: 'new', status: 'in_progress' }).mockResolvedValueOnce({ id: 'new', status: 'completed' });
-    const cancel = vi.spyOn(client, 'cancelTurn').mockRejectedValue(new Error('already completed'));
+    const latest = vi.spyOn(client, 'latestTurn').mockResolvedValue({ id: 'new', status: 'in_progress' });
+    const cancel = vi.spyOn(client, 'cancelTurn').mockResolvedValue(undefined);
     const wait = vi.spyOn(client, 'waitForTurn').mockResolvedValue({ answer: 'готово' } as never);
     const signal = AbortSignal.timeout(5000);
     const result = await client.settleAtDeadline({ sessionId: 's', previousTurnId: 'old', signal });
     expect(result?.answer).toBe('готово');
-    expect(latest).toHaveBeenCalledTimes(2);
+    expect(latest).toHaveBeenCalledOnce();
+    expect(cancel).not.toHaveBeenCalled();
+    expect(wait).toHaveBeenCalledWith({ sessionId: 's', previousTurnId: 'old', signal, prefetch: undefined });
+  });
+
+  it('checks completion again after grace expires and cancellation races completion', async () => {
+    const client = new PlatformAgentClient('test-key', 'agent-id');
+    const latest = vi.spyOn(client, 'latestTurn').mockResolvedValueOnce({ id: 'new', status: 'in_progress' })
+      .mockResolvedValueOnce({ id: 'new', status: 'in_progress' }).mockResolvedValueOnce({ id: 'new', status: 'completed' });
+    const cancel = vi.spyOn(client, 'cancelTurn').mockRejectedValue(new Error('already completed'));
+    const controller = new AbortController();
+    const wait = vi.spyOn(client, 'waitForTurn').mockImplementationOnce(async () => {
+      controller.abort();
+      throw new DOMException('deadline', 'AbortError');
+    }).mockResolvedValueOnce({ answer: 'готово' } as never);
+    const signal = controller.signal;
+    const result = await client.settleAtDeadline({ sessionId: 's', previousTurnId: 'old', signal });
+    expect(result?.answer).toBe('готово');
+    expect(latest).toHaveBeenCalledTimes(3);
     expect(cancel).toHaveBeenCalledOnce();
-    expect(wait).toHaveBeenCalledWith({ sessionId: 's', previousTurnId: 'old', signal });
+    expect(wait).toHaveBeenCalledTimes(2);
+  });
+
+  it('cancels a turn that remains active after the recovery grace', async () => {
+    const client = new PlatformAgentClient('test-key', 'agent-id');
+    vi.spyOn(client, 'latestTurn').mockResolvedValue({ id: 'new', status: 'in_progress' });
+    const cancel = vi.spyOn(client, 'cancelTurn').mockResolvedValue(undefined);
+    const controller = new AbortController();
+    vi.spyOn(client, 'waitForTurn').mockImplementation(async () => {
+      controller.abort();
+      throw new DOMException('deadline', 'AbortError');
+    });
+    const result = await client.settleAtDeadline({ sessionId: 's', previousTurnId: 'old', signal: controller.signal });
+    expect(result).toBeNull();
+    expect(cancel).toHaveBeenCalledOnce();
+  });
+
+  it('does not mistake an invalid completed answer for a deadline timeout', async () => {
+    const client = new PlatformAgentClient('test-key', 'agent-id');
+    vi.spyOn(client, 'latestTurn').mockResolvedValue({ id: 'new', status: 'in_progress' });
+    const cancel = vi.spyOn(client, 'cancelTurn').mockResolvedValue(undefined);
+    vi.spyOn(client, 'waitForTurn').mockRejectedValue(new Error('Invalid catalog product identity'));
+    await expect(client.settleAtDeadline({ sessionId: 's', previousTurnId: 'old', signal: AbortSignal.timeout(5000) }))
+      .rejects.toThrow('Invalid catalog product identity');
+    expect(cancel).not.toHaveBeenCalled();
   });
 
   it('keeps the next-page control when restoring chat history', () => {
