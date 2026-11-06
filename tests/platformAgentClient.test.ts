@@ -239,6 +239,28 @@ assert 'price_current' not in k.get_product('0')
     expect(result.page).toEqual(selection);
   });
 
+  it('shows only the corrected semantic selection and no cards after a repeated rejection', () => {
+    const selection = (snapshot: string) => ({ status: 'ok', selection_mode: 'semantic',
+      source_scan_complete: true, numeric_scan_complete: true, source_revision: 'rev', snapshot,
+      candidate_count: 2, selected_count: 2, uncertain_count: 0, rejected_count: 0,
+      criteria: { category: 'Глубинные вибраторы для бетона', requirement: 'отдельный электропривод' },
+      selected_names: ['Электропривод', 'Готовый вибратор'], items: [{ product_id: 'drive' }, { product_id: 'machine' }] });
+    const first = selection('wrong-first');
+    const corrected = { ...selection('corrected-second'), selected_count: 1, rejected_count: 1,
+      selected_names: ['Электропривод'], items: [{ product_id: 'drive' }] };
+    const calls = [first, corrected].map((page) => ({ turn_id: 't', type: 'mcp_call',
+      name: 'semantic_select_products', status: 'completed', output: { structuredContent: page } }));
+    const final = (snapshots: string[], selected: string[]) => ({ turn_id: 't', role: 'assistant',
+      phase: 'final_answer', content: [{ type: 'output_text', text: JSON.stringify({
+        answer: 'Подбор завершён', selected, rejected: [], uncertain: [], selection_snapshots: snapshots
+      }) }] });
+
+    const repaired = extractAgentResult([...calls, final(['corrected-second'], [ALL_CATALOG_MATCHES])], 't');
+    expect(repaired.page).toEqual(corrected);
+    const refused = extractAgentResult([...calls, final([], [])], 't');
+    expect(refused.page).toBeUndefined();
+  });
+
   it('does not publish a semantic search when the agent answer is unusable', () => {
     const selection = { status: 'ok', selection_mode: 'semantic', source_scan_complete: true,
       numeric_scan_complete: true, source_revision: 'rev', snapshot: 'only-snap', candidate_count: 2,
