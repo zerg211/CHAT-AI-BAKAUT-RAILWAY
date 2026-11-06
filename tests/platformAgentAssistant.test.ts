@@ -157,6 +157,60 @@ describe('site chat and platform agent', () => {
     expect(state.full).toHaveBeenCalledOnce();
     expect(answer.productCards.map((item) => item.id)).toEqual(['p1', 'p2']);
   });
+  it('keeps every selected product except a named wrong type', async () => {
+    const page = { status: 'ok', selection_mode: 'semantic', source_revision: 'rev', snapshot: 'selection',
+      selected_count: 3, uncertain_count: 0, rejected_count: 0, candidate_count: 3,
+      run_id: 'semantic-run', model: 'test-model', input_tokens: 10, output_tokens: 2,
+      items: [{ product_id: 'drive-1', name: 'Электропривод 1' }] };
+    state.run.mockResolvedValue({ sessionId: 'agent-session', turnId: 'agent-turn', page,
+      answer: JSON.stringify({ answer: 'Нашёл два электропривода', selected: ['__ALL_CATALOG_MATCHES__'],
+        rejected: ['assembled'], uncertain: [], selection_snapshots: ['selection'] }) });
+    state.full.mockResolvedValue({ ...page, items: [
+      { product_id: 'drive-1', name: 'Электропривод 1' },
+      { product_id: 'assembled', name: 'Готовый вибратор' },
+      { product_id: 'drive-2', name: 'Электропривод 2' }
+    ] });
+
+    const answer = await new PlatformAgentAssistant(repo).generateAnswer({ sessionId: 'chat', turnId: 'turn',
+      userMessage: 'Покажите отдельные электроприводы' });
+    expect(answer.productCards.map((card) => card.id)).toEqual(['drive-1', 'drive-2']);
+    expect(state.run).toHaveBeenCalledOnce();
+    const update = state.transactionQuery.mock.calls.find(([sql]) => String(sql).startsWith('UPDATE platform_agent_sessions'));
+    expect(JSON.parse(String(update?.[1]?.[2]))).toEqual(['drive-1', 'drive-2']);
+  });
+  it('retries when an excluded ID is absent from the selected catalog snapshot', async () => {
+    const page = { status: 'ok', selection_mode: 'semantic', source_revision: 'rev', snapshot: 'selection',
+      selected_count: 1, uncertain_count: 0, rejected_count: 0, candidate_count: 1,
+      run_id: 'semantic-run', model: 'test-model', input_tokens: 10, output_tokens: 2,
+      items: [{ product_id: 'drive', name: 'Электропривод' }] };
+    state.run.mockResolvedValueOnce({ sessionId: 'agent-session', turnId: 'bad-turn', page,
+      answer: JSON.stringify({ answer: 'Подбор', selected: ['__ALL_CATALOG_MATCHES__'],
+        rejected: ['invented'], uncertain: [], selection_snapshots: ['selection'] }) })
+      .mockResolvedValueOnce({ sessionId: 'agent-session', turnId: 'correct-turn',
+        page: { items: [{ product_id: 'drive', name: 'Электропривод' }] },
+        answer: JSON.stringify({ answer: 'Нашёл электропривод', selected: ['drive'], rejected: [], uncertain: [] }) });
+    state.full.mockResolvedValue({ ...page, items: [{ product_id: 'drive', name: 'Электропривод' }] });
+
+    const answer = await new PlatformAgentAssistant(repo).generateAnswer({ sessionId: 'chat', turnId: 'turn',
+      userMessage: 'Покажите отдельные электроприводы' });
+    expect(state.run).toHaveBeenCalledTimes(2);
+    expect(answer.productCards.map((card) => card.id)).toEqual(['drive']);
+  });
+  it('does not allow the agent to prune a numeric full-list selection', async () => {
+    state.run.mockResolvedValueOnce({ sessionId: 'agent-session', turnId: 'bad-turn',
+      page: { selection_mode: 'numeric', items: [{ product_id: 'generator', name: 'Генератор' }] },
+      answer: JSON.stringify({ answer: 'Подбор', selected: ['__ALL_CATALOG_MATCHES__'],
+        rejected: ['generator'], uncertain: [] }) })
+      .mockResolvedValueOnce({ sessionId: 'agent-session', turnId: 'correct-turn',
+        page: { items: [{ product_id: 'generator', name: 'Генератор' }] },
+        answer: JSON.stringify({ answer: 'Нашёл генератор', selected: ['generator'], rejected: [], uncertain: [] }) });
+
+    const answer = await new PlatformAgentAssistant(repo).generateAnswer({ sessionId: 'chat', turnId: 'turn',
+      userMessage: 'Подберите генератор' });
+    expect(state.run).toHaveBeenCalledTimes(2);
+    expect(state.full).not.toHaveBeenCalled();
+    expect(answer.productCards.map((card) => card.id)).toEqual(['generator']);
+  });
   it('refreshes a full-selection marker when the agent did not perform a current search', async () => {
     const answer = JSON.stringify({ answer: 'Подборка', selected: ['__ALL_CATALOG_MATCHES__'], rejected: [], uncertain: [] });
     const page = { source_revision: 'new', items: [{ product_id: 'p1', name: 'Товар', price_rub: 100 }] };
