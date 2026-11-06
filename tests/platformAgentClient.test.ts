@@ -221,24 +221,25 @@ assert 'price_current' not in k.get_product('0')
     await expect(readFullCatalogSnapshot({ ...selection, candidate_count: 5 }, undefined, transport)).rejects.toThrow('coverage');
   });
 
-  it('uses a completed semantic snapshot when the agent forgets the complete-list marker', () => {
+  it('preserves the agent refusal instead of forcing a semantic snapshot into the widget', () => {
     const selection = { status: 'ok', selection_mode: 'semantic', source_scan_complete: true,
       numeric_scan_complete: true, source_revision: 'rev', snapshot: 'disk-snap', candidate_count: 2,
       selected_count: 1, uncertain_count: 1, rejected_count: 0, status_blob: 'CQ',
       criteria: { category: 'Алмазные диски', requirement: 'для резчика' }, items: [{ product_id: 'disk' }] };
+    const answer = JSON.stringify({ answer: 'Ничего нет', selected: [], rejected: [], uncertain: [],
+      selection_snapshots: ['disk-snap'] });
     const result = extractAgentResult([
       { turn_id: 't', type: 'mcp_call', name: 'semantic_select_products', status: 'completed',
         output: { structuredContent: selection } },
       { turn_id: 't', role: 'assistant', phase: 'final_answer', content: [{ type: 'output_text',
-        text: JSON.stringify({ answer: 'Ничего нет', selected: [], rejected: [], uncertain: [],
-          selection_snapshots: ['disk-snap'] }) }] }
+        text: answer }] }
     ], 't');
-    expect(selectsAllCatalogMatches(result.answer)).toBe(true);
-    expect(JSON.parse(result.answer).answer).toBe('Нашёл подходящие товары в каталоге.');
+    expect(result.answer).toBe(answer);
+    expect(selectsAllCatalogMatches(result.answer)).toBe(false);
     expect(result.page).toEqual(selection);
   });
 
-  it('delivers one completed semantic search when the final agent message is unusable', () => {
+  it('does not publish a semantic search when the agent answer is unusable', () => {
     const selection = { status: 'ok', selection_mode: 'semantic', source_scan_complete: true,
       numeric_scan_complete: true, source_revision: 'rev', snapshot: 'only-snap', candidate_count: 2,
       selected_count: 1, uncertain_count: 1, rejected_count: 0, status_blob: 'CQ',
@@ -247,13 +248,15 @@ assert 'price_current' not in k.get_product('0')
       output: { structuredContent: selection } };
     const reply = (text: string) => ({ turn_id: 't', role: 'assistant', phase: 'final_answer',
       content: [{ type: 'output_text', text }] });
-    for (const text of ['', 'Ответ не в JSON', JSON.stringify({ answer: 'Есть варианты', selected: [ALL_CATALOG_MATCHES],
-      rejected: [], uncertain: [], selection_snapshots: [] })]) {
+    for (const text of ['', 'Ответ не в JSON']) {
       const result = extractAgentResult([call, reply(text)], 't');
-      expect(result.page).toEqual(selection);
-      expect(selectsAllCatalogMatches(result.answer)).toBe(true);
-      expect(JSON.parse(result.answer).selection_snapshots).toEqual(['only-snap']);
+      expect(result.page).toBeUndefined();
     }
+    const confirmed = extractAgentResult([call, reply(JSON.stringify({ answer: 'Есть варианты',
+      selected: [ALL_CATALOG_MATCHES], rejected: [], uncertain: [], selection_snapshots: [] }))], 't');
+    expect(confirmed.page).toEqual(selection);
+    expect(selectsAllCatalogMatches(confirmed.answer)).toBe(true);
+    expect(JSON.parse(confirmed.answer).selection_snapshots).toEqual(['only-snap']);
     const exploratory = extractAgentResult([call, reply(JSON.stringify({ answer: 'Нужно уточнить задачу',
       selected: [], rejected: [], uncertain: [], selection_snapshots: [] }))], 't');
     expect(exploratory.page).toBeUndefined();

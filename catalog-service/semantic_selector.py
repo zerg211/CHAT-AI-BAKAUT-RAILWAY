@@ -192,13 +192,15 @@ def select_products(knowledge, requirement, category, min_nominal_kw=None, max_n
         packed[index // 4] |= code << (2 * (index % 4))
     status_blob = base64.urlsafe_b64encode(bytes(packed)).decode().rstrip('=')
     first_cards = [item for item, _ in candidates if item['product_id'] in selected_set][:10]
+    selected_names = [item['name'] for item, _ in candidates if item['product_id'] in selected_set]
     return {'status': 'ok', 'selection_mode': 'semantic', 'snapshot': fingerprint,
             'source_revision': knowledge.revision, 'criteria': criteria,
             'candidate_count': len(candidates), 'universe': snapshot['universe'],
             'excluded_count': snapshot['excluded'], 'status_blob': status_blob,
             'selected_count': len(selected), 'uncertain_count': len(uncertain),
             'rejected_count': len(rejected),
-            'items': first_cards, 'group': 'matches', 'count': len(selected),
+            'items': first_cards, 'selected_names': selected_names,
+            'group': 'matches', 'count': len(selected),
             'source_scan_complete': True, 'numeric_scan_complete': snapshot['complete'],
             'run_id': str(uuid.uuid4()), 'model': MODEL, 'input_tokens': input_tokens,
             'cached_input_tokens': cached_tokens,
