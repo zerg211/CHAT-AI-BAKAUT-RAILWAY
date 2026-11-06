@@ -141,10 +141,10 @@ async function currentCatalogRevision(signal?: AbortSignal): Promise<string> {
 
 function classifyPage(raw: string, candidates: ProductCard[], history: ProductCard[], hasSearch: boolean, shownIds: Set<string>) {
   let result: Record<string, unknown>;
-  try { result = JSON.parse(raw) as Record<string, unknown>; } catch { throw new Error('Agent classification is not valid JSON'); }
-  if (!result || typeof result !== 'object' || typeof result.answer !== 'string' || !result.answer.trim()) throw new Error('Agent answer is invalid');
+  try { result = JSON.parse(raw) as Record<string, unknown>; } catch { throw new CatalogClassificationError('Agent classification is not valid JSON'); }
+  if (!result || typeof result !== 'object' || typeof result.answer !== 'string' || !result.answer.trim()) throw new CatalogClassificationError('Agent answer is invalid');
   const groups = [result.selected, result.rejected, result.uncertain];
-  if (groups.some((group) => !Array.isArray(group) || group.some((id: unknown) => typeof id !== 'string'))) throw new Error('Agent classification is invalid');
+  if (groups.some((group) => !Array.isArray(group) || group.some((id: unknown) => typeof id !== 'string'))) throw new CatalogClassificationError('Agent classification is invalid');
   if (selectsAllCatalogMatches(raw)) return { answer: reconcileCitations(result.answer, candidates), cards: candidates };
   const classified = (groups as string[][]).flat();
   const pageIds = new Set(candidates.map((card) => card.id));
