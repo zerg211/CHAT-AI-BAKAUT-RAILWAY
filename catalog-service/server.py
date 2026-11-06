@@ -1,4 +1,4 @@
-import hmac,json,os,hashlib,sqlite3,base64,threading,urllib.request
+import hmac,json,os,hashlib,sqlite3,base64,threading,urllib.request,urllib.error
 from collections import OrderedDict
 from functools import lru_cache
 from pathlib import Path
@@ -132,6 +132,39 @@ def ranked_products(query,offset=0,page_size=50):
     finally:kb.db.close()
 
 def compact_result(data):return CallToolResult(content=[TextContent(type='text',text=json.dumps(data,ensure_ascii=False,separators=(',',':')))])
+@server.tool(structured_output=False)
+def web_search_facts(query:str)->CallToolResult:
+    """Search the public web for a missing or conflicting product fact. Prefer the exact model and manufacturer documentation. Return concise evidence with source URLs; catalog search remains the source of available products."""
+    if not isinstance(query,str) or not query.strip() or len(query)>500:raise ValueError('query must contain 1..500 characters')
+    body=json.dumps({'model':SELECTOR_MODEL,'reasoning':{'effort':'low'},
+        'tools':[{'type':'web_search','search_context_size':'low'}],
+        'tool_choice':{'type':'web_search'},'include':['web_search_call.action.sources'],
+        'instructions':('Find the requested factual product information. Prefer the manufacturer official site, manual or datasheet. '
+            'State only facts supported by the found sources and distinguish exact model variants. Reply concisely.'),
+        'input':query,'max_output_tokens':1000},ensure_ascii=False).encode()
+    request=urllib.request.Request('https://api.openai.com/v1/responses',data=body,method='POST',
+        headers={'Authorization':'Bearer '+os.environ['OPENAI_API_KEY'],'Content-Type':'application/json'})
+    try:
+        with urllib.request.urlopen(request,timeout=35) as response:result=json.load(response)
+    except (OSError,ValueError,TimeoutError):
+        return compact_result({'status':'unavailable','reason':'web_search_failed'})
+    if result.get('status')!='completed':return compact_result({'status':'unavailable','reason':'web_search_incomplete'})
+    answer='\n'.join(part.get('text','') for item in result.get('output',[])
+        for part in item.get('content',[]) if part.get('type')=='output_text')
+    sources=[]
+    for item in result.get('output',[]):
+        if item.get('type')=='web_search_call':
+            sources.extend((source.get('url',''),source.get('title','')) for source in (item.get('action') or {}).get('sources',[]))
+        for part in item.get('content',[]):
+            sources.extend((annotation.get('url',''),annotation.get('title','')) for annotation in part.get('annotations',[])
+                if annotation.get('type')=='url_citation')
+    unique={url:{'url':url,'title':title} for url,title in sources if isinstance(url,str) and url.startswith('https://')}
+    usage=result.get('usage') or {}
+    return compact_result({'status':'ok','answer':answer,'sources':list(unique.values())[:12],
+        'usage':{'run_id':result.get('id'),'model':SELECTOR_MODEL,
+            'input_tokens':int(usage.get('input_tokens') or 0),
+            'output_tokens':int(usage.get('output_tokens') or 0),
+            'cached_input_tokens':int((usage.get('input_tokens_details') or {}).get('cached_tokens') or 0)}})
 @server.tool(structured_output=False)
 def list_categories()->CallToolResult:
     """List the current catalog categories and product counts for choosing where to search. This does not select products."""

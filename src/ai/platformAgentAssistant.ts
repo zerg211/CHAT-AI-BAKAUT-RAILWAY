@@ -227,6 +227,15 @@ export class PlatformAgentAssistant {
     const usageRecord = { id: result.turnId, usage: result.usage };
     bindOpenAIUsageReservation(usageRecord, input.reservation);
     await recordOpenAIUsageOnce('platform_agent', result.model, usageRecord);
+    for (const usage of result.webSearchUsages ?? []) {
+      if (typeof usage.run_id !== 'string' || typeof usage.model !== 'string' ||
+          typeof usage.input_tokens !== 'number' || typeof usage.output_tokens !== 'number') continue;
+      await recordOpenAIUsageOnce('catalog_web_search', usage.model, { id: usage.run_id, service_tier: 'default', usage: {
+        input_tokens: usage.input_tokens, output_tokens: usage.output_tokens,
+        total_tokens: usage.input_tokens + usage.output_tokens,
+        input_tokens_details: { cached_tokens: typeof usage.cached_input_tokens === 'number' ? usage.cached_input_tokens : 0 }
+      } });
+    }
     if (selectsAllCatalogMatches(result.answer, true) && !result.page) {
       throw new CatalogClassificationError('Complete catalog selection requires a fresh search');
     }

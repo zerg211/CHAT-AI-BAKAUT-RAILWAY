@@ -165,15 +165,27 @@ assert 'price_current' not in k.get_product('0')
     const cards = normalizePublicProductCards([{ id: 'a', name: 'A', matchStatus: 'uncertain' }]);
     expect(cards[0].matchStatus).toBe('uncertain');
   });
-  it('replaces ranking with category discovery while preserving web search and credentials', () => {
+  it('uses one MCP tool set for catalog and web facts when the native tool combination fails', () => {
     const tools = [{ type: 'web_search', context_size: 'medium' }, { type: 'mcp', server_label: 'bakaut_catalog',
       credential_id: 'vault-credential', transport: { type: 'http', server_url: 'https://catalog.example/mcp' }, allowed_tools: ['search_products', 'get_product', 'semantic_rank_products'] }];
     const updated = configureCatalogTools(tools);
-    expect(updated?.[0]).toEqual(tools[0]);
-    expect(updated?.[1]).toMatchObject({ credential_id: 'vault-credential', transport: tools[1].transport,
-      allowed_tools: ['search_products', 'get_product', 'list_categories', 'get_products_batch', 'semantic_select_products'] });
+    expect(updated).toHaveLength(1);
+    expect(updated?.[0]).toMatchObject({ credential_id: 'vault-credential', transport: tools[1].transport,
+      allowed_tools: ['search_products', 'get_product', 'list_categories', 'get_products_batch', 'semantic_select_products', 'web_search_facts'] });
     expect(tools[1].allowed_tools).toEqual(['search_products', 'get_product', 'semantic_rank_products']);
     expect(configureCatalogTools(updated)).toBeUndefined();
+  });
+  it('marks a completed web facts MCP call as web research and exposes its usage', () => {
+    const result = extractAgentResult([
+      { turn_id: 'turn', type: 'mcp_call', name: 'web_search_facts', status: 'completed', output: {
+        structuredContent: { status: 'ok', answer: 'Проверенный факт', usage: { run_id: 'web-run', model: 'gpt-6-luna', input_tokens: 15, output_tokens: 4 } }
+      } },
+      { turn_id: 'turn', role: 'assistant', phase: 'final_answer', content: [{ type: 'output_text', text: JSON.stringify({
+        answer: 'Проверенный факт', selected: [], rejected: [], uncertain: [], selection_snapshots: []
+      }) }] }
+    ], 'turn');
+    expect(result.usedWebSearch).toBe(true);
+    expect(result.webSearchUsages).toEqual([{ run_id: 'web-run', model: 'gpt-6-luna', input_tokens: 15, output_tokens: 4 }]);
   });
   it('keeps the first catalog page when the agent delegates all matching results to the catalog', () => {
     const page = { group: 'matches', count: 2, items: [{ product_id: 'p1' }], has_more: true, next_cursor: 'opaque' };
