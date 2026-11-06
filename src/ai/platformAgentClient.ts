@@ -586,12 +586,29 @@ export class PlatformAgentClient {
     prefetch?: ExactMentionPrefetch | null }) {
     const isNew = (turn: { id: string; status: string } | null) => turn && turn.id !== input.previousTurnId;
     let turn = await this.latestTurn(input.sessionId, input.signal);
-    if (!isNew(turn) || (turn?.status !== 'completed' && turn?.status !== 'failed' && turn?.status !== 'cancelled')) {
-      await this.cancelTurn(input.sessionId).catch((cancelError) => { diagnosticError('provider.cancel.failure', cancelError); });
-      turn = await this.latestTurn(input.sessionId, input.signal);
+    const active = !isNew(turn) || (turn?.status !== 'completed' && turn?.status !== 'failed' && turn?.status !== 'cancelled');
+    if (active) {
+      try {
+        return await this.waitForTurn({ sessionId: input.sessionId, previousTurnId: input.previousTurnId,
+          signal: input.signal, prefetch: input.prefetch });
+      } catch (error) {
+        const timedOut = input.signal.aborted && error instanceof Error &&
+          (error.name === 'AbortError' || error.name === 'TimeoutError' || error.message === 'Platform agent request aborted');
+        if (!timedOut) throw error;
+      }
+      const checkSignal = AbortSignal.timeout(5_000);
+      turn = await this.latestTurn(input.sessionId, checkSignal);
+      if (!isNew(turn) || (turn?.status !== 'completed' && turn?.status !== 'failed' && turn?.status !== 'cancelled')) {
+        await this.cancelTurn(input.sessionId).catch((cancelError) => { diagnosticError('provider.cancel.failure', cancelError); });
+        turn = await this.latestTurn(input.sessionId, checkSignal);
+      }
+      if (!isNew(turn) || turn?.status !== 'completed') return null;
+      return this.waitForTurn({ sessionId: input.sessionId, previousTurnId: input.previousTurnId,
+        signal: checkSignal, prefetch: input.prefetch });
     }
     if (!isNew(turn) || turn?.status !== 'completed') return null;
-    return this.waitForTurn({ sessionId: input.sessionId, previousTurnId: input.previousTurnId, signal: input.signal,
+    return this.waitForTurn({ sessionId: input.sessionId, previousTurnId: input.previousTurnId,
+      signal: input.signal.aborted ? AbortSignal.timeout(5_000) : input.signal,
       prefetch: input.prefetch });
   }
 
