@@ -178,6 +178,33 @@ describe('site chat and platform agent', () => {
     const update = state.transactionQuery.mock.calls.find(([sql]) => String(sql).startsWith('UPDATE platform_agent_sessions'));
     expect(JSON.parse(String(update?.[1]?.[2]))).toEqual(['drive-1', 'drive-2']);
   });
+  it('continues searching when every semantic match is the wrong product type', async () => {
+    const wrongPage = { status: 'ok', selection_mode: 'semantic', source_revision: 'rev', snapshot: 'wrong-selection',
+      selected_count: 1, uncertain_count: 0, rejected_count: 0, candidate_count: 1,
+      run_id: 'wrong-run', model: 'test-model', input_tokens: 10, output_tokens: 2,
+      items: [{ product_id: 'assembled', name: 'Готовый вибратор' }] };
+    const correctPage = { ...wrongPage, snapshot: 'correct-selection', run_id: 'correct-run',
+      items: [{ product_id: 'drive', name: 'Отдельный электропривод' }] };
+    state.run
+      .mockResolvedValueOnce({ sessionId: 'agent-session', turnId: 'wrong-turn', page: wrongPage,
+        answer: JSON.stringify({ answer: 'Нет подходящих товаров', selected: ['__ALL_CATALOG_MATCHES__'],
+          rejected: ['assembled'], uncertain: [], selection_snapshots: ['wrong-selection'] }) })
+      .mockResolvedValueOnce({ sessionId: 'agent-session', turnId: 'correct-turn', page: correctPage,
+        answer: JSON.stringify({ answer: 'Нашёл отдельный электропривод', selected: ['__ALL_CATALOG_MATCHES__'],
+          rejected: [], uncertain: [], selection_snapshots: ['correct-selection'] }) });
+    state.full.mockImplementation(async (page: { snapshot: string }) => ({ ...page,
+      items: page.snapshot === 'wrong-selection'
+        ? [{ product_id: 'assembled', name: 'Готовый вибратор' }]
+        : [{ product_id: 'drive', name: 'Отдельный электропривод' }] }));
+
+    const answer = await new PlatformAgentAssistant(repo).generateAnswer({ sessionId: 'chat', turnId: 'turn',
+      userMessage: 'Покажите отдельные электроприводы' });
+    expect(state.run).toHaveBeenCalledTimes(2);
+    expect(state.run.mock.calls[1][0].message).toContain('найди правильный вид товара в других подходящих категориях');
+    expect(answer.answer).toBe('Нашёл отдельный электропривод');
+    expect(answer.productCards.map((card) => card.id)).toEqual(['drive']);
+    expect(state.commitMessage).toHaveBeenCalledOnce();
+  });
   it('retries when an excluded ID is absent from the selected catalog snapshot', async () => {
     const page = { status: 'ok', selection_mode: 'semantic', source_revision: 'rev', snapshot: 'selection',
       selected_count: 1, uncertain_count: 0, rejected_count: 0, candidate_count: 1,
