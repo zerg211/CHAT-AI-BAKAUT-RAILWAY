@@ -140,7 +140,7 @@ async function currentCatalogRevision(signal?: AbortSignal): Promise<string> {
 }
 
 function classifyPage(raw: string, candidates: ProductCard[], history: ProductCard[], hasSearch: boolean,
-  shownIds: Set<string>, fullSelection: boolean) {
+  shownIds: Set<string>, fullSelection: boolean, semanticSelection = false) {
   let result: Record<string, unknown>;
   try { result = JSON.parse(raw) as Record<string, unknown>; } catch { throw new CatalogClassificationError('Agent classification is not valid JSON'); }
   if (!result || typeof result !== 'object' || typeof result.answer !== 'string' || !result.answer.trim()) throw new CatalogClassificationError('Agent answer is invalid');
@@ -154,6 +154,9 @@ function classifyPage(raw: string, candidates: ProductCard[], history: ProductCa
     }
     const excluded = new Set(rejected);
     const cards = candidates.filter((card) => !excluded.has(card.id));
+    if (semanticSelection && candidates.length > 0 && cards.length === 0) {
+      throw new CatalogClassificationError('All semantic catalog matches were rejected as unsuitable');
+    }
     return { answer: reconcileCitations(result.answer, cards), cards };
   }
   const classified = (groups as string[][]).flat();
@@ -298,7 +301,7 @@ export class PlatformAgentAssistant {
       }
       history = [...byId.values()];
     }
-    const classified = await diagnosticSpan('assistant.classification.validate', async () => classifyPage(result.answer, candidates, history, Boolean(page), shownIds, fullSelection));
+    const classified = await diagnosticSpan('assistant.classification.validate', async () => classifyPage(result.answer, candidates, history, Boolean(page), shownIds, fullSelection, semanticPages.length > 0));
     let catalogRevision = typeof page?.source_revision === 'string' ? page.source_revision : undefined;
     if (!page && classified.cards.length && config.BAKAUT_CATALOG_URL) {
       catalogRevision = await diagnosticSpan('catalog.revision', async () => currentCatalogRevision(input.signal));
@@ -426,7 +429,9 @@ export class PlatformAgentAssistant {
         prefetch = null;
         result = null;
         result = await diagnosticSpan('assistant.execution', async () => client.run({ sessionId: agentSessionId, idempotencyKey: submissionKey, signal: input.signal,
-          message: `Предыдущий ответ не был показан покупателю: его список товаров не прошёл проверку. Для ответа на исходный вопрос заново вызови подходящий инструмент каталога: semantic_select_products для смыслового условия или search_products для одних числовых условий. Не считай товары предыдущих неудачных попыток показанными. Исходный вопрос покупателя: ${input.userMessage}`,
+          message: error.message === 'All semantic catalog matches were rejected as unsuitable'
+            ? `Предыдущий ответ не был показан покупателю: все товары из выбранной подборки оказались не тем, что он просил. Продолжи тот же запрос: найди правильный вид товара в других подходящих категориях через semantic_select_products, проверь результат и только затем ответь покупателю. Не повторяй ошибочную подборку и не сообщай, что подходящих товаров нет, пока не проверены подходящие категории. Исходный вопрос покупателя: ${input.userMessage}`
+            : `Предыдущий ответ не был показан покупателю: его список товаров не прошёл проверку. Для ответа на исходный вопрос заново вызови подходящий инструмент каталога: semantic_select_products для смыслового условия или search_products для одних числовых условий. Не считай товары предыдущих неудачных попыток показанными. Исходный вопрос покупателя: ${input.userMessage}`,
           onBeforeSubmit: async (id, previousTurnId, submitted, text) => { submission.current = { sessionId: id, previousTurnId }; submittedText = text; await checkpoint(id, previousTurnId, submitted); },
           onSubmitted: async (id, previousTurnId) => checkpoint(id, previousTurnId, true) }));
         if (!result.page) {
