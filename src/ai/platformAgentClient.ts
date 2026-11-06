@@ -219,8 +219,8 @@ export function extractAgentResult(items: unknown[], turnId: string, prefetch?: 
   const soleSelection = semantic.length === 1 ? semantic[0] : undefined;
   const canRecoverSingleSelection = soleSelection?.status === 'ok' &&
     typeof soleSelection.snapshot === 'string' && (!declared || selectsAllCatalogMatches(answer));
-  const selectedSnapshots = snapshots.length ? snapshots :
-    canRecoverSingleSelection ? [soleSelection.snapshot as string] : [];
+  const selectedSnapshots = canRecoverSingleSelection && snapshots.length <= 1
+    ? [soleSelection.snapshot as string] : snapshots;
   if (semantic.length && selectedSnapshots.length) {
     if (new Set(selectedSnapshots).size !== selectedSnapshots.length) throw new Error('Duplicate semantic catalog snapshot');
     const matches = selectedSnapshots.map((snapshot) => {
@@ -234,7 +234,8 @@ export function extractAgentResult(items: unknown[], turnId: string, prefetch?: 
     const hasConfirmed = matches.some((page) => typeof page.selected_count === 'number' && page.selected_count > 0);
     const safeAnswer = typeof declared?.answer === 'string' && declared.answer.trim() ? declared.answer :
       hasConfirmed ? 'Нашёл подходящие товары в каталоге.' : 'По карточкам каталога пока не удалось подтвердить подходящие товары.';
-    const completeAnswer = selectsAllCatalogMatches(answer) && snapshots.length ? answer : JSON.stringify({
+    const completeAnswer = selectsAllCatalogMatches(answer) && snapshots.length ?
+      JSON.stringify({ ...declared, selection_snapshots: selectedSnapshots }) : JSON.stringify({
       ...declared,
       answer: hasConfirmed ? 'Нашёл подходящие товары в каталоге.' : safeAnswer,
       selected: [ALL_CATALOG_MATCHES], rejected: [], uncertain: [], selection_snapshots: selectedSnapshots
