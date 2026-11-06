@@ -20,6 +20,7 @@ INSTRUCTIONS = (
     'For each numbered product check every mandatory part of the buyer requirement. '
     'The requested product type and role are mandatory even inside a broad category. '
     'A complete machine is not a requested separate component merely because it contains that component. '
+    'A card that explicitly identifies the product as a separate component and describes its connection to other parts establishes that role; it need not literally say that it is not a complete machine. '
     'A different machine type is not the requested type merely because it performs a similar operation. '
     'A multifunction product qualifies only when its facts explicitly establish the requested role. '
     'Several source facts from the same product may jointly prove a compound requirement; its name is a source fact. '
