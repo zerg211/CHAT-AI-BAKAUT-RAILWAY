@@ -10,12 +10,18 @@ vi.mock('../src/db/pool.js', () => ({ pool: { query: state.query, connect: vi.fn
 vi.mock('../src/db/repositories.js', () => ({ ConversationRepository: class {
   addAssistantMessageForTurn = state.commitMessage;
 } }));
-vi.mock('../src/ai/platformAgentClient.js', () => ({ PlatformAgentClient: class { run = state.run; findHistoricalCandidates = state.history; waitForTurn = state.wait; settleAtDeadline = state.settle; submitMessage = state.submit; } }));
+vi.mock('../src/ai/platformAgentClient.js', () => ({
+  PlatformAgentSessionFailedError: class extends Error {
+    constructor(readonly sessionId: string) { super('Platform agent session failed before completing the turn'); }
+  },
+  PlatformAgentClient: class { run = state.run; findHistoricalCandidates = state.history; waitForTurn = state.wait; settleAtDeadline = state.settle; submitMessage = state.submit; }
+}));
 vi.mock('../src/catalog/currentSitePrice.js', () => ({ readSitePriceObservation: state.price }));
 vi.mock('../src/ai/fullCatalogClient.js', () => ({ readFullCatalogSnapshot: state.full, readExactMentionPrefetch: state.prefetch, reselectFromBuyerMessage: state.recheck }));
 vi.mock('../src/ai/openaiUsageGuard.js', () => ({ assertOpenAIUsageBudget: vi.fn(async () => 'reservation'), bindOpenAIUsageReservation: vi.fn(), recordOpenAIUsageOnce: vi.fn(async () => undefined) }));
 vi.mock('../src/ai/agentManagerOrchestrator.js', () => ({ TurnExecutionInProgressError: class extends Error {} }));
 import { PlatformAgentAssistant } from '../src/ai/platformAgentAssistant.js';
+import { PlatformAgentSessionFailedError } from '../src/ai/platformAgentClient.js';
 import { config } from '../src/config.js';
 import type { ConversationRepository } from '../src/db/repositories.js';
 
@@ -51,6 +57,36 @@ describe('site chat and platform agent', () => {
     expect(state.run.mock.calls[1][0].message).toContain('заново вызови подходящий инструмент каталога');
     expect(answer.answer).toBe('Новый результат');
     expect(answer.productCards.map((card) => card.id)).toEqual(['fresh']);
+  });
+  it('restarts a failed agent session once with the dialogue and previously shown products', async () => {
+    state.getSession.mockResolvedValue({ id: 'chat', status: 'active', needState: {}, historySummary: 'Нужен привод' });
+    state.listMessages.mockResolvedValue([
+      { role: 'user', content: 'Нужен привод', metadata: {} },
+      { role: 'assistant', content: 'Есть привод A', metadata: { productCards: [{ id: 'drive-a', name: 'Привод A', price: 100 }] } },
+      { role: 'user', content: 'А другие?', metadata: {} }
+    ]);
+    state.run.mockRejectedValueOnce(new PlatformAgentSessionFailedError('agent-session'));
+    state.run.mockImplementationOnce(async (args: { onSession: (id: string) => Promise<void>; onBeforeSubmit: (id: string, previous: null, submitted: boolean, text: string) => Promise<void> }) => {
+      await args.onSession('new-agent-session');
+      await args.onBeforeSubmit('new-agent-session', null, true, 'Восстановленный запрос');
+      return { sessionId: 'new-agent-session', turnId: 'new-turn',
+        page: { items: [{ product_id: 'drive-b', name: 'Привод B', price_rub: 200 }] },
+        answer: JSON.stringify({ answer: 'Есть также привод B', selected: ['drive-b'], rejected: [], uncertain: [] }) };
+    });
+    const answer = await new PlatformAgentAssistant(repo).generateAnswer({ sessionId: 'chat', turnId: 'turn', userMessage: 'А другие?' });
+    expect(state.run).toHaveBeenCalledTimes(2);
+    expect(state.run.mock.calls[1][0]).toMatchObject({ idempotencyKey: 'turn-session-retry' });
+    expect(state.run.mock.calls[1][0]).not.toHaveProperty('sessionId');
+    expect(state.run.mock.calls[1][0].message).toContain('drive-a');
+    expect(state.run.mock.calls[1][0].message).toContain('Нужен привод');
+    expect(state.query.mock.calls.some(([sql]) => String(sql).includes('DO UPDATE SET agent_session_id=EXCLUDED.agent_session_id'))).toBe(true);
+    expect(answer.productCards.map((card) => card.id)).toEqual(['drive-b']);
+  });
+  it('does not retry a repeatedly failed agent session indefinitely', async () => {
+    state.run.mockRejectedValue(new PlatformAgentSessionFailedError('agent-session'));
+    await expect(new PlatformAgentAssistant(repo).generateAnswer({ sessionId: 'chat', turnId: 'turn', userMessage: 'Нужен привод' }))
+      .rejects.toBeInstanceOf(PlatformAgentSessionFailedError);
+    expect(state.run).toHaveBeenCalledTimes(2);
   });
   it('keeps the original answer when optional buyer recheck is inconsistent', async () => {
     state.listMessages.mockResolvedValue([{ role: 'user', content: 'Какие диски 350 мм подойдут для K760?' }]);

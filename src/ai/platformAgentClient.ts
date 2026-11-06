@@ -13,6 +13,13 @@ export class PlatformAgentRequestError extends Error {
   }
 }
 
+export class PlatformAgentSessionFailedError extends Error {
+  constructor(readonly sessionId: string) {
+    super('Platform agent session failed before completing the turn');
+    this.name = 'PlatformAgentSessionFailedError';
+  }
+}
+
 const providerCodes = ['insufficient_quota', 'rate_limit_exceeded', 'invalid_api_key', 'invalid_request_error',
   'model_not_found', 'context_length_exceeded', 'server_error', 'internal_server_error', 'permission_denied',
   'billing_hard_limit_reached', 'unsupported_country_region_territory', 'resource_not_found'];
@@ -472,6 +479,7 @@ export class PlatformAgentClient {
     try {
     if (sessionId) {
       const active = await this.request(`/agents/sessions/${encodeURIComponent(sessionId)}`, input.signal);
+      if (active.status === 'failed') throw new PlatformAgentSessionFailedError(sessionId);
       const updatedTools = configureCatalogTools(object(active.agent)?.tools);
       if (updatedTools) await this.request(`/agents/sessions/${encodeURIComponent(sessionId)}`, input.signal, { agent: { tools: updatedTools } });
       const turns = await this.request(`/agents/sessions/${encodeURIComponent(sessionId)}/turns?limit=1&order=desc`, input.signal);
@@ -641,6 +649,10 @@ export class PlatformAgentClient {
         const agent = object(session.agent);
         return { sessionId, turnId: turn.id, usage: turn.usage,
           model: typeof agent?.model === 'string' ? agent.model : 'unknown', ...parsed };
+      }
+      if (session.status === 'failed') {
+        diagnosticEvent('provider.session.failed', { agentSessionId: providerId(sessionId) });
+        throw new PlatformAgentSessionFailedError(sessionId);
       }
       await delay(750, undefined, { signal: input.signal });
     }
