@@ -208,8 +208,14 @@ export class PlatformAgentAssistant {
       const buyerMessages = messages.filter((message) => message.role === 'user');
       if (buyerMessages.length === 1) {
         const originalPage = page;
-        const checked = await diagnosticSpan('catalog.buyer_recheck', async () =>
-          reselectFromBuyerMessage(originalPage, buyerMessages[0].content, input.signal));
+        let checked: Awaited<ReturnType<typeof reselectFromBuyerMessage>> = null;
+        try {
+          checked = await diagnosticSpan('catalog.buyer_recheck', async () =>
+            reselectFromBuyerMessage(originalPage, buyerMessages[0].content, input.signal));
+        } catch (error) {
+          if (input.signal?.aborted) throw error;
+          diagnosticError('catalog.buyer_recheck.ignored', error);
+        }
         if (checked) {
           await recordSemanticSelectionUsage(originalPage);
           await recordSemanticSelectionUsage(checked);
