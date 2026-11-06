@@ -159,7 +159,7 @@ def semantic_rank_products(query:str,offset:int=0,page_size:int=50)->CallToolRes
     return compact_result(ranked_products(query,offset,page_size))
 @server.tool(structured_output=False)
 def semantic_select_products(requirement:str,category:str,min_nominal_kw:float|None=None,max_nominal_kw:float|None=None,max_price_rub:float|None=None)->CallToolResult:
-    """Check every product in the named category against one buyer requirement, including the requested product type. For several relevant categories call once per category. min_nominal_kw/max_nominal_kw filter the selected generator or power station's own nominal electrical output; put compatible-machine ratings and accessory dimensions in requirement instead. Return a compact complete classification, a short preview, and source revision. No top-k cutoff. The chat server loads all cards directly."""
+    """Check every product in the named category against one buyer requirement, including the requested product type. For several relevant categories call once per category. min_nominal_kw/max_nominal_kw filter the selected generator or power station's own nominal electrical output; put compatible-machine ratings and accessory dimensions in requirement instead. Return complete classification, selected_products with IDs and names, a short preview, and source revision. No top-k cutoff. The chat server loads all cards directly."""
     kb=Knowledge('fts')
     try:revision=kb.revision
     finally:kb.db.close()

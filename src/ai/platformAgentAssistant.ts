@@ -139,13 +139,23 @@ async function currentCatalogRevision(signal?: AbortSignal): Promise<string> {
   return health.revision;
 }
 
-function classifyPage(raw: string, candidates: ProductCard[], history: ProductCard[], hasSearch: boolean, shownIds: Set<string>) {
+function classifyPage(raw: string, candidates: ProductCard[], history: ProductCard[], hasSearch: boolean,
+  shownIds: Set<string>, fullSelection: boolean) {
   let result: Record<string, unknown>;
   try { result = JSON.parse(raw) as Record<string, unknown>; } catch { throw new CatalogClassificationError('Agent classification is not valid JSON'); }
   if (!result || typeof result !== 'object' || typeof result.answer !== 'string' || !result.answer.trim()) throw new CatalogClassificationError('Agent answer is invalid');
   const groups = [result.selected, result.rejected, result.uncertain];
   if (groups.some((group) => !Array.isArray(group) || group.some((id: unknown) => typeof id !== 'string'))) throw new CatalogClassificationError('Agent classification is invalid');
-  if (selectsAllCatalogMatches(raw)) return { answer: reconcileCitations(result.answer, candidates), cards: candidates };
+  if (fullSelection) {
+    const rejected = result.rejected as string[];
+    const available = new Set(candidates.map((card) => card.id));
+    if (new Set(rejected).size !== rejected.length || rejected.some((id) => !available.has(id))) {
+      throw new CatalogClassificationError('Agent rejected a product outside the selected catalog snapshot');
+    }
+    const excluded = new Set(rejected);
+    const cards = candidates.filter((card) => !excluded.has(card.id));
+    return { answer: reconcileCitations(result.answer, cards), cards };
+  }
   const classified = (groups as string[][]).flat();
   const pageIds = new Set(candidates.map((card) => card.id));
   const historicalIds = new Set(history.map((card) => card.id));
@@ -198,7 +208,7 @@ export class PlatformAgentAssistant {
     const usageRecord = { id: result.turnId, usage: result.usage };
     bindOpenAIUsageReservation(usageRecord, input.reservation);
     await recordOpenAIUsageOnce('platform_agent', result.model, usageRecord);
-    if (selectsAllCatalogMatches(result.answer) && !result.page) {
+    if (selectsAllCatalogMatches(result.answer, true) && !result.page) {
       throw new CatalogClassificationError('Complete catalog selection requires a fresh search');
     }
     let page = result.page;
@@ -236,8 +246,12 @@ export class PlatformAgentAssistant {
     }
     const semanticPages = page?.selection_mode === 'semantic' ? [page] :
       page?.selection_mode === 'semantic_multi' && Array.isArray(page.selections) ? page.selections : [];
+    const fullSelection = selectsAllCatalogMatches(result.answer, semanticPages.length > 0);
+    if (!semanticPages.length && selectsAllCatalogMatches(result.answer, true) && !fullSelection) {
+      throw new CatalogClassificationError('Catalog product exclusions require a semantic selection');
+    }
     for (const raw of semanticPages) await recordSemanticSelectionUsage(raw as Record<string, unknown>);
-    if (selectsAllCatalogMatches(result.answer)) {
+    if (fullSelection) {
       try {
         page = await diagnosticSpan('catalog.snapshot', async () => readFullCatalogSnapshot(result.page ?? {}, input.signal));
       } catch (error) {
@@ -254,7 +268,7 @@ export class PlatformAgentAssistant {
     let history: ProductCard[] = [];
     const shownIds = new Set<string>();
     const shownRevisions = new Map<string, string>();
-    if (!selectsAllCatalogMatches(result.answer) && classifiedIds.some((id) => !currentIds.has(id))) {
+    if (!fullSelection && classifiedIds.some((id) => !currentIds.has(id))) {
       // All previously delivered results belong to this session. Use the most
       // recent copy of each card, while never inventing unknown identities.
       const messages = await this.conversations.listMessages(input.sessionId, null);
@@ -284,7 +298,7 @@ export class PlatformAgentAssistant {
       }
       history = [...byId.values()];
     }
-    const classified = await diagnosticSpan('assistant.classification.validate', async () => classifyPage(result.answer, candidates, history, Boolean(page), shownIds));
+    const classified = await diagnosticSpan('assistant.classification.validate', async () => classifyPage(result.answer, candidates, history, Boolean(page), shownIds, fullSelection));
     let catalogRevision = typeof page?.source_revision === 'string' ? page.source_revision : undefined;
     if (!page && classified.cards.length && config.BAKAUT_CATALOG_URL) {
       catalogRevision = await diagnosticSpan('catalog.revision', async () => currentCatalogRevision(input.signal));
@@ -305,7 +319,7 @@ export class PlatformAgentAssistant {
     ]));
     const criteria = page && page.criteria && typeof page.criteria === 'object' ? page.criteria as Record<string, unknown> : undefined;
     const budget = typeof criteria?.max_price_rub === 'number' && Number.isFinite(criteria.max_price_rub) ? criteria.max_price_rub : null;
-    if (budget !== null && selectsAllCatalogMatches(result.answer)) {
+    if (budget !== null && fullSelection) {
       const additional = pending.filter((card) => typeof card.price === 'number' && card.price <= budget);
       cards = [...cards, ...additional];
       if (additional.length) answer += `\n\nПосле проверки цен на сайте дополнительно подходят товаров: ${additional.length}.`;
@@ -321,7 +335,7 @@ export class PlatformAgentAssistant {
       cards = [...cards, ...unresolved.map((card) => ({ ...card, matchStatus: 'uncertain' as const }))];
       answer += `\n\nЕщё у ${unresolved.length} моделей решающие характеристики требуют уточнения.`;
     }
-    const ids = [...candidates, ...pending, ...unresolved].map((card) => card.id);
+    const ids = (fullSelection && semanticPages.length ? cards : [...candidates, ...pending, ...unresolved]).map((card) => card.id);
     if (new Set(ids).size !== ids.length || ids.some((id) => input.prior.includes(id))) throw new Error('Duplicate catalog product page');
     if (page?.has_more === true && typeof page.next_cursor !== 'string') throw new Error('Catalog continuation cursor missing');
     if (Buffer.byteLength(JSON.stringify(cards), 'utf8') > 4_000_000) throw new Error('Complete catalog result exceeds response size');
@@ -333,7 +347,7 @@ export class PlatformAgentAssistant {
         sourceUrl: checked.priceSource === 'site' ? checked.sourceUrl : undefined, observedAt: checked.priceObservedAt };
     });
     const metadata = { runtimeMode: 'openai_platform_agent' as const, runtimeModeReason: 'sole_runtime', productCards: cards,
-      catalogCandidates: page && !selectsAllCatalogMatches(result.answer) ? candidates : undefined, catalogRevision, priceAudit, cardDisplay, needStateSnapshot: input.needState,
+      catalogCandidates: page && !fullSelection ? candidates : undefined, catalogRevision, priceAudit, cardDisplay, needStateSnapshot: input.needState,
       platformAgentUsage: result.usage, platformAgentTurnId: result.turnId, usedWebSearch: result.usedWebSearch };
     const responsePayload: ChatResponsePayload = { turnId: input.turnId, answer, needState: input.needState,
       productCards: cards, cardDisplay, usedWebSearch: result.usedWebSearch, metadata };
