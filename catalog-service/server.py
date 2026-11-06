@@ -143,7 +143,7 @@ def list_categories()->CallToolResult:
     finally:kb.db.close()
 @server.tool(structured_output=False)
 def search_products(query:str='',category:str|None=None,min_nominal_kw:float|None=None,max_nominal_kw:float|None=None,max_price_rub:float|None=None,cursor:str|None=None,group:str='matches')->CallToolResult:
-    """Search catalog. Generator category choices: Инверторные генераторы, Бензиновые генераторы, Дизельные генераторы, Газовые генераторы, Сварочные генераторы; генераторы includes all five. For numeric filters choose the most precise actual category: numeric search does not apply query text, reported in unsupported_filters. applied_filters lists only enforced constraints. Unknown or conflicting fields remain separately grouped. Text matching is evidence, not proof of an arbitrary property; source_scan_complete does not cover all synonyms. Page results have stable revision, snapshot and next_cursor."""
+    """Search catalog. Generator category choices: Инверторные генераторы, Бензиновые генераторы, Дизельные генераторы, Газовые генераторы, Сварочные генераторы; генераторы includes all five. min_nominal_kw/max_nominal_kw refer to the selected generator or power station's own nominal electrical output, not the rating of equipment it fits. For numeric filters choose the most precise actual category: numeric search does not apply query text, reported in unsupported_filters. applied_filters lists only enforced constraints. Unknown or conflicting fields remain separately grouped. Text matching is evidence, not proof of an arbitrary property; source_scan_complete does not cover all synonyms. Page results have stable revision, snapshot and next_cursor."""
     return compact_result(Knowledge('fts').search_products(query,category,min_nominal_kw,max_nominal_kw,max_price_rub,cursor,group))
 @server.tool(structured_output=False)
 def get_product(identifier:str,fields:list[str]|None=None)->CallToolResult:
@@ -159,7 +159,7 @@ def semantic_rank_products(query:str,offset:int=0,page_size:int=50)->CallToolRes
     return compact_result(ranked_products(query,offset,page_size))
 @server.tool(structured_output=False)
 def semantic_select_products(requirement:str,category:str,min_nominal_kw:float|None=None,max_nominal_kw:float|None=None,max_price_rub:float|None=None)->CallToolResult:
-    """Check every product in the named category against one buyer requirement. For several relevant categories call once per category. Return a compact complete classification, a short preview, and source revision. No top-k cutoff. The chat server loads all cards directly."""
+    """Check every product in the named category against one buyer requirement, including the requested product type. For several relevant categories call once per category. min_nominal_kw/max_nominal_kw filter the selected generator or power station's own nominal electrical output; put compatible-machine ratings and accessory dimensions in requirement instead. Return a compact complete classification, a short preview, and source revision. No top-k cutoff. The chat server loads all cards directly."""
     kb=Knowledge('fts')
     try:revision=kb.revision
     finally:kb.db.close()
