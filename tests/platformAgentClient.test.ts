@@ -238,6 +238,45 @@ assert 'price_current' not in k.get_product('0')
     expect(result.page).toEqual(selection);
   });
 
+  it('delivers one completed semantic search when the final agent message is unusable', () => {
+    const selection = { status: 'ok', selection_mode: 'semantic', source_scan_complete: true,
+      numeric_scan_complete: true, source_revision: 'rev', snapshot: 'only-snap', candidate_count: 2,
+      selected_count: 1, uncertain_count: 1, rejected_count: 0, status_blob: 'CQ',
+      criteria: { category: 'Алмазные диски', requirement: 'для резчика' }, items: [{ product_id: 'disk' }] };
+    const call = { turn_id: 't', type: 'mcp_call', name: 'semantic_select_products', status: 'completed',
+      output: { structuredContent: selection } };
+    const reply = (text: string) => ({ turn_id: 't', role: 'assistant', phase: 'final_answer',
+      content: [{ type: 'output_text', text }] });
+    for (const text of ['', 'Ответ не в JSON', JSON.stringify({ answer: 'Есть варианты', selected: [ALL_CATALOG_MATCHES],
+      rejected: [], uncertain: [], selection_snapshots: [] })]) {
+      const result = extractAgentResult([call, reply(text)], 't');
+      expect(result.page).toEqual(selection);
+      expect(selectsAllCatalogMatches(result.answer)).toBe(true);
+      expect(JSON.parse(result.answer).selection_snapshots).toEqual(['only-snap']);
+    }
+    const exploratory = extractAgentResult([call, reply(JSON.stringify({ answer: 'Нужно уточнить задачу',
+      selected: [], rejected: [], uncertain: [], selection_snapshots: [] }))], 't');
+    expect(exploratory.page).toBeUndefined();
+    expect(() => extractAgentResult([call, reply(JSON.stringify({ answer: 'Есть варианты',
+      selected: [ALL_CATALOG_MATCHES], rejected: [], uncertain: [], selection_snapshots: ['foreign'] }))], 't'))
+      .toThrow('unavailable');
+  });
+
+  it('uses one completed numeric search when the full-list marker has an empty snapshot list', () => {
+    const page = { status: 'ok', group: 'matches', source_revision: 'rev', snapshot: 'numeric-snap',
+      criteria: { category: 'Генераторы', query: '', min_nominal_kw: 5, max_nominal_kw: 6, max_price_rub: null },
+      numeric_scan_complete: true, unsupported_filters: [], count: 1,
+      items: [{ product_id: 'generator' }], has_more: false };
+    const answer = JSON.stringify({ answer: 'Подобрал', selected: [ALL_CATALOG_MATCHES], rejected: [],
+      uncertain: [], selection_snapshots: [] });
+    const result = extractAgentResult([
+      { turn_id: 't', type: 'mcp_call', name: 'search_products', status: 'completed', arguments: {},
+        output: { structuredContent: page } },
+      { turn_id: 't', role: 'assistant', phase: 'final_answer', content: [{ type: 'output_text', text: answer }] }
+    ], 't');
+    expect(result.page).toEqual(page);
+  });
+
   it('combines complete semantic selections from separate categories before showing products', async () => {
     const selection = (snapshot: string, category: string) => ({ status: 'ok', selection_mode: 'semantic',
       source_scan_complete: true, numeric_scan_complete: true, source_revision: 'rev', snapshot,

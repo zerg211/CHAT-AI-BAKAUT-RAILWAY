@@ -207,15 +207,23 @@ export function extractAgentResult(items: unknown[], turnId: string, prefetch?: 
     .map((part) => typeof part.text === 'string' ? part.text : '').join('\n').trim();
   let declared: JsonObject | undefined;
   try { declared = object(JSON.parse(answer)); } catch { /* Earlier turns may contain plain text. */ }
-  const snapshots = Array.isArray(declared?.selection_snapshots) &&
-    declared.selection_snapshots.every((id) => typeof id === 'string') ? declared.selection_snapshots as string[] : [];
+  const snapshotField = declared?.selection_snapshots;
+  const validSnapshotField = Array.isArray(snapshotField) && snapshotField.every((id) => typeof id === 'string');
+  const snapshots = validSnapshotField ? snapshotField as string[] : [];
   const semantic = own.filter((item) => item.type === 'mcp_call' && item.name === 'semantic_select_products' && item.status === 'completed')
     .map((item) => catalogToolPayload(item.output));
   if (semantic.some((result) => !result)) throw new Error('Semantic catalog output is malformed');
-  if (semantic.length && snapshots.length) {
-    if (typeof declared?.answer !== 'string' || !declared.answer.trim()) throw new Error('Semantic answer is invalid');
-    if (new Set(snapshots).size !== snapshots.length) throw new Error('Duplicate semantic catalog snapshot');
-    const matches = snapshots.map((snapshot) => {
+  if (semantic.length && declared && Object.hasOwn(declared, 'selection_snapshots') && !validSnapshotField) {
+    throw new Error('Semantic snapshot list is invalid');
+  }
+  const soleSelection = semantic.length === 1 ? semantic[0] : undefined;
+  const canRecoverSingleSelection = soleSelection?.status === 'ok' &&
+    typeof soleSelection.snapshot === 'string' && (!declared || selectsAllCatalogMatches(answer));
+  const selectedSnapshots = snapshots.length ? snapshots :
+    canRecoverSingleSelection ? [soleSelection.snapshot as string] : [];
+  if (semantic.length && selectedSnapshots.length) {
+    if (new Set(selectedSnapshots).size !== selectedSnapshots.length) throw new Error('Duplicate semantic catalog snapshot');
+    const matches = selectedSnapshots.map((snapshot) => {
       const found = semantic.filter((result) => result?.status === 'ok' && result.snapshot === snapshot);
       if (found.length !== 1) throw new Error('Selected semantic snapshot is unavailable or ambiguous');
       return found[0]!;
@@ -223,11 +231,13 @@ export function extractAgentResult(items: unknown[], turnId: string, prefetch?: 
     if (matches.some((page) => page.source_revision !== matches[0].source_revision)) {
       throw new Error('Catalog revision changed between semantic selections');
     }
-    const completeAnswer = selectsAllCatalogMatches(answer) ? answer : JSON.stringify({
+    const hasConfirmed = matches.some((page) => typeof page.selected_count === 'number' && page.selected_count > 0);
+    const safeAnswer = typeof declared?.answer === 'string' && declared.answer.trim() ? declared.answer :
+      hasConfirmed ? 'Нашёл подходящие товары в каталоге.' : 'По карточкам каталога пока не удалось подтвердить подходящие товары.';
+    const completeAnswer = selectsAllCatalogMatches(answer) && snapshots.length ? answer : JSON.stringify({
       ...declared,
-      answer: matches.some((page) => typeof page.selected_count === 'number' && page.selected_count > 0)
-        ? 'Нашёл подходящие товары в каталоге.' : declared?.answer,
-      selected: [ALL_CATALOG_MATCHES], rejected: [], uncertain: [], selection_snapshots: snapshots
+      answer: hasConfirmed ? 'Нашёл подходящие товары в каталоге.' : safeAnswer,
+      selected: [ALL_CATALOG_MATCHES], rejected: [], uncertain: [], selection_snapshots: selectedSnapshots
     });
     return { answer: completeAnswer, page: matches.length === 1 ? matches[0] : {
       status: 'ok', selection_mode: 'semantic_multi', selections: matches,
@@ -259,7 +269,8 @@ export function extractAgentResult(items: unknown[], turnId: string, prefetch?: 
         explicitSnapshots = result.selection_snapshots as string[];
       }
     } catch { /* Old sessions may use the previous response format. */ }
-    const chosen = explicitSnapshots === undefined ? [roots[roots.length - 1]] : explicitSnapshots.map((id) => {
+    const chosen = explicitSnapshots?.length === 0 && selectsAllCatalogMatches(answer) && roots.length === 1
+      ? [roots[0]] : explicitSnapshots === undefined ? [roots[roots.length - 1]] : explicitSnapshots.map((id) => {
       const matches = roots.filter((entry) => entry.page.snapshot === id);
       if (!matches.length) throw new Error('Selected catalog search is unavailable');
       return matches[matches.length - 1];
