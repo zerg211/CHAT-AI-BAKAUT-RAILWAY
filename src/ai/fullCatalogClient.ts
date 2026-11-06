@@ -34,6 +34,16 @@ export async function reselectFromBuyerMessage(page: JsonObject, message: string
       typeof checked.selected_count !== 'number' || typeof checked.uncertain_count !== 'number' ||
       typeof checked.rejected_count !== 'number' ||
       checked.selected_count + checked.uncertain_count + checked.rejected_count !== checked.candidate_count) {
+    diagnosticEvent('catalog.buyer_recheck.mismatch', {
+      statusOk: checked?.status === 'ok', modeMatches: checked?.selection_mode === 'semantic',
+      revisionMatches: checked?.source_revision === page.source_revision,
+      criteriaMatches: same(checked?.criteria, expectedCriteria),
+      candidateCountMatches: checked?.candidate_count === page.candidate_count,
+      sourceScanComplete: checked?.source_scan_complete === true,
+      countsValid: typeof checked?.selected_count === 'number' &&
+        typeof checked?.uncertain_count === 'number' && typeof checked?.rejected_count === 'number' &&
+        checked.selected_count + checked.uncertain_count + checked.rejected_count === checked.candidate_count
+    });
     throw new Error('Buyer catalog recheck is inconsistent');
   }
   diagnosticEvent('catalog.buyer_recheck.completed', { selectedCount: checked.selected_count,

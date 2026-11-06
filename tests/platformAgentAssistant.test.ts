@@ -2,7 +2,7 @@ import { runWithDiagnostics, type DiagnosticEvent } from '../src/observability/d
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const state = vi.hoisted(() => ({
-  price: vi.fn(), history: vi.fn(), run: vi.fn(), wait: vi.fn(), settle: vi.fn(), submit: vi.fn(), full: vi.fn(), prefetch: vi.fn(), checkpoints: vi.fn(), renew: vi.fn(), query: vi.fn(), transactionQuery: vi.fn(), release: vi.fn(),
+  price: vi.fn(), history: vi.fn(), run: vi.fn(), wait: vi.fn(), settle: vi.fn(), submit: vi.fn(), full: vi.fn(), prefetch: vi.fn(), recheck: vi.fn(), checkpoints: vi.fn(), renew: vi.fn(), query: vi.fn(), transactionQuery: vi.fn(), release: vi.fn(),
   commitMessage: vi.fn(), listMessages: vi.fn(), claim: vi.fn(), releaseLease: vi.fn(), getTurn: vi.fn(), getSession: vi.fn()
 }));
 vi.mock('../src/config.js', () => ({ config: { OPENAI_API_KEY: 'test', OPENAI_PLATFORM_AGENT_ID: 'agent-test' } }));
@@ -12,7 +12,7 @@ vi.mock('../src/db/repositories.js', () => ({ ConversationRepository: class {
 } }));
 vi.mock('../src/ai/platformAgentClient.js', () => ({ PlatformAgentClient: class { run = state.run; findHistoricalCandidates = state.history; waitForTurn = state.wait; settleAtDeadline = state.settle; submitMessage = state.submit; } }));
 vi.mock('../src/catalog/currentSitePrice.js', () => ({ readSitePriceObservation: state.price }));
-vi.mock('../src/ai/fullCatalogClient.js', () => ({ readFullCatalogSnapshot: state.full, readExactMentionPrefetch: state.prefetch }));
+vi.mock('../src/ai/fullCatalogClient.js', () => ({ readFullCatalogSnapshot: state.full, readExactMentionPrefetch: state.prefetch, reselectFromBuyerMessage: state.recheck }));
 vi.mock('../src/ai/openaiUsageGuard.js', () => ({ assertOpenAIUsageBudget: vi.fn(async () => 'reservation'), bindOpenAIUsageReservation: vi.fn(), recordOpenAIUsageOnce: vi.fn(async () => undefined) }));
 vi.mock('../src/ai/agentManagerOrchestrator.js', () => ({ TurnExecutionInProgressError: class extends Error {} }));
 import { PlatformAgentAssistant } from '../src/ai/platformAgentAssistant.js';
@@ -25,6 +25,7 @@ describe('site chat and platform agent', () => {
     vi.clearAllMocks();
     state.price.mockImplementation(async (product: { id: string }) => ({ status: 'unknown', productId: product.id }));
     state.prefetch.mockResolvedValue(null);
+    state.recheck.mockResolvedValue(null);
     state.listMessages.mockResolvedValue([]);
     state.history.mockResolvedValue([]);
     state.getTurn.mockResolvedValue(null);
@@ -50,6 +51,37 @@ describe('site chat and platform agent', () => {
     expect(state.run.mock.calls[1][0].message).toContain('заново вызови подходящий инструмент каталога');
     expect(answer.answer).toBe('Новый результат');
     expect(answer.productCards.map((card) => card.id)).toEqual(['fresh']);
+  });
+  it('keeps the original answer when optional buyer recheck is inconsistent', async () => {
+    state.listMessages.mockResolvedValue([{ role: 'user', content: 'Какие диски 350 мм подойдут для K760?' }]);
+    state.run.mockResolvedValue({ sessionId: 'agent-session', turnId: 'agent-turn',
+      page: { status: 'ok', selection_mode: 'semantic', source_revision: 'rev', selected_count: 0,
+        uncertain_count: 1, candidate_count: 1, items: [], run_id: 'semantic-run', model: 'test-model',
+        input_tokens: 10, output_tokens: 2, cached_input_tokens: 0 },
+      answer: JSON.stringify({ answer: 'Для K760 диски 350 мм не подходят.', selected: [], rejected: [], uncertain: [] }) });
+    state.recheck.mockRejectedValue(new Error('Buyer catalog recheck is inconsistent'));
+    const answer = await new PlatformAgentAssistant(repo).generateAnswer({ sessionId: 'chat', turnId: 'turn',
+      userMessage: 'Какие диски 350 мм подойдут для K760?' });
+    expect(answer.answer).toBe('Для K760 диски 350 мм не подходят.');
+    expect(answer.productCards).toEqual([]);
+    expect(state.run).toHaveBeenCalledOnce();
+    expect(state.recheck).toHaveBeenCalledOnce();
+  });
+  it('uses products found by a consistent buyer recheck', async () => {
+    state.listMessages.mockResolvedValue([{ role: 'user', content: 'Какие диски подходят?' }]);
+    const page = { status: 'ok', selection_mode: 'semantic', source_revision: 'rev', selected_count: 0,
+      uncertain_count: 1, candidate_count: 1, items: [], run_id: 'first-run', model: 'test-model',
+      input_tokens: 10, output_tokens: 2, cached_input_tokens: 0 };
+    const checked = { ...page, selected_count: 1, uncertain_count: 0, rejected_count: 0,
+      snapshot: 'checked-snapshot', run_id: 'checked-run' };
+    state.run.mockResolvedValue({ sessionId: 'agent-session', turnId: 'agent-turn', page,
+      answer: JSON.stringify({ answer: 'Не найдено', selected: [], rejected: [], uncertain: [] }) });
+    state.recheck.mockResolvedValue(checked);
+    state.full.mockResolvedValue({ ...checked, items: [{ product_id: 'disk', name: 'Диск 230 мм' }] });
+    const answer = await new PlatformAgentAssistant(repo).generateAnswer({ sessionId: 'chat', turnId: 'turn',
+      userMessage: 'Какие диски подходят?' });
+    expect(state.full).toHaveBeenCalledWith(checked, undefined);
+    expect(answer.productCards.map((card) => card.id)).toEqual(['disk']);
   });
   it('returns uncertain candidates separately without presenting them as confirmed matches', async () => {
     state.run.mockResolvedValue({ sessionId: 'agent-session', turnId: 'agent-turn',
