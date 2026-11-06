@@ -7,7 +7,7 @@ import { ConversationRepository } from '../db/repositories.js';
 import type { ChatResponsePayload, ProductCard } from '../shared/types.js';
 import { PlatformAgentClient } from './platformAgentClient.js';
 import { selectsAllCatalogMatches } from './catalogDecision.js';
-import { readExactMentionPrefetch, readFullCatalogSnapshot, type ExactMentionPrefetch } from './fullCatalogClient.js';
+import { readExactMentionPrefetch, readFullCatalogSnapshot, reselectFromBuyerMessage, type ExactMentionPrefetch } from './fullCatalogClient.js';
 import { readSitePriceObservation } from '../catalog/currentSitePrice.js';
 import { assertOpenAIUsageBudget, bindOpenAIUsageReservation, recordOpenAIUsageOnce } from './openaiUsageGuard.js';
 import { TurnExecutionInProgressError, type AgentManagerGenerateInput, type AgentManagerRecoverInput } from './agentManagerOrchestrator.js';
@@ -98,6 +98,31 @@ function reconcileCitations(answer: string, candidates: ProductCard[]) {
 
 class CatalogClassificationError extends Error {}
 
+async function recordSemanticSelectionUsage(selection: Record<string, unknown>) {
+  if (typeof selection.run_id !== 'string' || typeof selection.model !== 'string' ||
+      typeof selection.input_tokens !== 'number' || typeof selection.output_tokens !== 'number') {
+    throw new Error('Semantic catalog usage is unavailable');
+  }
+  await recordOpenAIUsageOnce('semantic_catalog', selection.model, { id: selection.run_id, service_tier: 'default', usage: {
+    input_tokens: selection.input_tokens, output_tokens: selection.output_tokens,
+    total_tokens: selection.input_tokens + selection.output_tokens,
+    input_tokens_details: { cached_tokens: typeof selection.cached_input_tokens === 'number' ? selection.cached_input_tokens : 0 }
+  } });
+  const lookup = selection.cache_lookup_usage;
+  if (lookup && typeof lookup === 'object' && !Array.isArray(lookup)) {
+    const check = lookup as Record<string, unknown>;
+    if (typeof check.run_id !== 'string' || typeof check.model !== 'string' ||
+        typeof check.input_tokens !== 'number' || typeof check.output_tokens !== 'number') {
+      throw new Error('Semantic cache verification usage is invalid');
+    }
+    await recordOpenAIUsageOnce('semantic_catalog_cache_check', check.model, { id: check.run_id, service_tier: 'default', usage: {
+      input_tokens: check.input_tokens, output_tokens: check.output_tokens,
+      total_tokens: check.input_tokens + check.output_tokens,
+      input_tokens_details: { cached_tokens: typeof check.cached_input_tokens === 'number' ? check.cached_input_tokens : 0 }
+    } });
+  }
+}
+
 async function currentCatalogRevision(signal?: AbortSignal): Promise<string> {
   const base = new URL(config.BAKAUT_CATALOG_URL);
   if (base.protocol !== 'https:' || base.hostname !== 'catalog-search-production.up.railway.app') {
@@ -169,7 +194,7 @@ export class PlatformAgentAssistant {
     reservation: string | null; prior: string[]; needState: ChatResponsePayload['needState']; recovered?: boolean; signal?: AbortSignal;
     onDelta?: (text: string) => void | Promise<void>;
   }): Promise<ChatResponsePayload> {
-    const { result } = input;
+    let { result } = input;
     const usageRecord = { id: result.turnId, usage: result.usage };
     bindOpenAIUsageReservation(usageRecord, input.reservation);
     await recordOpenAIUsageOnce('platform_agent', result.model, usageRecord);
@@ -177,40 +202,35 @@ export class PlatformAgentAssistant {
       throw new CatalogClassificationError('Complete catalog selection requires a fresh search');
     }
     let page = result.page;
+    if (page?.selection_mode === 'semantic' && page.selected_count === 0 &&
+        typeof page.uncertain_count === 'number' && page.uncertain_count > 0) {
+      const messages = await this.conversations.listMessages(input.sessionId, null);
+      const buyerMessages = messages.filter((message) => message.role === 'user');
+      if (buyerMessages.length === 1) {
+        const originalPage = page;
+        const checked = await diagnosticSpan('catalog.buyer_recheck', async () =>
+          reselectFromBuyerMessage(originalPage, buyerMessages[0].content, input.signal));
+        if (checked) {
+          await recordSemanticSelectionUsage(originalPage);
+          await recordSemanticSelectionUsage(checked);
+          if (typeof checked.selected_count === 'number' && checked.selected_count > 0) {
+            const declared = JSON.parse(result.answer) as Record<string, unknown>;
+            result = { ...result, page: checked, answer: JSON.stringify({ ...declared,
+              answer: 'Нашёл подходящие товары в каталоге.', selected: ['__ALL_CATALOG_MATCHES__'],
+              rejected: [], uncertain: [], selection_snapshots: [checked.snapshot] }) };
+            page = checked;
+            diagnosticEvent('catalog.buyer_recheck.recovered', { selectedCount: checked.selected_count });
+          }
+        }
+      }
+    }
     if (page?.selection_mode === 'exact_prefetch') {
       const revision = await diagnosticSpan('catalog.exact_prefetch.revision', async () => currentCatalogRevision(input.signal));
       if (revision !== page.source_revision) throw new CatalogClassificationError('Prefetched catalog revision changed');
     }
     const semanticPages = page?.selection_mode === 'semantic' ? [page] :
       page?.selection_mode === 'semantic_multi' && Array.isArray(page.selections) ? page.selections : [];
-    for (const raw of semanticPages) {
-      const selection = raw as Record<string, unknown>;
-      if (typeof selection.run_id !== 'string' || typeof selection.model !== 'string' ||
-          typeof selection.input_tokens !== 'number' || typeof selection.output_tokens !== 'number') {
-        throw new Error('Semantic catalog usage is unavailable');
-      }
-      const semanticUsage = { id: selection.run_id, service_tier: 'default', usage: {
-        input_tokens: selection.input_tokens, output_tokens: selection.output_tokens,
-        total_tokens: selection.input_tokens + selection.output_tokens,
-        input_tokens_details: { cached_tokens: typeof selection.cached_input_tokens === 'number' ? selection.cached_input_tokens : 0 }
-      } };
-      await recordOpenAIUsageOnce('semantic_catalog', selection.model, semanticUsage);
-      const lookup = selection.cache_lookup_usage;
-      if (lookup && typeof lookup === 'object' && !Array.isArray(lookup)) {
-        const check = lookup as Record<string, unknown>;
-        if (typeof check.run_id !== 'string' || typeof check.model !== 'string' ||
-            typeof check.input_tokens !== 'number' || typeof check.output_tokens !== 'number') {
-          throw new Error('Semantic cache verification usage is invalid');
-        }
-        await recordOpenAIUsageOnce('semantic_catalog_cache_check', check.model, {
-          id: check.run_id, service_tier: 'default', usage: {
-            input_tokens: check.input_tokens, output_tokens: check.output_tokens,
-            total_tokens: check.input_tokens + check.output_tokens,
-            input_tokens_details: { cached_tokens: typeof check.cached_input_tokens === 'number' ? check.cached_input_tokens : 0 }
-          }
-        });
-      }
-    }
+    for (const raw of semanticPages) await recordSemanticSelectionUsage(raw as Record<string, unknown>);
     if (selectsAllCatalogMatches(result.answer)) {
       try {
         page = await diagnosticSpan('catalog.snapshot', async () => readFullCatalogSnapshot(result.page ?? {}, input.signal));

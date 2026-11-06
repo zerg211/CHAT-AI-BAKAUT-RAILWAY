@@ -2,12 +2,28 @@ import { describe, expect, it, vi } from 'vitest';
 import { configureCatalogTools, extractAgentResult, PlatformAgentClient } from '../src/ai/platformAgentClient.js';
 import { normalizePublicCardDisplay, normalizePublicProductCards } from '../src/shared/publicChatHistory.js';
 import { ALL_CATALOG_MATCHES, selectsAllCatalogMatches } from '../src/ai/catalogDecision.js';
-import { readExactMentionPrefetch, readFullCatalogSnapshot } from '../src/ai/fullCatalogClient.js';
+import { readExactMentionPrefetch, readFullCatalogSnapshot, reselectFromBuyerMessage } from '../src/ai/fullCatalogClient.js';
 import { spawnSync } from 'node:child_process';
 
 vi.mock('../src/config.js', () => ({ config: { BAKAUT_MCP_TOKEN: 'mock-catalog-token', BAKAUT_CATALOG_URL: 'https://catalog-search-production.up.railway.app' } }));
 
 describe('Platform agent result', () => {
+  it('rechecks a zero-result semantic search against the buyer message without carrying agent-added conditions', async () => {
+    const first = { selection_mode: 'semantic', selected_count: 0, uncertain_count: 3, candidate_count: 39,
+      source_revision: 'rev', criteria: { requirement: 'agent-added condition', category: 'Алмазные диски',
+        min_nominal_kw: null, max_nominal_kw: null, max_price_rub: null } };
+    const checked = { status: 'ok', selection_mode: 'semantic', source_scan_complete: true, source_revision: 'rev',
+      criteria: { requirement: 'Какие диски подойдут для K760?', category: 'Алмазные диски',
+        min_nominal_kw: null, max_nominal_kw: null, max_price_rub: null }, candidate_count: 39,
+      selected_count: 3, uncertain_count: 19, rejected_count: 17 };
+    const transport = vi.fn(async (_url: URL, options: RequestInit) => {
+      expect(JSON.parse(String(options.body))).toMatchObject({ requirement: checked.criteria.requirement,
+        category: checked.criteria.category, expected_revision: 'rev' });
+      return new Response(JSON.stringify(checked));
+    }) as unknown as typeof fetch;
+    expect(await reselectFromBuyerMessage(first, checked.criteria.requirement, undefined, transport)).toEqual(checked);
+    expect(transport).toHaveBeenCalledTimes(1);
+  });
   it('resolves model names despite spacing in the original title without hiding variants', () => {
     const script = `
 import sys,sqlite3,json
