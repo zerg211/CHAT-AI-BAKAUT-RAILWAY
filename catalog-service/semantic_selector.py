@@ -20,6 +20,7 @@ INSTRUCTIONS = (
     'For each numbered product check every mandatory part of the buyer requirement. '
     'The requested product type and role are mandatory even inside a broad category. '
     'A complete machine is not a requested separate component merely because it contains that component. '
+    'Judge the item being sold, not how the full equipment operates. A component named in parentheses in the title, such as a parenthesized product role, identifies the sold item unless the card explicitly says the complete assembly is included. A generic description of the completed equipment or its application does not prove that the complete assembly is sold. '
     'When a product title names the exact requested component type and its description explains how that component works with other parts, label it yes unless another fact directly says a complete assembly is included. Do not require a literal denial of a complete assembly. '
     'A product whose title names a different component type contradicts the requested type even if it supplies power to, controls, or contains the requested component. '
     'A different machine type is not the requested type merely because it performs a similar operation. '
@@ -90,7 +91,7 @@ def _groups(products):
 def _classify_group(group, requirement):
     items = [{'n': index, **view} for index, (_, view) in enumerate(group)]
     body = json.dumps({
-        'model': MODEL, 'reasoning': {'effort': 'low'},
+        'model': MODEL, 'reasoning': {'effort': 'medium'},
         'instructions': INSTRUCTIONS,
         'input': 'Buyer requirement: ' + requirement + '\nProduct facts: ' + json.dumps(items, ensure_ascii=False),
         'max_output_tokens': max(4000, len(group) * 200),
