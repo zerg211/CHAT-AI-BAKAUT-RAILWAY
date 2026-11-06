@@ -100,7 +100,15 @@ async function readSemanticSelection(page: JsonObject, signal: AbortSignal | und
       snapshot: page.snapshot, expected_revision: page.source_revision }),
     signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(15_000)]) : AbortSignal.timeout(15_000)
   });
-  if (!response.ok) throw new Error(`Semantic catalog hydration failed (${response.status})`);
+  if (!response.ok) {
+    const failure = asObject(await response.json().catch(() => null));
+    diagnosticEvent('catalog.semantic_snapshot.rejected', {
+      statusCode: response.status,
+      reason: typeof failure?.error === 'string' ? failure.error :
+        typeof failure?.status === 'string' ? failure.status : 'unknown'
+    });
+    throw new Error(`Semantic catalog hydration failed (${response.status})`);
+  }
   const body = asObject(await response.json());
   const selectedCount = page.selected_count as number;
   const uncertainCount = page.uncertain_count as number;
