@@ -7,6 +7,40 @@ const same = (left: unknown, right: unknown) => JSON.stringify(left) === JSON.st
 
 export type ExactMentionPrefetch = { source_revision: string; items: JsonObject[] };
 
+export async function reselectFromBuyerMessage(page: JsonObject, message: string, signal?: AbortSignal,
+  transport: typeof fetch = fetch): Promise<JsonObject | null> {
+  const criteria = asObject(page.criteria);
+  if (page.selection_mode !== 'semantic' || page.selected_count !== 0 ||
+      typeof page.uncertain_count !== 'number' || page.uncertain_count < 1 ||
+      !criteria || typeof criteria.category !== 'string' || !criteria.category ||
+      typeof page.source_revision !== 'string' || !message.trim() || message.length > 600) return null;
+  if (!config.BAKAUT_MCP_TOKEN) throw new Error('Catalog access is not configured');
+  const base = new URL(config.BAKAUT_CATALOG_URL);
+  if (base.protocol !== 'https:' || base.hostname !== 'catalog-search-production.up.railway.app') throw new Error('Catalog URL is not allowed');
+  const body = { requirement: message, category: criteria.category,
+    min_nominal_kw: criteria.min_nominal_kw ?? null, max_nominal_kw: criteria.max_nominal_kw ?? null,
+    max_price_rub: criteria.max_price_rub ?? null, expected_revision: page.source_revision };
+  const expectedCriteria = { requirement: body.requirement, category: body.category,
+    min_nominal_kw: body.min_nominal_kw, max_nominal_kw: body.max_nominal_kw, max_price_rub: body.max_price_rub };
+  const response = await transport(new URL('/semantic-select-buyer', base), {
+    method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${config.BAKAUT_MCP_TOKEN}` },
+    body: JSON.stringify(body), signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(45_000)]) : AbortSignal.timeout(45_000)
+  });
+  if (!response.ok) throw new Error(`Buyer catalog recheck failed (${response.status})`);
+  const checked = asObject(await response.json());
+  if (!checked || checked.status !== 'ok' || checked.selection_mode !== 'semantic' ||
+      checked.source_revision !== page.source_revision || !same(checked.criteria, expectedCriteria) ||
+      checked.candidate_count !== page.candidate_count || checked.source_scan_complete !== true ||
+      typeof checked.selected_count !== 'number' || typeof checked.uncertain_count !== 'number' ||
+      typeof checked.rejected_count !== 'number' ||
+      checked.selected_count + checked.uncertain_count + checked.rejected_count !== checked.candidate_count) {
+    throw new Error('Buyer catalog recheck is inconsistent');
+  }
+  diagnosticEvent('catalog.buyer_recheck.completed', { selectedCount: checked.selected_count,
+    uncertainCount: checked.uncertain_count, candidateCount: checked.candidate_count });
+  return checked;
+}
+
 /** Exact identity evidence only; broad or oversized requests retain the regular agent tools. */
 export async function readExactMentionPrefetch(message: string, signal?: AbortSignal,
   transport: typeof fetch = fetch): Promise<ExactMentionPrefetch | null> {

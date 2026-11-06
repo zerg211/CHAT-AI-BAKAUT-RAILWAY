@@ -268,6 +268,29 @@ async def semantic_selection(request):
         return JSONResponse({'status':'ok','source_revision':kb.revision,'items':result})
     except (ValueError,KeyError,TypeError) as error:
         return JSONResponse({'status':'invalid_request','error':str(error)},status_code=400)
+@server.custom_route('/semantic-select-buyer',methods=['POST'])
+async def semantic_select_buyer(request):
+    try:
+        body=await request.json()
+        allowed={'requirement','category','min_nominal_kw','max_nominal_kw','max_price_rub','expected_revision'}
+        if not isinstance(body,dict) or set(body)!=allowed:raise ValueError('Invalid buyer selection request')
+        if not isinstance(body['requirement'],str) or not body['requirement'].strip() or len(body['requirement'])>600:
+            raise ValueError('Invalid buyer requirement')
+        if not isinstance(body['category'],str) or not body['category'].strip():raise ValueError('Invalid category')
+        for key in ('min_nominal_kw','max_nominal_kw','max_price_rub'):
+            value=body[key]
+            if value is not None and (isinstance(value,bool) or not isinstance(value,(int,float))):raise ValueError('Invalid numeric filter')
+        kb=Knowledge('fts')
+        try:revision=kb.revision
+        finally:kb.db.close()
+        if body['expected_revision']!=revision:
+            return JSONResponse({'status':'revision_changed','source_revision':revision},status_code=409)
+        path=os.environ['BAKAUT_EMBEDDING_DB_PATH']
+        result=selection_with_cache(revision,path,Path(path).stat().st_mtime_ns,
+            body['requirement'],body['category'],body['min_nominal_kw'],body['max_nominal_kw'],body['max_price_rub'])
+        return JSONResponse(result)
+    except (ValueError,KeyError,TypeError) as error:
+        return JSONResponse({'status':'invalid_request','error':str(error)},status_code=400)
 inner=server.streamable_http_app()
 class Auth:
     async def __call__(self,scope,receive,send):
