@@ -254,7 +254,12 @@ async def semantic_selection(request):
             elif code==2:uncertain.append(item['product_id'])
             elif code==0:rejected.append(item['product_id'])
             else:raise ValueError('Invalid product status')
-        fingerprint=hashlib.sha256(json.dumps([kb.revision,criteria,selected,uncertain,rejected],
+        canonical_criteria={'requirement':criteria['requirement'],
+            'category':snapshot['criteria']['category'],
+            'min_nominal_kw':snapshot['criteria']['min_nominal_kw'],
+            'max_nominal_kw':snapshot['criteria']['max_nominal_kw'],
+            'max_price_rub':snapshot['criteria']['max_price_rub']}
+        fingerprint=hashlib.sha256(json.dumps([kb.revision,canonical_criteria,selected,uncertain,rejected],
             ensure_ascii=False,sort_keys=True).encode()).hexdigest()[:24]
         if fingerprint!=body['snapshot']:raise ValueError('Selection fingerprint mismatch')
         result=[]
