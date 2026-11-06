@@ -59,15 +59,16 @@ def cached_semantic_selection(revision,path,mtime_ns,requirement,category,min_no
 _selection_aliases=OrderedDict()
 _selection_alias_lock=threading.Lock()
 
-def equivalent_cached_requirement(requirement,known):
+def equivalent_cached_requirement(requirement,known,category):
     """Reuse a result only when the model confirms identical product eligibility."""
     body=json.dumps({'model':SELECTOR_MODEL,'reasoning':{'effort':'low'},
-        'instructions':('Compare the new buyer requirement with the previous requirements. '
+        'instructions':('Compare requirements only for products already filtered to the supplied category. '
+            'A category name added to a requirement does not change eligibility within that category. '
             'Copy the EXACT text of one previous requirement into "match" only if both requirements '
-            'would include and exclude exactly the same products. '
+            'would include and exclude exactly the same products within the category. '
             'Different model, size, material, use, negation, or other condition means no match. '
             'If unsure, return null. Return only JSON: {"match":previous_requirement_text_or_null}.'),
-        'input':json.dumps({'new':requirement,'previous':known},ensure_ascii=False),
+        'input':json.dumps({'category':category,'new':requirement,'previous':known},ensure_ascii=False),
         'max_output_tokens':800},ensure_ascii=False).encode()
     request=urllib.request.Request('https://api.openai.com/v1/responses',data=body,method='POST',
         headers={'Authorization':'Bearer '+os.environ['OPENAI_API_KEY'],'Content-Type':'application/json'})
@@ -95,7 +96,7 @@ def selection_with_cache(revision,path,mtime_ns,requirement,category,min_nominal
             if candidate_base==base))[:32] if alias is None else []
     lookup=None
     if alias is None and known:
-        alias,lookup=equivalent_cached_requirement(requirement,known)
+        alias,lookup=equivalent_cached_requirement(requirement,known,category)
     source=alias or requirement
     selection=cached_semantic_selection(revision,path,mtime_ns,source,category,
         min_nominal_kw,max_nominal_kw,max_price_rub)
