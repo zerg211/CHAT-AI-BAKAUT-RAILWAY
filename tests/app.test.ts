@@ -57,11 +57,11 @@ describe('app', () => {
     expect(response.body).toContain('bakaut-ai-open');
     expect(response.body).toContain('pointer-events:none');
     expect(response.body).toContain('pointer-events:auto');
-    expect(response.body).toContain('bakautAiQuestion');
-    expect(response.body).toContain('bakaut-ai-widget-prompt');
+    expect(response.body).toContain('ЧАТ ПО ТЕХНИКЕ');
+    expect(response.body).toContain('Подбор • сравнение • вопросы');
     expect(response.body).toContain('right:32px');
-    expect(response.body).toContain('min-width:144px;width:144px;height:144px');
-    expect(response.body).toContain('min-width:68px;width:68px;height:68px');
+    expect(response.body).toContain('width:320px;height:128px');
+    expect(response.body).toContain('width:min(270px,calc(100vw - 24px))');
     expect(response.body).toContain('bottom:calc(74px + env(safe-area-inset-bottom,0px))');
     expect(response.body).toContain('trimTrailingSlashes(data.chatSrc');
     expect(response.body).toContain('while (text.endsWith');
