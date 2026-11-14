@@ -24,11 +24,14 @@ describe('streamChatMessage watchdog and explicit continuation', () => {
         : sseEvent('done', { turnId: 'turn-1', answer: 'Проверено по двум источникам', products: [] });
       return new Response(sseEvent('turn', { turnId: 'turn-1' }) + event, { status: 200 });
     });
-    const result = await streamChatMessage('', 'session-1', 'Проверьте модели', { onDelta: () => undefined }, undefined,
+    const onStatus = vi.fn();
+    const result = await streamChatMessage('', 'session-1', 'Проверьте модели', { onDelta: () => undefined, onStatus }, undefined,
       { fetcher: fetcher as typeof fetch, visitorId });
     expect(result.answer).toBe('Проверено по двум источникам');
     expect(fetcher.mock.calls.filter(([url]) => String(url).endsWith('/messages'))).toHaveLength(1);
     expect(fetcher.mock.calls.filter(([url]) => String(url).endsWith('/recover'))).toHaveLength(4);
+    expect(onStatus).toHaveBeenCalledWith('Продолжаю готовить ответ...');
+    expect(onStatus.mock.calls.flat()).not.toContain('Ответ оборвался, восстанавливаю...');
   });
   it('exposes the turn ID and treats explicit server cancellation as a stopped turn', async () => {
     const stream = new ReadableStream<Uint8Array>({

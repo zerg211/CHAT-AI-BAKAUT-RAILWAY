@@ -1219,6 +1219,24 @@ describe('Controlled Responses original context', () => {
     expect(Object.isFrozen(plan.request)).toBe(true);
   });
 
+  it('resumes a saved request after JSON object keys are reordered without resubmitting or accepting changed content', async () => {
+    const { client, transport } = harness();
+    const plan = await client.prepare({ message: 'Сравните товары', history: [], prefetch: fullCards(2) });
+    await client.submit(plan, 'saved-turn');
+    function reorder(value: unknown): unknown {
+      if (Array.isArray(value)) return value.map(reorder);
+      if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).reverse().map(([key, item]) => [key, reorder(item)]));
+      return value;
+    }
+    const saved = reorder(JSON.parse(JSON.stringify(plan))) as typeof plan;
+    await expect(client.wait(saved, 'resp_controlled')).resolves.toMatchObject({ turnId: 'resp_controlled' });
+    expect(transport.mock.calls.filter(([url, init]) => new URL(url).pathname === '/v1/responses' && init?.method === 'POST')).toHaveLength(1);
+    const calls = transport.mock.calls.length;
+    saved.prefetch.items[0].description = 'Подменённые данные';
+    await expect(client.wait(saved, 'resp_controlled')).rejects.toThrow('snapshot integrity');
+    expect(transport).toHaveBeenCalledTimes(calls);
+  });
+
   it('delivers damaged history as explicit data while preserving full cards and immutable replay', async () => {
     const { client, transport } = harness();
     const prefetch = fullCards();
