@@ -1,0 +1,14 @@
+{
+  "revision": "0aece09a78dbbab1b7192155ae701e13b3544d744f5f14def8a84bce60ad834e",
+  "count": 4324,
+  "files": {
+    "BAKAUT_DB_PATH": {
+      "path": "/data/bakaut-v6-20261112/candidate/catalog_v5/catalog.sqlite",
+      "sha256": "2ff3f419ea5b90c4541783c017a39d3fdc6722181c0afa20832c5728c5d46863"
+    },
+    "BAKAUT_EMBEDDING_DB_PATH": {
+      "path": "/data/bakaut-v6-20261112/candidate/index_v5/embeddings_v5_legacy8.sqlite",
+      "sha256": "98a5f2e9a25b1d63d61c8a7e6c81fdb5b8ec5e2120cdc68910b181624870f7b3"
+    }
+  }
+}
