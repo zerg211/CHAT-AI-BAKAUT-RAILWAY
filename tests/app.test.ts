@@ -59,6 +59,8 @@ describe('app', () => {
     expect(response.body).toContain('pointer-events:none');
     expect(response.body).toContain('pointer-events:auto');
     expect(response.body).toContain('ЧАТ ПО ТЕХНИКЕ');
+    expect(response.body).toContain('<svg class="bakaut-ai-widget-icon"');
+    expect(response.body).not.toContain('/chat-message-circle-more.svg');
     expect(response.body).toContain('Подбор • сравнение • вопросы');
     expect(response.body).toContain('right:32px');
     expect(response.body).toContain('width:320px;height:128px');
