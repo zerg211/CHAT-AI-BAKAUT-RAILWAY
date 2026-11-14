@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { sameModel } from './modelIdentity.js';
 import { setTimeout as delay } from 'node:timers/promises';
 import { z } from 'zod';
 import { config } from '../config.js';
@@ -45,13 +46,6 @@ const hash = (value: unknown, canonical = true) => createHash('sha256').update(J
   canonical ? (_key, item) => item && typeof item === 'object' && !Array.isArray(item)
     ? Object.fromEntries(Object.entries(item).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)) : item : undefined)).digest('hex');
 const clone = <T>(value: T): T => JSON.parse(JSON.stringify(value));
-function sameModel(actual: string | undefined, requested: string) {
-  if (actual === requested) return true;
-  if (!actual?.startsWith(requested + '-')) return false;
-  const date = actual.slice(requested.length + 1).split('-');
-  return date.map(part => part.length).join(',') === '4,2,2' &&
-    date.every(part => [...part].every(character => '0123456789'.includes(character)));
-}
 function freeze(value: unknown): void {
   if (value && typeof value === 'object') {
     Object.values(value).forEach(freeze);

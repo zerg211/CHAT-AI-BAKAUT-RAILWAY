@@ -1,4 +1,5 @@
 import { config } from '../config.js';
+import { sameModel } from './modelIdentity.js';
 
 /** Search receipts and checkpoints belong to one leased research step. */
 export type SearchSource = { url: string; title: string; excerpt: string };
@@ -106,7 +107,7 @@ export async function runControlledWebSearch(input: SearchInput, deps: SearchDep
     await deps.saveCheckpoint(structuredClone(state));
   }
   validateReceipt(state.receipt, state.responseId);
-  if (state.receipt.model !== state.model) throw new Error('Controlled search response model mismatch');
+  if (!sameModel(state.receipt.model, state.model)) throw new Error('Controlled search response model mismatch');
   await deps.recordUsage(state.reservationId, state.receipt);
   return {
     status: state.receipt.status,

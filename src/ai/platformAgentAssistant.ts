@@ -13,6 +13,7 @@ import { readExactMentionPrefetch, readFullKnownProducts, readFullCatalogSnapsho
 import { contextFromPrefetch, latestKnownProducts, knownProductHistoryNotice } from './platformProductContext.js';
 import { applyPlatformAvailability, latestAvailabilityRequest } from './platformAvailability.js';
 import { ControlledResponsesClient, ControlledResponseFailure, ControlledRequestRejected, type ControlledRequest } from './controlledResponsesClient.js';
+import { sameModel } from './modelIdentity.js';
 import { readSitePriceObservation } from '../catalog/currentSitePrice.js';
 import { assertOpenAIUsageBudget, bindOpenAIUsageReservation, recordOpenAIUsageOnce, releaseOpenAIUsageReservation } from './openaiUsageGuard.js';
 import { TurnExecutionInProgressError, type AgentManagerGenerateInput, type AgentManagerRecoverInput } from './agentManagerOrchestrator.js';
@@ -277,7 +278,8 @@ export class PlatformAgentAssistant {
 
   private async controlledAnswer(input: AgentManagerGenerateInput, ownerId: string,
     needState: ChatResponsePayload['needState'], options: { history?: Message[]; prefetch?: ExactMentionPrefetch;
-      message?: string; saved?: Record<string, unknown>; recovered?: boolean; repair?: CatalogAnswerRepair }): Promise<ChatResponsePayload> {
+      message?: string; saved?: Record<string, unknown>; recovered?: boolean; repair?: CatalogAnswerRepair;
+      research?: { step: number; receipts: SearchReceipt[] } }): Promise<ChatResponsePayload> {
     const client = new ControlledResponsesClient(config.OPENAI_API_KEY!, config.OPENAI_PLATFORM_AGENT_ID!);
     let repair = options.repair;
     const phase = options.repair?.reason === 'category_price_review' || options.saved?.phase === 'catalog_price_recompose'
@@ -293,10 +295,13 @@ export class PlatformAgentAssistant {
     let attempted: boolean;
     let rejected = false;
     let responseId: string | undefined;
+    let research = options.research;
     if (saved) {
       if (saved.kind !== 'controlled_response' || !saved.plan || typeof saved.plan !== 'object' ||
           typeof saved.attempted !== 'boolean') throw new Error('Controlled checkpoint is invalid');
       plan = saved.plan as ControlledRequest;
+      if (saved.research !== undefined) research = z.object({ step: z.number().int().nonnegative().safe(),
+        receipts: z.array(z.custom<SearchReceipt>()) }).parse(saved.research);
       if (saved.phase === 'catalog_recompose' || saved.phase === 'catalog_price_recompose') repair = readCatalogRepair(saved.repair);
       if (repair && (plan.prefetch.source_revision !== repair.sourceRevision ||
         repair.correctedIds.some(id => !plan.prefetch.items.some(item => item.product_id === id)))) {
@@ -305,7 +310,7 @@ export class PlatformAgentAssistant {
       reservation = typeof saved.reservation === 'string' ? saved.reservation : null;
       attempted = saved.attempted;
       responseId = typeof saved.responseId === 'string' ? saved.responseId : undefined;
-      if (saved.rejected === true) throw new Error('Controlled submission was rejected; no automatic second generation');
+      if (saved.rejected === true) throw new ControlledRequestRejected(400);
       if (attempted && !responseId) throw new Error('Controlled submission outcome is unknown; no automatic second generation');
     } else {
       const history = [...options.history ?? await this.conversations.listMessages(input.sessionId, null)];
@@ -335,7 +340,7 @@ export class PlatformAgentAssistant {
         checkedSnapshot: { source_revision: repair.sourceRevision, selected_count: repair.correctedIds.length } } : repair;
       const message = repair ? `${input.userMessage}\n\nИсправление результата каталога (данные, не новая реплика покупателя): ${JSON.stringify(repairData)}\nПредыдущий черновик не был показан покупателю. Полностью ответь на исходный вопрос, сохрани полезную техническую часть и используй полные карточки. Предыдущий вывод о составе подбора и ценах мог устареть. Учитывай reason, criteria и подтверждённые наблюдения цен. Члены correctedIds являются кандидатами для проверки, а не приказом выбрать их все. Сохрани исходные ограничения покупателя; при неизвестной решающей характеристике не объявляй товар подтверждённо подходящим. Каждый correctedIds отнеси ровно один раз в selected/rejected/uncertain; не сокращай подходящий список. Остальные известные товары остаются контекстом, их не нужно объявлять неподходящими. Все оригиналы correctedIds уже переданы в контексте: не вызывай повторно semantic_select_products для этой категории. Не используй маркер полного каталога, selection_snapshots=[].${pendingAvailability ? `\nСохранённая просьба о наличии (данные): ${JSON.stringify(pendingAvailability)}` : ''}` : options.message ?? input.userMessage;
       plan = await diagnosticSpan('assistant.controlled.prepare', async () => client.prepare({
-        message, history, prefetch, signal: input.signal }));
+        message, history, prefetch, priorWebSearchReceipts: research?.receipts, signal: input.signal }));
       reservation = config.OPENAI_MONETARY_GUARD_ENABLED
         ? await assertOpenAIUsageBudget('platform_agent', plan.model, plan.reserveTokens, phase,
           { inputTokens: plan.inputTokens, outputTokens: Number(plan.request.max_output_tokens),
@@ -345,7 +350,7 @@ export class PlatformAgentAssistant {
     }
     const checkpoint = async () => this.conversations.upsertTurnCheckpoint({ sessionId: input.sessionId,
       turnId: input.turnId!, executionOwner: ownerId, checkpoint: 'platform_agent_submission', status: 'running',
-      payload: { kind: 'controlled_response', phase, repair, plan, reservation, attempted, rejected, responseId,
+      payload: { kind: 'controlled_response', phase, repair, research, plan, reservation, attempted, rejected, responseId,
         agentSessionId: responseId ? `controlled:${responseId}` : '', previousTurnId: null,
         submitted: Boolean(responseId), userMessage: input.userMessage } });
     if (!responseId) {
@@ -418,9 +423,10 @@ export class PlatformAgentAssistant {
       }
       throw error;
     }
-    return await this.saveResultOrRepair({ sessionId: input.sessionId, turnId: input.turnId!, ownerId, result,
+    return await this.saveResultOrRepair({ sessionId: input.sessionId, turnId: input.turnId!, ownerId,
+      result: { ...result, usedWebSearch: Boolean(result.usedWebSearch || research?.receipts.some(receipt => receipt.status === 'ok')) },
       reservation, prior: [], needState, userMessage: input.userMessage, recovered,
-      onDelta: input.onDelta, signal: finalSignal, repairAttempted: Boolean(repair), repair });
+      onDelta: input.onDelta, signal: finalSignal, repairAttempted: Boolean(repair), repair, research });
   }
 
   private async saveResultOrRepair(input: Parameters<PlatformAgentAssistant['saveResult']>[0]): Promise<ChatResponsePayload> {
@@ -428,7 +434,8 @@ export class PlatformAgentAssistant {
           Array.isArray(input.result.page.candidate_ids) && input.result.page.candidate_ids.length)) {
       const parsed = JSON.parse(input.result.answer) as { web_search_intent?: unknown };
       if (parsed.web_search_intent != null) {
-        return this.searchBeforeSave(input, parsed.web_search_intent);
+        return this.searchBeforeSave(input, parsed.web_search_intent, undefined, undefined,
+          input.research?.step, input.research?.receipts);
       }
     }
     try { return await this.saveResult(input); }
@@ -445,7 +452,7 @@ export class PlatformAgentAssistant {
           service_tier: input.result.service_tier } });
       return await this.controlledAnswer({ sessionId: input.sessionId, turnId: input.turnId,
         userMessage: input.userMessage ?? '', signal: input.signal, onDelta: input.onDelta }, input.ownerId,
-        input.needState, { repair: error.repair, recovered: input.recovered });
+        input.needState, { repair: error.repair, recovered: input.recovered, research: input.research });
     }
   }
 
@@ -459,7 +466,7 @@ export class PlatformAgentAssistant {
       const mode = savedMode ?? (enabled ? 'search' : 'unavailable');
       if (!config.OPENAI_API_KEY || !config.OPENAI_PLATFORM_AGENT_ID || (mode === 'search' && !enabled)) throw new Error('Controlled web search is disabled');
       const parsed = z.object({ query: z.string().trim().min(1).max(500), rationale: z.string().trim().min(1) }).strict().parse(intent);
-      if (mode === 'search' && input.result.model !== 'gpt-6-luna') throw new Error('Controlled web search model is not approved');
+      if (mode === 'search' && !sameModel(input.result.model, 'gpt-6-luna')) throw new Error('Controlled web search model is not approved');
       const known = input.result.knownProducts;
       if (!known && Array.isArray(input.result.page?.items) && input.result.page.items.length) {
         throw new Error('Controlled web search cannot preserve product context');
@@ -498,7 +505,8 @@ export class PlatformAgentAssistant {
       const continuationAnswer = JSON.parse(continued.answer) as { web_search_intent?: unknown };
       const nextInput = { ...input, result: { ...continued,
         usedWebSearch: search.usedWebSearch || priorReceipts.some(receipt => receipt.status === 'ok') },
-        reservation: null, recovered: Boolean(searchSaved || continuationSaved) || input.recovered };
+        reservation: null, recovered: Boolean(searchSaved || continuationSaved) || input.recovered,
+        research: { step: step + 1, receipts: [...priorReceipts, search.receipt] } };
       if (continuationAnswer.web_search_intent == null) return this.saveResultOrRepair(nextInput);
       if (mode === 'unavailable') throw new Error('Agent requested a disabled search after receiving its unavailable status');
       priorReceipts = [...priorReceipts, search.receipt];
@@ -552,6 +560,7 @@ export class PlatformAgentAssistant {
     userMessage?: string;
     repairAttempted?: boolean;
     repair?: CatalogAnswerRepair;
+    research?: { step: number; receipts: SearchReceipt[] };
   }): Promise<ChatResponsePayload> {
     const { result } = input;
     const usageRecord = { id: result.turnId, usage: result.usage, service_tier: result.service_tier };
@@ -811,8 +820,11 @@ export class PlatformAgentAssistant {
     try {
       const checkpoints = await this.conversations.listTurnCheckpoints(input.sessionId, input.turnId);
       const webStage = checkpoints.find(row => row.checkpoint === 'controlled_web_stage');
-      if (webStage) return await this.resumeWebStage(input.sessionId, input.turnId, ownerId, webStage.payload, input.signal, input.onDelta);
       const savedControlled = checkpoints.find(row => row.checkpoint === 'platform_agent_submission' && row.payload.kind === 'controlled_response');
+      const research = savedControlled?.payload.research as { step?: number } | undefined;
+      if (webStage && Number(webStage.payload.step ?? 0) >= (research?.step ?? 0)) {
+        return await this.resumeWebStage(input.sessionId, input.turnId, ownerId, webStage.payload, input.signal, input.onDelta);
+      }
       if (savedControlled) return await this.controlledAnswer(input, ownerId, session.needState,
         { saved: savedControlled.payload, recovered: true });
       const stored = await pool.query('SELECT agent_session_id FROM platform_agent_sessions WHERE session_id=$1', [input.sessionId]);
@@ -946,6 +958,7 @@ export class PlatformAgentAssistant {
       if (completed) { await input.onDelta?.(completed.answer); return completed; }
       const turn = await this.conversations.getTurn(input.sessionId, input.turnId);
       if (turn?.errorCode === 'cancelled_by_user') throw new Error('Turn was cancelled by the user');
+      if (turn?.errorCode === 'controlled_submission_rejected') throw new ControlledRequestRejected(400);
       if (!turn || (turn.deadlineAt && Date.parse(turn.deadlineAt) + 30_000 <= Date.now())) throw new Error('Turn deadline expired');
       const deadlineExpired = Boolean(turn.deadlineAt && Date.parse(turn.deadlineAt) <= Date.now());
       const ownerId = randomUUID();
@@ -956,9 +969,10 @@ export class PlatformAgentAssistant {
       try {
         const rows = await diagnosticSpan('assistant.checkpoint.read', async () => this.conversations.listTurnCheckpoints(input.sessionId, input.turnId));
         const webStage = rows.find(row => row.checkpoint === 'controlled_web_stage');
-        if (webStage) return await this.resumeWebStage(input.sessionId, input.turnId, ownerId, webStage.payload,
-          deadlineExpired || input.signal?.aborted ? AbortSignal.timeout(25_000) : input.signal, input.onDelta);
         const checkpoint = rows.find((row) => row.checkpoint === 'platform_agent_submission');
+        const research = checkpoint?.payload.research as { step?: number } | undefined;
+        if (webStage && Number(webStage.payload.step ?? 0) >= (research?.step ?? 0)) return await this.resumeWebStage(input.sessionId, input.turnId, ownerId, webStage.payload,
+          deadlineExpired || input.signal?.aborted ? AbortSignal.timeout(25_000) : input.signal, input.onDelta);
         diagnosticEvent('assistant.checkpoint.found', { checkpointFound: Boolean(checkpoint) });
         const data = checkpoint?.payload as Record<string, unknown> | undefined;
         if (data?.kind === 'controlled_response') {

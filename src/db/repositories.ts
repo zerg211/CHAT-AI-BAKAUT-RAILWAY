@@ -934,23 +934,53 @@ export class ConversationRepository {
   }
 
   async expireInactiveSessions(maxInactiveMinutes = 30) {
-    const result = await this.db.query(
+    if (!isPool(this.db)) return this.expireInactiveSessionsOnConnection(maxInactiveMinutes, this.db);
+    const client = await this.db.connect();
+    try {
+      await client.query('BEGIN');
+      const count = await this.expireInactiveSessionsOnConnection(maxInactiveMinutes, client);
+      await client.query('COMMIT');
+      return count;
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  private async expireInactiveSessionsOnConnection(maxInactiveMinutes: number, db: Db) {
+    // Claims and heartbeats lock this same row. Recheck leases after obtaining the lock.
+    const candidates = await db.query(
+      `SELECT id FROM conversation_sessions
+       WHERE status = 'active' AND last_heartbeat_at < now() - ($1 || ' minutes')::interval
+       FOR UPDATE SKIP LOCKED`, [maxInactiveMinutes]);
+    if (!candidates.rowCount) return 0;
+    const result = await db.query(
       `UPDATE conversation_sessions
        SET status = 'expired', closed_at = now(), updated_at = now()
-       WHERE status = 'active' AND last_heartbeat_at < now() - ($1 || ' minutes')::interval
+       WHERE id = ANY($1::uuid[]) AND status = 'active'
          AND NOT EXISTS (
            SELECT 1 FROM conversation_turns t WHERE t.session_id = conversation_sessions.id
              AND t.status IN ('received', 'need_extracted', 'planned', 'answering')
-             AND (t.deadline_at IS NULL OR t.deadline_at > now())
+             AND (t.deadline_at > now() OR
+               (t.execution_owner IS NOT NULL AND t.execution_lease_expires_at > now()))
          )
        RETURNING id`,
-      [maxInactiveMinutes]
+      [candidates.rows.map(row => row.id)]
     );
     const expiredSessionIds = result.rows
       .map((row) => typeof row.id === 'string' ? row.id : null)
       .filter((id): id is string => Boolean(id));
     if (expiredSessionIds.length) {
-      await this.db.query(
+      await db.query(
+        `UPDATE conversation_turns SET status = 'failed', stage = 'session_expired',
+           error_code = 'session_expired', error_message = 'The inactive conversation session expired.',
+           execution_owner = NULL, execution_lease_expires_at = NULL, updated_at = now()
+         WHERE session_id = ANY($1::uuid[])
+           AND status IN ('received', 'need_extracted', 'planned', 'answering')`,
+        [expiredSessionIds]);
+      await db.query(
         `UPDATE lead_capture_drafts
          SET status = 'expired',
              name = NULL,
@@ -1273,7 +1303,7 @@ export class ConversationRepository {
        WHERE turn.session_id = active_session.id
          AND turn.id = $2
          AND turn.status IN ('received', 'need_extracted', 'planned', 'answering', 'failed')
-         AND coalesce(turn.error_code, '') <> 'cancelled_by_user'
+         AND coalesce(turn.error_code, '') NOT IN ('cancelled_by_user', 'controlled_submission_rejected')
          AND ((turn.deadline_at IS NULL OR turn.deadline_at > now()) OR (turn.deadline_at + interval '30 seconds' > now() AND EXISTS (SELECT 1 FROM turn_checkpoints cp WHERE cp.session_id = turn.session_id AND cp.turn_id = turn.id AND cp.checkpoint = 'platform_agent_submission')))
          AND (
            turn.status <> 'failed'

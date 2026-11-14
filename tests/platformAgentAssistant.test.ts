@@ -378,6 +378,50 @@ describe('site chat and platform agent', () => {
       Object.assign(config, { CONTROLLED_WEB_SEARCH_ENABLED: false, CONTROLLED_WEB_SEARCH_FEES_APPROVED: false });
     }
   });
+  it('preserves research across category recomposition and resumes the current step after two interruptions', async () => {
+    Object.assign(config, { CONTROLLED_WEB_SEARCH_ENABLED: true, CONTROLLED_WEB_SEARCH_FEES_APPROVED: true });
+    const entries = new Map<string, any>();
+    vi.mocked(repo.upsertTurnCheckpoint).mockImplementation(async entry => { entries.set(entry.checkpoint, structuredClone(entry.payload)); return undefined as never; });
+    state.checkpoints.mockImplementation(async () => [...entries].map(([checkpoint, payload]) => ({ checkpoint, payload })));
+    const id = '000000000000000000000001';
+    const item = { product_id: id, name: 'Товар', attributes: {}, description: 'Данные', documents: [], original_card: { id } };
+    const knownProducts = { source_revision: 'rev', product_ids: [id] };
+    state.known.mockResolvedValue({ source_revision: 'rev', completeness: 'full', items: [item] });
+    const answer = (query: string | null, selected: string[] = []) => JSON.stringify({ answer: query ? 'Черновик' : 'Предварительно подходит.',
+      selected, rejected: [], uncertain: [], selection_snapshots: [], availability: null,
+      web_search_intent: query ? { query, rationale: 'Проверка применимости' } : null });
+    const response = (turnId: string, query: string | null) => ({ sessionId: `controlled:${turnId}`, turnId,
+      model: 'gpt-6-luna', knownProducts, page: { source_revision: 'rev', items: [item] }, answer: answer(query, [id]) });
+    state.run.mockResolvedValueOnce({ sessionId: 'agent-session', turnId: 'initial', model: 'gpt-6-luna-2026-11-01', answer: answer('Класс оборудования') });
+    state.webSubmit.mockResolvedValueOnce('resp_source1').mockResolvedValueOnce('resp_source2');
+    state.webRead.mockImplementation(async (responseId: string) => ({ status: 'ok', responseId, model: 'gpt-6-luna-2026-11-01',
+      usage: null, toolFees: null, findings: responseId, sources: [] }));
+    state.controlledSubmit.mockResolvedValueOnce('resp_cont1').mockResolvedValueOnce('resp_repair').mockResolvedValueOnce('resp_cont2');
+    state.controlledWait.mockResolvedValueOnce({ ...response('resp_cont1', null),
+      page: { selection_mode: 'candidate_discovery', source_revision: 'rev', candidate_ids: [id] } })
+      .mockRejectedValueOnce(new Error('repair window ended'))
+      .mockResolvedValueOnce(response('resp_repair', 'Документ модели'))
+      .mockRejectedValueOnce(new Error('second search window ended'))
+      .mockResolvedValueOnce(response('resp_cont2', null));
+    try {
+      const service = new PlatformAgentAssistant(repo);
+      await expect(service.generateAnswer({ sessionId: 'chat', turnId: 'turn', userMessage: 'Подберите под задачу' })).rejects.toThrow('repair window ended');
+      expect(entries.get('platform_agent_submission')).toMatchObject({ research: { step: 1, receipts: [{ responseId: 'resp_source1' }] } });
+      state.getTurn.mockResolvedValue({ id: 'turn', status: 'answering', deadlineAt: null });
+      await expect(service.recoverTurn({ sessionId: 'chat', turnId: 'turn' })).rejects.toThrow('second search window ended');
+      const result = await service.recoverTurn({ sessionId: 'chat', turnId: 'turn' });
+      expect(result.productCards.map(card => card.id)).toEqual([id]);
+      expect(state.webSubmit.mock.calls.map(call => call[1])).toEqual(['turn-controlled-web-search', 'turn-controlled-web-search:1']);
+      expect(state.controlledSubmit.mock.calls.map(call => call[1])).toEqual(['turn-web-continuation', 'turn-catalog-recompose', 'turn-web-continuation:1']);
+      expect(state.controlledPrepare.mock.calls[1][0].priorWebSearchReceipts).toMatchObject([{ responseId: 'resp_source1' }]);
+      expect(state.controlledPrepare.mock.calls[2][0]).toMatchObject({ priorWebSearchReceipts: [{ responseId: 'resp_source1' }], webSearchReceipt: { responseId: 'resp_source2' } });
+      expect(state.controlledWait.mock.calls.map(call => call[1])).toEqual(['resp_cont1', 'resp_repair', 'resp_repair', 'resp_cont2', 'resp_cont2']);
+      expect(state.commitMessage).toHaveBeenCalledOnce();
+    } finally {
+      vi.mocked(repo.upsertTurnCheckpoint).mockImplementation(async () => undefined as never);
+      Object.assign(config, { CONTROLLED_WEB_SEARCH_ENABLED: false, CONTROLLED_WEB_SEARCH_FEES_APPROVED: false });
+    }
+  });
   it('answers from preserved product facts when model requests unavailable web search', async () => {
     const id = '000000000000000000000001';
     const item = { product_id: id, name: 'DPU', price_rub: 100, attributes: { 'Ширина': '550 мм' },
@@ -778,7 +822,7 @@ describe('site chat and platform agent', () => {
     expect(releaseOpenAIUsageReservation).toHaveBeenCalledWith('reservation');
     state.checkpoints.mockResolvedValue([{ checkpoint: 'platform_agent_submission', payload: saved }]);
     state.getTurn.mockResolvedValue({ id: 'turn', status: 'answering', deadlineAt: new Date(Date.now() + 60000).toISOString() });
-    await expect(new PlatformAgentAssistant(repo).recoverTurn({ sessionId: 'chat', turnId: 'turn' })).rejects.toThrow('was rejected');
+    await expect(new PlatformAgentAssistant(repo).recoverTurn({ sessionId: 'chat', turnId: 'turn' })).rejects.toThrow('rejected');
     expect(state.controlledSubmit).toHaveBeenCalledOnce();
     expect(state.controlledWait).not.toHaveBeenCalled();
   });

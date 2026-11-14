@@ -57,6 +57,8 @@ describe('streamChatMessage watchdog and explicit continuation', () => {
     expect(source).toContain('restoration.pendingTurn');
     expect(source).toContain('recoverChatTurn');
     expect(source).toContain('registerChatAbortController(abortRef, pendingController)');
+    expect(source).not.toContain('CHAT_TURN_TIMEOUT_MS');
+    expect(source).not.toContain('const turnTimeout');
     expect(source).toContain('submitError instanceof ChatMessageNotAcceptedError');
     expect(source).toContain('message.id !== userId && message.id !== assistantId');
     expect(source).toContain('setInput(userText)');

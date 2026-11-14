@@ -63,6 +63,7 @@ jobs:
           npm run migrate
           node --import tsx tests/knowledgeDatabase.integration.mjs
           node --import tsx tests/leadOutboxDatabase.integration.mjs
+          node --import tsx tests/researchLifecycleDatabase.integration.mjs
 
       - name: Verify real backend contracts without model calls
         env:

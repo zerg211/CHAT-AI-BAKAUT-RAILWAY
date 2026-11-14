@@ -12,6 +12,19 @@ import type { Message } from '../src/shared/types.js';
 vi.mock('../src/config.js', () => ({ config: { BAKAUT_MCP_TOKEN: 'mock-catalog-token', BAKAUT_CATALOG_URL: 'https://catalog-search-production.up.railway.app' } }));
 
 describe('Platform agent result', () => {
+  it.each(['get_product', 'get_products_batch'])('retains comparison-only subjects read by %s without prefetch', name => {
+    const ids = ['000000000000000000000001', '000000000000000000000002'];
+    const items = ids.map(product_id => ({ product_id, requested_product_id: product_id, name: product_id, status: 'found',
+      source_revision: 'rev', completeness: 'full', attributes: {}, description: '', documents: [], original_card: {} }));
+    const calls = (name === 'get_product' ? items : [{ status: 'ok', mode: 'full', source_revision: 'rev', results: items,
+      requested_ids: ids, requested_count: 2, returned_ids: ids, returned_count: 2, offset: 0, has_more: false, complete: true, next_cursor: null }])
+      .map(output => ({ turn_id: 't', type: 'mcp_call', server_label: 'bakaut_catalog', name, status: 'completed', output: { structuredContent: output } }));
+    const reply = (comparison_ids: string[]) => ({ turn_id: 't', role: 'assistant', phase: 'final_answer', content: [{ type: 'output_text',
+      text: JSON.stringify({ answer: 'Сравнение.', selected: [], rejected: [], uncertain: [], comparison_ids,
+        recommendation_status: 'not_applicable', selection_snapshots: [] }) }] });
+    expect(extractAgentResult([...calls, reply(ids)], 't').page?.items).toEqual(items);
+    expect(extractAgentResult([...calls, reply([...ids, 'unknown'])], 't').page).toBeUndefined();
+  });
   it('retains comparison-only full-prefetch subjects without marking them as selected', () => {
     const ids = ['000000000000000000000001', '000000000000000000000002'];
     const prefetch = { source_revision: 'rev', completeness: 'full' as const,
