@@ -12,6 +12,26 @@ import type { Message } from '../src/shared/types.js';
 vi.mock('../src/config.js', () => ({ config: { BAKAUT_MCP_TOKEN: 'mock-catalog-token', BAKAUT_CATALOG_URL: 'https://catalog-search-production.up.railway.app' } }));
 
 describe('Platform agent result', () => {
+  it('sends every original field once while preserving differing aliases and catalog metadata', () => {
+    const original = { характеристики: { мощность: '3 кВт' }, описание: 'Полный текст'.repeat(1000),
+      документы: [{ url: 'https://manufacturer.example/manual.pdf', text: 'Все страницы' }], бренд: 'Бренд',
+      дополнительные_сведения: { применение: 'Все исходные сведения' } };
+    const duplicated = { product_id: 'a', original_card: original, attributes: original.характеристики,
+      description: original.описание, documents: original.документы, brand: original.бренд, price_rub: 123, source_sha256: 'hash' };
+    const differing = { ...duplicated, product_id: 'b', attributes: { мощность: '4 кВт' }, description: 'Другое описание',
+      documents: [], brand: 'Другой бренд' };
+    const prefetch = { source_revision: 'rev', completeness: 'full' as const, items: [duplicated, differing],
+      groups: { previously_known: ['a'], mentioned_now: ['b'] } };
+    const before = JSON.stringify(prefetch);
+    const context = modelProductContext(prefetch);
+    expect(context.product_ids).toEqual(['a', 'b']);
+    expect(context.products[0]).toEqual({ product_id: 'a', original_card: original, price_rub: 123, source_sha256: 'hash' });
+    expect(context.products[1]).toEqual(differing);
+    expect(context.products.map(product => product.original_card)).toEqual([original, original]);
+    expect(JSON.stringify(prefetch)).toBe(before);
+    expect(context.groups).toEqual(prefetch.groups);
+  });
+
   it.each(['get_product', 'get_products_batch'])('retains comparison-only subjects read by %s without prefetch', name => {
     const ids = ['000000000000000000000001', '000000000000000000000002'];
     const items = ids.map(product_id => ({ product_id, requested_product_id: product_id, name: product_id, status: 'found',
@@ -1120,14 +1140,14 @@ describe('Controlled Responses original context', () => {
     expect(prefetch.items).toEqual(fixture.pages.flatMap((page: { results: unknown[] }) => page.results));
     expect(prefetch.items.map(item => item.product_id)).toEqual(fixture.ids);
     expect(prefetch.items.map(item => item.original_card)).toEqual(fixture.cards);
-    expect(modelProductContext(prefetch).products).toEqual(prefetch.items);
+    expect(modelProductContext(prefetch).products.map(product => product.original_card)).toEqual(prefetch.items.map(product => product.original_card));
     const { client, transport } = harness();
     const plan = await client.prepare({ message: 'Опишите весь известный набор', history: [], prefetch });
     const input = plan.request.input as Array<{ content: Array<{ text: string }> }>;
     const text = input[1].content.map(part => part.text).join('');
     const delivered = JSON.parse(text.slice(text.indexOf('{')));
     expect(delivered.product_ids).toEqual(fixture.ids);
-    expect(delivered.products).toEqual(prefetch.items);
+    expect(delivered.products).toEqual(modelProductContext(prefetch).products);
     expect(delivered.products.map((item: { original_card: unknown }) => item.original_card)).toEqual(fixture.cards);
     expect(transport.mock.calls.every(([url]) => new URL(url).pathname !== '/v1/responses')).toBe(true);
 
@@ -1167,7 +1187,7 @@ describe('Controlled Responses original context', () => {
     expect(delivered.products).toHaveLength(12);
     for (let i = 0; i < 12; i++) {
       expect(delivered.products[i].original_card).toEqual(fixture.items[i].original);
-      expect(delivered.products[i].documents).toEqual(fixture.items[i].original.документы ?? []);
+      expect(delivered.products[i].original_card.документы ?? delivered.products[i].documents).toEqual(fixture.items[i].original.документы ?? []);
       expect(delivered.products[i].source_file).toBe(fixture.items[i].source_file);
       expect(delivered.products[i].source_sha256).toBe(fixture.items[i].source_sha256);
     }

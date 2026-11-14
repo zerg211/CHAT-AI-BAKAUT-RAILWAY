@@ -174,7 +174,17 @@ export function collectKnownProducts(calls: Array<{ name: string; payload?: Reco
 
 export function modelProductContext(prefetch: ExactMentionPrefetch) {
   if (prefetch.completeness === 'full_read_required') throw new Error('Known products have not been fully read');
+  const products = prefetch.items.map(item => {
+    const original = object(item.original_card);
+    if (!original) return item;
+    const product = { ...item };
+    const aliases = { attributes: 'характеристики', description: 'описание', documents: 'документы', brand: 'бренд' };
+    for (const [alias, field] of Object.entries(aliases)) {
+      if (Object.hasOwn(original, field) && JSON.stringify(product[alias]) === JSON.stringify(original[field])) delete product[alias];
+    }
+    return product;
+  });
   return { source_revision: prefetch.source_revision, completeness: 'full',
-    product_ids: prefetch.items.map(item => item.product_id), products: prefetch.items,
+    product_ids: prefetch.items.map(item => item.product_id), products,
     ...(prefetch.groups ? { groups: prefetch.groups } : {}) };
 }

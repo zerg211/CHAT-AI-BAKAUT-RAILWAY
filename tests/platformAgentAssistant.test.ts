@@ -1128,12 +1128,27 @@ describe('site chat and platform agent', () => {
     expect(vi.mocked(repo.upsertTurnCheckpoint).mock.invocationCallOrder[archived]).toBeLessThan(state.controlledPrepare.mock.invocationCallOrder[1]);
   });
 
+  it('publishes a ready clarification without generating another catalog review', async () => {
+    const { question, repaired, original } = mixedRepairFixture();
+    const clarification = 'Какая рабочая ширина вам нужна?';
+    state.controlledWait.mockReset().mockResolvedValueOnce(original).mockResolvedValueOnce({
+      ...repaired,
+      answer: JSON.stringify({ ...JSON.parse(repaired.answer), answer: clarification, web_search_intent: null,
+        answer_review: { verdict: 'intermediate', publication: 'ready', rationale: 'Buyer input is required' } })
+    }).mockRejectedValue(new Error('Unexpected extra generation'));
+    const result = await new PlatformAgentAssistant(repo).generateAnswer({ sessionId: 'chat', turnId: 'turn', userMessage: question });
+    expect(result.answer).toBe(clarification);
+    expect(state.controlledSubmit).toHaveBeenCalledTimes(2);
+    expect(state.commitMessage).toHaveBeenCalledOnce();
+  });
+
   it('rejects missing corrected identities without another repair generation and still records both usages', async () => {
     const { question, ids, repaired, original } = mixedRepairFixture();
     state.controlledWait.mockReset();
     state.controlledWait.mockResolvedValueOnce(original)
       .mockResolvedValueOnce({ ...repaired, answer: JSON.stringify({ answer: 'Технический ответ', selected: ids.slice(0, 11),
-        rejected: [], uncertain: [], selection_snapshots: [], availability: null }) });
+        rejected: [], uncertain: [], selection_snapshots: [], availability: null,
+        answer_review: { verdict: 'intermediate', publication: 'ready', rationale: 'Buyer input is required' } }) });
     await expect(new PlatformAgentAssistant(repo).generateAnswer({ sessionId: 'chat', turnId: 'turn', userMessage: question }))
       .rejects.toThrow('Recomposed catalog answer failed validation');
     expect(state.controlledSubmit).toHaveBeenCalledTimes(2);
