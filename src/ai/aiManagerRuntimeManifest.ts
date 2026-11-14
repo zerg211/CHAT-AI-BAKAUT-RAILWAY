@@ -1,4 +1,4 @@
-export const AI_MANAGER_RUNTIME_VERSION = '2026-11-14.resumable-agent-research-v8';
+export const AI_MANAGER_RUNTIME_VERSION = '2026-11-14.resumable-agent-research-v9';
 export const AI_MANAGER_CONTRACT_VERSION = '2026-11-03.catalog-snapshot-v1';
 
 export const AI_MANAGER_RUNTIME_MANIFEST = Object.freeze({

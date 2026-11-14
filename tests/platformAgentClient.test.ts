@@ -1265,6 +1265,21 @@ describe('Controlled Responses original context', () => {
     expect(result.knownProducts?.product_ids).toHaveLength(133);
     expect(transport.mock.calls.filter(([url, init]) => new URL(url).pathname === '/v1/responses' && init?.method === 'POST')).toHaveLength(1);
   });
+  it('retains the completed discovery stage and full candidate identities after external research', async () => {
+    const { client } = harness();
+    const prefetch = fullCards(2);
+    const ids = prefetch.items.map(item => item.product_id);
+    const plan = await client.prepare({ message: 'Исходная задача покупателя', history: [], prefetch, classificationIds: ids,
+      webSearchReceipt: { status: 'ok', responseId: 'resp_source', model: 'gpt-6-luna', usage: null, toolFees: null,
+        monetaryCost: null, costStatus: 'unknown', sources: [], findings: 'Уточнены данные точного артикула' } });
+    const texts = (plan.request.input as any[]).flatMap(item => item.content.map((part: any) => part.text));
+    const stageText = texts.find(text => text.startsWith('Состояние текущего исследования'));
+    expect(JSON.parse(stageText.slice(stageText.indexOf('{')))).toEqual({ stage: 'assess_full_candidates', candidate_ids: ids,
+      original_cards: 'already_supplied', category_discovery: 'completed', external_search_results: 1 });
+    expect(texts.some(text => text.includes('Уточнены данные точного артикула'))).toBe(true);
+    expect(plan.request.instructions).toContain('Это продолжение, а не новый старт подбора');
+    expect(plan.prefetch.items).toEqual(prefetch.items);
+  });
   it('resumes a saved request after JSON object keys are reordered without resubmitting or accepting changed content', async () => {
     const { client, transport } = harness();
     const plan = await client.prepare({ message: 'Сравните товары', history: [], prefetch: fullCards(2) });

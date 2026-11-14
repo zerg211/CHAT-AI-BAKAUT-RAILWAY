@@ -8,12 +8,12 @@ export function catalogReviewSchema(ids: string[], names?: Record<string, string
   const { selected: _selected, rejected: _rejected, uncertain: _uncertain, answer, ...properties } = outputFormat.schema.properties;
   return { ...outputFormat.schema, properties: {
     candidate_decisions: { type: 'object', additionalProperties: false,
-      description: 'Оцени КАЖДОГО кандидата по текущему запросу: selected — подтверждённо подходит; rejected — установлен конфликт; uncertain — решающий факт требует проверки. Прежние товары не входят в новый подбор автоматически.',
+      description: 'Оцени КАЖДОГО кандидата по текущему запросу. В basis кратко назови решающие факты именно этого товара, их источник в полной карточке или найденном документе и соответствие условиям покупателя. Не переноси факты соседнего товара. Назови решающий пробел или конфликт. Затем decision: selected — подтверждённо подходит; rejected — установлен конфликт; uncertain — решающий факт требует проверки. Прежние товары не входят в новый подбор автоматически.',
       properties: Object.fromEntries(ids.map(id => [id, names ? {
         type: 'object', additionalProperties: false, properties: {
           product_name: { type: 'string', enum: [names[id]] },
-          basis: { type: 'string', description: 'Кратко назови решающие факты ИМЕННО ЭТОГО товара и их источник в полной карточке или найденном документе. Сопоставь с текущими условиями покупателя. Не переноси факты соседнего товара. Если есть конфликт или пробел, назови его.' },
-          decision: { type: 'string', enum: [...decisions], description: 'Решение по названным фактам: подтверждённое соответствие, установленный конфликт или решающая неизвестная. Неполнота данных сама по себе не означает rejected.' }
+          basis: { type: 'string' },
+          decision: { type: 'string', enum: [...decisions] }
         }, required: ['product_name', 'basis', 'decision']
       } : { type: 'string', enum: [...decisions] }])), required: ids },
     ...properties,
