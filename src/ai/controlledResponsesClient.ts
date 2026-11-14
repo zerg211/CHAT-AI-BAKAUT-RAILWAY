@@ -89,7 +89,7 @@ function catalogTool() {
   if (base.protocol !== 'https:' || base.hostname !== 'catalog-search-production.up.railway.app' ||
     base.username || base.password || !config.BAKAUT_MCP_TOKEN) throw new Error('Controlled catalog access is not configured');
   return { type: 'mcp', server_label: 'bakaut_catalog', server_url: new URL('/mcp', base).href,
-    allowed_tools: ['list_categories', 'get_product', 'get_products_batch', 'semantic_select_products', 'web_search_facts'],
+    allowed_tools: ['list_categories', 'get_product', 'semantic_select_products', 'web_search_facts'],
     require_approval: 'never' };
 }
 function authenticated(body: JsonObject): JsonObject {
@@ -154,6 +154,7 @@ export class ControlledResponsesClient {
         Object.fromEntries(prefetch.items.map(item => [item.product_id, String(item.name ?? '')]))) : outputFormat.schema };
     const searches = [...input.priorWebSearchReceipts ?? [], ...input.webSearchReceipt ? [input.webSearchReceipt] : []].map(webSearchContinuation);
     const request = clone({ model: saved.model, instructions: saved.instructions + platformAgentInstructions
+      + '\nВ этом режиме полные оригиналы известных товаров уже приложены. Массовую загрузку всех карточек новых выбранных категорий выполняет сервер после semantic_select_products: верни результат обнаружения, и оригиналы будут переданы следующим сохранённым шагом. Не загружай известный набор повторно. Для уточнения нового отдельного товара доступен get_product без fields: он возвращает полную оригинальную карточку. Категории и нужные дополнительные источники выбираешь ты.'
       + webIntentInstruction(Boolean(config.CONTROLLED_WEB_SEARCH_ENABLED && config.CONTROLLED_WEB_SEARCH_FEES_APPROVED))
       + (input.classificationIds ? '\nВ этом продолжении вместо массивов selected/rejected/uncertain заполни candidate_decisions по каждому ID из схемы. Для каждого товара сначала укажи его точное имя и краткую фактическую основу соответствия текущему запросу, затем решение. Это резюме фактов для проверки, не подробный ход рассуждений. Сервер только преобразует твои решения в группы. Не исключай подходящие товары ради короткого ответа. Виджет покажет весь список и цены; в answer дай краткий содержательный вывод, не дублируя длинное перечисление. Не превращай прежние товары из истории в кандидатов новой темы.' : '')
       + (input.classificationIds ? '\nТЕКУЩИЙ ЭТАП: оценка уже найденных кандидатов по переданным полным оригиналам. Это продолжение, а не новый старт подбора. Общая инструкция сначала вызвать semantic_select_products и вернуть пустой черновик уже выполнена. Оригиналы каждого ID из candidate_decisions доступны в текущем сообщении с карточками; не утверждай, что ещё ждёшь их. Не повторяй поиск той же категории и чтение уже переданных карточек. Если нужны другие категории или новые факты, сам выбери необходимый инструмент или web_search_intent. Иначе заверши оценку и верни содержательный окончательный ответ с answer_review.publication=ready, selection_snapshots=[].' : '')

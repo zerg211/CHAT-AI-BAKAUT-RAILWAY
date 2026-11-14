@@ -1254,6 +1254,10 @@ describe('Controlled Responses original context', () => {
     expect(schema.properties.selected).toBeUndefined();
     expect(plan.manifest.classification_ids).toEqual(ids);
     expect(plan.manifest.classification_format).toBe('identity_facts_v1');
+    const available = (plan.request.tools as any[])[0].allowed_tools;
+    expect(available).not.toContain('get_products_batch');
+    expect(available).toEqual(expect.arrayContaining(['get_product', 'semantic_select_products', 'list_categories']));
+    expect(plan.prefetch.items).toEqual(prefetch.items);
     await client.submit(plan, 'review-turn');
     const saved = JSON.parse(JSON.stringify(plan));
     const result = await client.wait(saved, 'resp_controlled');
