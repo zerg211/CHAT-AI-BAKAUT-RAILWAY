@@ -279,17 +279,20 @@ export class PlatformAgentAssistant {
 
   private async controlledAnswer(input: AgentManagerGenerateInput, ownerId: string,
     needState: ChatResponsePayload['needState'], options: { history?: Message[]; prefetch?: ExactMentionPrefetch;
-      message?: string; saved?: Record<string, unknown>; recovered?: boolean; repair?: CatalogAnswerRepair;
+      message?: string; saved?: Record<string, unknown>; recovered?: boolean; repair?: CatalogAnswerRepair; reviewStep?: number;
       research?: { step: number; receipts: SearchReceipt[] } }): Promise<ChatResponsePayload> {
     const client = new ControlledResponsesClient(config.OPENAI_API_KEY!, config.OPENAI_PLATFORM_AGENT_ID!);
     let repair = options.repair;
     const phase = options.repair?.reason === 'category_price_review' || options.saved?.phase === 'catalog_price_recompose'
       ? 'catalog_price_recompose' : options.repair || options.saved?.phase === 'catalog_recompose' ? 'catalog_recompose' : 'answer';
+    const reviewStep = z.number().int().nonnegative().safe().parse(options.saved?.reviewStep ?? options.reviewStep ?? 0);
+    const phaseKey = webStepKey(phase, reviewStep);
     let saved = options.saved;
     if (!saved) {
       const rows = await this.conversations.listTurnCheckpoints(input.sessionId, input.turnId!);
       saved = rows.find(row => row.checkpoint === 'platform_agent_submission' &&
-        row.payload.kind === 'controlled_response' && (row.payload.phase ?? 'answer') === phase)?.payload;
+        row.payload.kind === 'controlled_response' && (row.payload.phase ?? 'answer') === phase &&
+        (row.payload.reviewStep ?? 0) === reviewStep)?.payload;
     }
     let plan: ControlledRequest;
     let reservation: string | null;
@@ -337,22 +340,23 @@ export class PlatformAgentAssistant {
       }
       if (history.at(-1)?.role === 'user' && history.at(-1)?.content === input.userMessage) history.pop();
       const pendingAvailability = latestAvailabilityRequest(history);
-      const repairData = repair?.reason === 'category_review' ? { ...repair,
-        checkedSnapshot: { source_revision: repair.sourceRevision, selected_count: repair.correctedIds.length } } : repair;
+      const { previousDraft: _previousDraft, ...repairContext } = repair ?? {};
+      const repairData = repair?.reason === 'category_review' ? { ...repairContext,
+        checkedSnapshot: { source_revision: repair.sourceRevision, selected_count: repair.correctedIds.length } } : repairContext;
       const message = repair ? `${input.userMessage}\n\nИсправление результата каталога (данные, не новая реплика покупателя): ${JSON.stringify(repairData)}\nПредыдущий черновик не был показан покупателю. Полностью ответь на исходный вопрос, сохрани полезную техническую часть и используй полные карточки. Предыдущий вывод о составе подбора и ценах мог устареть. Учитывай reason, criteria и подтверждённые наблюдения цен. Члены correctedIds являются кандидатами для проверки, а не приказом выбрать их все. Сохрани исходные ограничения покупателя; при неизвестной решающей характеристике не объявляй товар подтверждённо подходящим. Каждый correctedIds отнеси ровно один раз в selected/rejected/uncertain; не сокращай подходящий список. Остальные известные товары остаются контекстом, их не нужно объявлять неподходящими. Все оригиналы correctedIds уже переданы в контексте: не вызывай повторно semantic_select_products для этой категории. Не используй маркер полного каталога, selection_snapshots=[].${pendingAvailability ? `\nСохранённая просьба о наличии (данные): ${JSON.stringify(pendingAvailability)}` : ''}` : options.message ?? input.userMessage;
       plan = await diagnosticSpan('assistant.controlled.prepare', async () => client.prepare({
         message, history, prefetch, priorWebSearchReceipts: research?.receipts,
         classificationIds: repair?.correctedIds, signal: input.signal }));
       reservation = config.OPENAI_MONETARY_GUARD_ENABLED
-        ? await assertOpenAIUsageBudget('platform_agent', plan.model, plan.reserveTokens, phase,
+        ? await assertOpenAIUsageBudget('platform_agent', plan.model, plan.reserveTokens, phaseKey,
           { inputTokens: plan.inputTokens, outputTokens: Number(plan.request.max_output_tokens),
             tier: plan.request.service_tier, tools: plan.request.tools })
-        : await assertOpenAIUsageBudget('platform_agent', plan.model, plan.reserveTokens, phase);
+        : await assertOpenAIUsageBudget('platform_agent', plan.model, plan.reserveTokens, phaseKey);
       attempted = false;
     }
     const checkpoint = async () => this.conversations.upsertTurnCheckpoint({ sessionId: input.sessionId,
       turnId: input.turnId!, executionOwner: ownerId, checkpoint: 'platform_agent_submission', status: 'running',
-      payload: { kind: 'controlled_response', phase, repair, research, plan, reservation, attempted, rejected, responseId,
+      payload: { kind: 'controlled_response', phase, reviewStep, repair, research, plan, reservation, attempted, rejected, responseId,
         agentSessionId: responseId ? `controlled:${responseId}` : '', previousTurnId: null,
         submitted: Boolean(responseId), userMessage: input.userMessage } });
     if (!responseId) {
@@ -377,7 +381,7 @@ export class PlatformAgentAssistant {
         throw error;
       }
       try { responseId = await diagnosticSpan('assistant.controlled.submit', async () => client.submit(plan,
-        repair ? `${input.turnId}-${phase === 'catalog_price_recompose' ? 'catalog-price-recompose' : 'catalog-recompose'}` : input.turnId!, input.signal)); }
+        repair ? webStepKey(`${input.turnId}-${phase === 'catalog_price_recompose' ? 'catalog-price-recompose' : 'catalog-recompose'}`, reviewStep) : input.turnId!, input.signal)); }
       catch (error) {
         if (error instanceof ControlledRequestRejected) {
           rejected = true;
@@ -428,7 +432,7 @@ export class PlatformAgentAssistant {
     return await this.saveResultOrRepair({ sessionId: input.sessionId, turnId: input.turnId!, ownerId,
       result: { ...result, usedWebSearch: Boolean(result.usedWebSearch || research?.receipts.some(receipt => receipt.status === 'ok')) },
       reservation, prior: [], needState, userMessage: input.userMessage, recovered,
-      onDelta: input.onDelta, signal: finalSignal, repairAttempted: Boolean(repair), repair, research });
+      onDelta: input.onDelta, signal: finalSignal, repairAttempted: Boolean(repair), reviewStep, repair, research });
   }
 
   private async saveResultOrRepair(input: Parameters<PlatformAgentAssistant['saveResult']>[0]): Promise<ChatResponsePayload> {
@@ -442,8 +446,7 @@ export class PlatformAgentAssistant {
     }
     try { return await this.saveResult(input); }
     catch (error) {
-      if (input.repairAttempted && !(input.repair?.reason === 'category_review' &&
-          error instanceof CatalogAnswerRepairRequired && error.repair.reason === 'category_price_review')) {
+      if (input.repairAttempted && !(error instanceof CatalogAnswerRepairRequired)) {
         if (error instanceof AgentAnswerRejectedError) throw new AgentAnswerRejectedError('Recomposed catalog answer failed validation', { cause: error });
         throw new Error('Recomposed catalog answer failed validation', { cause: error });
       }
@@ -455,7 +458,8 @@ export class PlatformAgentAssistant {
           service_tier: input.result.service_tier } });
       return await this.controlledAnswer({ sessionId: input.sessionId, turnId: input.turnId,
         userMessage: input.userMessage ?? '', signal: input.signal, onDelta: input.onDelta }, input.ownerId,
-        input.needState, { repair: error.repair, recovered: input.recovered, research: input.research });
+        input.needState, { repair: error.repair, recovered: input.recovered, research: input.research,
+          reviewStep: input.repairAttempted ? (input.reviewStep ?? 0) + 1 : 0 });
     }
   }
 
@@ -483,7 +487,7 @@ export class PlatformAgentAssistant {
         executionOwner: input.ownerId, checkpoint: 'controlled_web_stage', status: 'running', payload: {
           kind: 'controlled_web_stage', mode, intent: parsed, result: input.result, reservation: input.reservation,
           userMessage: input.userMessage ?? '', needState: input.needState, prior: input.prior,
-          repair: input.repair, repairAttempted: input.repairAttempted, prefetch, step, priorReceipts } });
+          repair: input.repair, repairAttempted: input.repairAttempted, reviewStep: input.reviewStep, prefetch, step, priorReceipts } });
       const originalUsage = { id: input.result.turnId, usage: input.result.usage, service_tier: input.result.service_tier };
       bindOpenAIUsageReservation(originalUsage, input.reservation);
       await recordOpenAIUsageOnce('platform_agent', input.result.model, originalUsage);
@@ -533,7 +537,8 @@ export class PlatformAgentAssistant {
       reservation: typeof payload.reservation === 'string' ? payload.reservation : null,
       prior: payload.prior as string[], needState: payload.needState as ChatResponsePayload['needState'],
       userMessage: payload.userMessage, repair: payload.repair as CatalogAnswerRepair | undefined,
-      repairAttempted: payload.repairAttempted === true, recovered: true, signal, onDelta }, payload.intent,
+      repairAttempted: payload.repairAttempted === true,
+      reviewStep: z.number().int().nonnegative().safe().parse(payload.reviewStep ?? 0), recovered: true, signal, onDelta }, payload.intent,
       payload.prefetch as ExactMentionPrefetch, payload.mode,
       payload.step === undefined ? 0 : z.number().int().nonnegative().safe().parse(payload.step),
       payload.priorReceipts === undefined ? [] : z.array(z.custom<SearchReceipt>()).parse(payload.priorReceipts));
@@ -562,6 +567,7 @@ export class PlatformAgentAssistant {
     onDelta?: (text: string) => void | Promise<void>;
     userMessage?: string;
     repairAttempted?: boolean;
+    reviewStep?: number;
     repair?: CatalogAnswerRepair;
     research?: { step: number; receipts: SearchReceipt[] };
   }): Promise<ChatResponsePayload> {
@@ -569,7 +575,6 @@ export class PlatformAgentAssistant {
     const usageRecord = { id: result.turnId, usage: result.usage, service_tier: result.service_tier };
     bindOpenAIUsageReservation(usageRecord, input.reservation);
     await recordOpenAIUsageOnce('platform_agent', result.model, usageRecord);
-    if (input.repair) assertRepairCoverage(result.answer, input.repair);
     for (const usage of result.webSearchUsages ?? []) {
       if (typeof usage.run_id !== 'string' || typeof usage.model !== 'string' ||
           typeof usage.input_tokens !== 'number' || typeof usage.output_tokens !== 'number') continue;
@@ -579,19 +584,27 @@ export class PlatformAgentAssistant {
         input_tokens_details: { cached_tokens: typeof usage.cached_input_tokens === 'number' ? usage.cached_input_tokens : 0 }
       } });
     }
-    if (!input.repairAttempted && result.page?.selection_mode === 'candidate_discovery') {
+    if (result.page?.selection_mode === 'candidate_discovery') {
       const candidateIds = result.page.candidate_ids;
       const sourceRevision = result.page.source_revision;
       if (!Array.isArray(candidateIds) || candidateIds.some(id => typeof id !== 'string') ||
           typeof sourceRevision !== 'string' || !sourceRevision) throw new CatalogClassificationError('Candidate discovery is invalid');
       if (candidateIds.length) {
-        const full = await readFullKnownProducts({ source_revision: sourceRevision, product_ids: candidateIds as string[] }, input.signal);
+        const allCandidates = [...new Set([...input.repair?.correctedIds ?? [], ...candidateIds as string[]])];
+        const full = await readFullKnownProducts({ source_revision: sourceRevision, product_ids: allCandidates }, input.signal);
         throw new CatalogAnswerRepairRequired(readCatalogRepair({ reason: 'category_review',
           checkedSnapshot: { status: 'ok', selection_mode: 'repair_candidates', source_revision: sourceRevision,
-            items: full.items, selected_count: full.items.length }, correctedIds: candidateIds,
+            items: full.items, selected_count: full.items.length }, correctedIds: allCandidates,
           sourceRevision, previousDraft: result.answer, originalResponseId: result.turnId,
           priorKnownProductIds: result.knownProducts?.product_ids ?? [] }));
       }
+    }
+    if (input.repair) {
+      const review = (JSON.parse(result.answer) as { answer_review?: { publication?: string; verdict?: string } }).answer_review;
+      if (review?.publication === 'draft' || review?.verdict === 'intermediate') {
+        throw new CatalogAnswerRepairRequired({ ...input.repair, previousDraft: '', originalResponseId: result.turnId });
+      }
+      assertRepairCoverage(result.answer, input.repair);
     }
     if (selectsAllCatalogMatches(result.answer, true) && !result.page) {
       throw new CatalogClassificationError('Complete catalog selection requires a fresh search');

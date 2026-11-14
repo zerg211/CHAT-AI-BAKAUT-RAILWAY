@@ -380,7 +380,7 @@ describe('site chat and platform agent', () => {
       Object.assign(config, { CONTROLLED_WEB_SEARCH_ENABLED: false, CONTROLLED_WEB_SEARCH_FEES_APPROVED: false });
     }
   });
-  it('preserves research across category recomposition and resumes the current step after two interruptions', async () => {
+  it('preserves research through repeated category reviews and resumes the current step after three interruptions', async () => {
     Object.assign(config, { CONTROLLED_WEB_SEARCH_ENABLED: true, CONTROLLED_WEB_SEARCH_FEES_APPROVED: true });
     const entries = new Map<string, any>();
     vi.mocked(repo.upsertTurnCheckpoint).mockImplementation(async entry => { entries.set(entry.checkpoint, structuredClone(entry.payload)); return undefined as never; });
@@ -398,26 +398,37 @@ describe('site chat and platform agent', () => {
     state.webSubmit.mockResolvedValueOnce('resp_source1').mockResolvedValueOnce('resp_source2');
     state.webRead.mockImplementation(async (responseId: string) => ({ status: 'ok', responseId, model: 'gpt-6-luna-2026-11-01',
       usage: null, toolFees: null, findings: responseId, sources: [] }));
-    state.controlledSubmit.mockResolvedValueOnce('resp_cont1').mockResolvedValueOnce('resp_repair').mockResolvedValueOnce('resp_cont2');
+    state.controlledSubmit.mockResolvedValueOnce('resp_cont1').mockResolvedValueOnce('resp_repair').mockResolvedValueOnce('resp_cont2')
+      .mockResolvedValueOnce('resp_review1').mockResolvedValueOnce('resp_review2');
     state.controlledWait.mockResolvedValueOnce({ ...response('resp_cont1', null),
       page: { selection_mode: 'candidate_discovery', source_revision: 'rev', candidate_ids: [id] } })
       .mockRejectedValueOnce(new Error('repair window ended'))
       .mockResolvedValueOnce(response('resp_repair', 'Документ модели'))
       .mockRejectedValueOnce(new Error('second search window ended'))
-      .mockResolvedValueOnce(response('resp_cont2', null));
+      .mockResolvedValueOnce({ ...response('resp_cont2', null),
+        page: { selection_mode: 'candidate_discovery', source_revision: 'rev', candidate_ids: [id] } })
+      .mockResolvedValueOnce({ ...response('resp_review1', null), answer: JSON.stringify({ ...JSON.parse(answer(null, [id])),
+        answer_review: { verdict: 'intermediate', publication: 'draft', rationale: 'Нужна завершающая оценка переданных оригиналов' } }) })
+      .mockRejectedValueOnce(new Error('third review window ended'))
+      .mockResolvedValueOnce(response('resp_review2', null));
     try {
       const service = new PlatformAgentAssistant(repo);
       await expect(service.generateAnswer({ sessionId: 'chat', turnId: 'turn', userMessage: 'Подберите под задачу' })).rejects.toThrow('repair window ended');
       expect(entries.get('platform_agent_submission')).toMatchObject({ research: { step: 1, receipts: [{ responseId: 'resp_source1' }] } });
       state.getTurn.mockResolvedValue({ id: 'turn', status: 'answering', deadlineAt: null });
       await expect(service.recoverTurn({ sessionId: 'chat', turnId: 'turn' })).rejects.toThrow('second search window ended');
+      await expect(service.recoverTurn({ sessionId: 'chat', turnId: 'turn' })).rejects.toThrow('third review window ended');
+      expect(entries.get('platform_agent_submission')).toMatchObject({ reviewStep: 2,
+        research: { step: 2, receipts: [{ responseId: 'resp_source1' }, { responseId: 'resp_source2' }] } });
       const result = await service.recoverTurn({ sessionId: 'chat', turnId: 'turn' });
       expect(result.productCards.map(card => card.id)).toEqual([id]);
       expect(state.webSubmit.mock.calls.map(call => call[1])).toEqual(['turn-controlled-web-search', 'turn-controlled-web-search:1']);
-      expect(state.controlledSubmit.mock.calls.map(call => call[1])).toEqual(['turn-web-continuation', 'turn-catalog-recompose', 'turn-web-continuation:1']);
+      expect(state.controlledSubmit.mock.calls.map(call => call[1])).toEqual(['turn-web-continuation', 'turn-catalog-recompose',
+        'turn-web-continuation:1', 'turn-catalog-recompose:1', 'turn-catalog-recompose:2']);
       expect(state.controlledPrepare.mock.calls[1][0].priorWebSearchReceipts).toMatchObject([{ responseId: 'resp_source1' }]);
       expect(state.controlledPrepare.mock.calls[2][0]).toMatchObject({ priorWebSearchReceipts: [{ responseId: 'resp_source1' }], webSearchReceipt: { responseId: 'resp_source2' } });
-      expect(state.controlledWait.mock.calls.map(call => call[1])).toEqual(['resp_cont1', 'resp_repair', 'resp_repair', 'resp_cont2', 'resp_cont2']);
+      expect(state.controlledWait.mock.calls.map(call => call[1])).toEqual(['resp_cont1', 'resp_repair', 'resp_repair',
+        'resp_cont2', 'resp_cont2', 'resp_review1', 'resp_review2', 'resp_review2']);
       expect(state.commitMessage).toHaveBeenCalledOnce();
     } finally {
       vi.mocked(repo.upsertTurnCheckpoint).mockImplementation(async () => undefined as never);
@@ -503,6 +514,27 @@ describe('site chat and platform agent', () => {
     expect(state.controlledSubmit).toHaveBeenCalledOnce();
     expect(state.commitMessage).not.toHaveBeenCalled();
   });
+  it('keeps earlier candidates when the agent discovers an additional category during review', async () => {
+    const ids = ['000000000000000000000001', '000000000000000000000002'];
+    const items = ids.map(product_id => ({ product_id, name: product_id, price_rub: 100, attributes: {},
+      description: 'Полные данные', documents: [], original_card: { product_id } }));
+    state.known.mockImplementation(async context => ({ source_revision: 'rev', completeness: 'full',
+      items: items.filter(item => context.product_ids.includes(item.product_id)) }));
+    const discovery = (turnId: string, candidate_ids: string[]) => ({ sessionId: 'agent-session', turnId, model: 'gpt-6-luna',
+      page: { selection_mode: 'candidate_discovery', source_revision: 'rev', candidate_ids },
+      answer: JSON.stringify({ answer: '', selected: [], rejected: [], uncertain: [], selection_snapshots: [], availability: null }) });
+    state.run.mockResolvedValueOnce(discovery('initial', [ids[0]]));
+    state.controlledSubmit.mockResolvedValueOnce('resp_review0').mockResolvedValueOnce('resp_review1');
+    state.controlledWait.mockResolvedValueOnce(discovery('resp_review0', [ids[1]]))
+      .mockResolvedValueOnce({ sessionId: 'controlled:resp_review1', turnId: 'resp_review1', model: 'gpt-6-luna',
+        page: { source_revision: 'rev', items }, answer: JSON.stringify({ answer: 'Оба варианта подходят', selected: ids,
+          rejected: [], uncertain: [], selection_snapshots: [], availability: null }) });
+    const result = await new PlatformAgentAssistant(repo).generateAnswer({ sessionId: 'chat', turnId: 'turn', userMessage: 'Все подходящие варианты' });
+    expect(result.productCards.map(card => card.id)).toEqual(ids);
+    expect(state.controlledPrepare.mock.calls[1][0].classificationIds).toEqual(ids);
+    expect(state.controlledSubmit.mock.calls.map(call => call[1])).toEqual(['turn-catalog-recompose', 'turn-catalog-recompose:1']);
+    expect(state.commitMessage).toHaveBeenCalledOnce();
+  });
   it('recovers a known category review response without a second submission', async () => {
     const id = '000000000000000000000001';
     const item = { product_id: id, name: 'Товар', price_rub: 100, attributes: {}, description: 'Данные', documents: [], original_card: { id } };
@@ -578,7 +610,7 @@ describe('site chat and platform agent', () => {
     const result = await new PlatformAgentAssistant(repo).generateAnswer({ sessionId: 'chat', turnId: 'turn', userMessage: 'Подберите товар' });
     expect(result.answer).toBe('Цена 100 ₽.');
     expect(result.productCards[0].price).toBe(100);
-    expect(state.controlledSubmit.mock.calls.map(call => call[1])).toEqual(['turn-catalog-recompose', 'turn-catalog-price-recompose']);
+    expect(state.controlledSubmit.mock.calls.map(call => call[1])).toEqual(['turn-catalog-recompose', 'turn-catalog-price-recompose:1']);
     expect(assertOpenAIUsageBudget).toHaveBeenCalledTimes(3);
     expect(vi.mocked(repo.upsertTurnCheckpoint).mock.calls.some(([entry]) => entry.checkpoint === 'platform_agent_usage:resp_controlled')).toBe(true);
     expect(state.commitMessage).toHaveBeenCalledOnce();
@@ -1079,7 +1111,7 @@ describe('site chat and platform agent', () => {
     const correction = state.controlledPrepare.mock.calls[1][0];
     expect(correction.prefetch.items.map((item: { product_id: string }) => item.product_id)).toEqual([priorId, ...ids]);
     expect(correction.message).toContain(question);
-    expect(correction.message).toContain('Подходящих дисков нет'); // Superseded, unshown draft is supplied only as data.
+    expect(correction.message).not.toContain('Подходящих дисков нет'); // Rejected draft must not anchor the replacement answer.
     expect(correction.message).toContain('Предыдущий черновик не был показан');
     expect(state.commitMessage).toHaveBeenCalledOnce();
     expect(state.controlledSubmit.mock.calls.map(call => call[1])).toEqual(['turn', 'turn-catalog-recompose']);
