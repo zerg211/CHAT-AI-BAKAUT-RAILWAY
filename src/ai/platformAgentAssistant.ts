@@ -14,6 +14,7 @@ import { contextFromPrefetch, latestKnownProducts, knownProductHistoryNotice } f
 import { applyPlatformAvailability, latestAvailabilityRequest } from './platformAvailability.js';
 import { ControlledResponsesClient, ControlledResponseFailure, ControlledRequestRejected, type ControlledRequest } from './controlledResponsesClient.js';
 import { sameModel } from './modelIdentity.js';
+import { AgentAnswerRejectedError } from './agentAnswerRejected.js';
 import { readSitePriceObservation } from '../catalog/currentSitePrice.js';
 import { assertOpenAIUsageBudget, bindOpenAIUsageReservation, recordOpenAIUsageOnce, releaseOpenAIUsageReservation } from './openaiUsageGuard.js';
 import { TurnExecutionInProgressError, type AgentManagerGenerateInput, type AgentManagerRecoverInput } from './agentManagerOrchestrator.js';
@@ -26,8 +27,8 @@ import { continueAfterWebSearch, type WebContinuationCheckpoint } from './contro
 export function assertCompletedCustomerAnswer(review: unknown, answer: string, cards: ProductCard[]) {
   const parsed = z.object({ verdict: z.enum(['complete', 'intermediate', 'uncertain']),
     publication: z.enum(['ready', 'draft', 'undetermined']), rationale: z.string().trim().min(1) }).strict().safeParse(review);
-  if (!parsed.success || parsed.data.publication !== 'ready') throw new Error('Customer answer review is missing, invalid or incomplete');
-  if (!guardCustomerOutput({ answerText: answer, productCards: cards }).ok) throw new Error('Customer answer contains internal process information');
+  if (!parsed.success || parsed.data.publication !== 'ready') throw new AgentAnswerRejectedError('Customer answer review is missing, invalid or incomplete');
+  if (!guardCustomerOutput({ answerText: answer, productCards: cards }).ok) throw new AgentAnswerRejectedError('Customer answer contains internal process information');
 }
 
 function cardsFromPage(page: Record<string, unknown> | undefined): ProductCard[] {
@@ -132,7 +133,7 @@ function reconcileCitations(answer: string, candidates: ProductCard[]) {
   }).join('\n');
 }
 
-class CatalogClassificationError extends Error {}
+class CatalogClassificationError extends AgentAnswerRejectedError {}
 
 const catalogRepairSchema = z.object({
   reason: z.enum(['buyer_recheck', 'catalog_facts', 'category_review', 'category_price_review']).default('buyer_recheck'),
@@ -162,12 +163,12 @@ function assertRepairCoverage(answer: string, repair: CatalogAnswerRepair) {
   const groups = [declared.selected, declared.rejected, declared.uncertain];
   if (groups.some(group => !Array.isArray(group) || group.some(id => typeof id !== 'string')) ||
       !Array.isArray(declared.selection_snapshots) || declared.selection_snapshots.length) {
-    throw new Error('Recomposed answer does not classify the corrected catalog selection');
+    throw new AgentAnswerRejectedError('Recomposed answer does not classify the corrected catalog selection');
   }
   const classified = (groups as string[][]).flat();
   if (selectsAllCatalogMatches(answer, true) || new Set(classified).size !== classified.length ||
       repair.correctedIds.some(id => !classified.includes(id))) {
-    throw new Error('Recomposed answer does not classify the corrected catalog selection');
+    throw new AgentAnswerRejectedError('Recomposed answer does not classify the corrected catalog selection');
   }
 }
 
@@ -216,9 +217,9 @@ export function assertRecommendationConsistency(selected: string[], comparison: 
   if (!Array.isArray(comparison) || comparison.some((id: unknown) => typeof id !== 'string') ||
       new Set(comparison).size !== comparison.length || !['confirmed', 'not_confirmed', 'not_applicable'].includes(String(status)) ||
       (selected.length > 0 && status !== 'confirmed') || (selected.length === 0 && status === 'confirmed')) {
-    throw new Error('Comparison subjects and confirmed recommendations are inconsistent');
+    throw new AgentAnswerRejectedError('Comparison subjects and confirmed recommendations are inconsistent');
   }
-  if (comparison.some((id: unknown) => !available.has(String(id)))) throw new Error('Comparison refers to an unknown product');
+  if (comparison.some((id: unknown) => !available.has(String(id)))) throw new AgentAnswerRejectedError('Comparison refers to an unknown product');
 }
 
 export function classifyPage(raw: string, candidates: ProductCard[], history: ProductCard[], hasSearch: boolean,
@@ -443,6 +444,7 @@ export class PlatformAgentAssistant {
     catch (error) {
       if (input.repairAttempted && !(input.repair?.reason === 'category_review' &&
           error instanceof CatalogAnswerRepairRequired && error.repair.reason === 'category_price_review')) {
+        if (error instanceof AgentAnswerRejectedError) throw new AgentAnswerRejectedError('Recomposed catalog answer failed validation', { cause: error });
         throw new Error('Recomposed catalog answer failed validation', { cause: error });
       }
       if (!(error instanceof CatalogAnswerRepairRequired)) throw error;
@@ -960,6 +962,7 @@ export class PlatformAgentAssistant {
       const turn = await this.conversations.getTurn(input.sessionId, input.turnId);
       if (turn?.errorCode === 'cancelled_by_user') throw new Error('Turn was cancelled by the user');
       if (turn?.errorCode === 'controlled_submission_rejected') throw new ControlledRequestRejected(400);
+      if (turn?.errorCode === 'agent_answer_rejected') throw new AgentAnswerRejectedError('Completed answer was rejected');
       if (!turn || (turn.deadlineAt && Date.parse(turn.deadlineAt) + 30_000 <= Date.now())) throw new Error('Turn deadline expired');
       const deadlineExpired = Boolean(turn.deadlineAt && Date.parse(turn.deadlineAt) <= Date.now());
       const ownerId = randomUUID();
