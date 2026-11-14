@@ -150,11 +150,12 @@ export class ControlledResponsesClient {
       shown_product_ids: Array.isArray(message.metadata.productCards) ? message.metadata.productCards.map(card => object(card)?.id) : [] }));
     if (input.classificationIds?.some(id => !context.product_ids.includes(id))) throw new Error('Catalog review requires complete candidate cards');
     const format = { type: 'json_schema', name: 'bakaut_buyer_answer', strict: true,
-      schema: input.classificationIds ? catalogReviewSchema(input.classificationIds) : outputFormat.schema };
+      schema: input.classificationIds ? catalogReviewSchema(input.classificationIds,
+        Object.fromEntries(prefetch.items.map(item => [item.product_id, String(item.name ?? '')]))) : outputFormat.schema };
     const searches = [...input.priorWebSearchReceipts ?? [], ...input.webSearchReceipt ? [input.webSearchReceipt] : []].map(webSearchContinuation);
     const request = clone({ model: saved.model, instructions: saved.instructions + platformAgentInstructions
       + webIntentInstruction(Boolean(config.CONTROLLED_WEB_SEARCH_ENABLED && config.CONTROLLED_WEB_SEARCH_FEES_APPROVED))
-      + (input.classificationIds ? '\nВ этом продолжении вместо массивов selected/rejected/uncertain заполни candidate_decisions по каждому ID из схемы. Сервер только преобразует твои решения в группы. Сначала оцени кандидатов, затем составь согласованный с ними ответ. Не превращай прежние товары из истории в кандидатов новой темы.' : '')
+      + (input.classificationIds ? '\nВ этом продолжении вместо массивов selected/rejected/uncertain заполни candidate_decisions по каждому ID из схемы. Для каждого товара сначала укажи его точное имя и краткую фактическую основу соответствия текущему запросу, затем решение. Это резюме фактов для проверки, не подробный ход рассуждений. Сервер только преобразует твои решения в группы. Не исключай подходящие товары ради короткого ответа. Виджет покажет весь список и цены; в answer дай краткий содержательный вывод, не дублируя длинное перечисление. Не превращай прежние товары из истории в кандидатов новой темы.' : '')
       + (searches.length ? `\n${searches[0].instructions}\nОцени все полученные результаты поиска. Сам реши, достаточно ли сведений для ответа или нужен следующий источник; не повторяй уже решённый поиск без новой причины.` : ''),
       ...(saved.reasoning ? { reasoning: saved.reasoning } : {}), ...(saved.service_tier ? { service_tier: saved.service_tier } : {}),
       text: { format }, input: [
@@ -171,7 +172,7 @@ export class ControlledResponsesClient {
     diagnosticEvent('controlled.context.budget', { inputTokens: count.input_tokens, totalTokens: reserveTokens,
       maxOutputTokens: limits.maximumOutput, candidateCount: prefetch.items.length, complete: true });
     const plan: ControlledRequest = { kind: 'controlled_response', model: saved.model, request, prefetch: clone(prefetch),
-      inputTokens: count.input_tokens, reserveTokens, manifest: { ...context, ...(input.classificationIds ? { classification_ids: [...input.classificationIds] } : {}),
+      inputTokens: count.input_tokens, reserveTokens, manifest: { ...context, ...(input.classificationIds ? { classification_ids: [...input.classificationIds], classification_format: 'identity_facts_v1' } : {}),
         hash_format: 'canonical_json_v1', request_sha256: hash(request), prefetch_sha256: hash(prefetch),
         original_cards: prefetch.items.map(item => ({ product_id: item.product_id, sha256: hash(item.original_card) })),
         config_sha256: hash(saved), agent_id: this.agentId } };
@@ -223,7 +224,9 @@ export class ControlledResponsesClient {
                 content: item.content.map(part => {
                   const content = objectSchema.parse(part);
                   return content.type === 'output_text' && typeof content.text === 'string'
-                    ? { ...content, text: normalizeCatalogReview(content.text, plan.manifest.classification_ids as string[]) } : content;
+                    ? { ...content, text: normalizeCatalogReview(content.text, plan.manifest.classification_ids as string[],
+                      plan.manifest.classification_format === 'identity_facts_v1'
+                        ? Object.fromEntries(plan.prefetch.items.map(product => [product.product_id, String(product.name ?? '')])) : undefined) } : content;
                 }) } : {}),
             ...(item.type === 'message' && item.role === 'assistant' ? { phase: item.phase ?? 'final_answer' } : {}),
             ...(item.type === 'mcp_call' ? { status: item.error ? 'failed' : item.status ?? 'completed',
