@@ -53,7 +53,10 @@ async function publicHistoryApp(
       : null),
     listMessages: vi.fn(async () => messages),
     getLatestUnansweredTurn: vi.fn(async () => pendingTurn),
-    getHistorySnapshot: vi.fn(async () => ({ messages, pendingTurn })),
+    getHistorySnapshot: vi.fn(async (_id?: string, limit = 80, before?: string | null) => {
+      const end = before ? messages.findIndex(message => message.id === before) : messages.length;
+      return { messages: messages.slice(Math.max(0, end - limit), end), pendingTurn, cursorValid: end >= 0 };
+    }),
     getTurn: vi.fn(async () => ({ id: turnId })),
     listTurnEvents: vi.fn(async (): Promise<Array<Record<string, unknown>>> => []),
     getFinalAnswerContract: vi.fn(async (): Promise<Record<string, unknown> | null> => null)
@@ -65,6 +68,40 @@ async function publicHistoryApp(
 }
 
 describe('public chat history API', () => {
+  it('rejects an unknown history cursor without returning a partial page', async () => {
+    const { app } = await publicHistoryApp([]);
+    const response = await app.inject({ method: 'GET',
+      url: `/api/chat/sessions/${sessionId}/messages?before=${turnId}`,
+      headers: { 'x-bakaut-visitor-id': visitorId } });
+    expect(response.statusCode).toBe(400);
+    expect(response.json().error).toBe('invalid_history_cursor');
+  });
+  it('reports invalid persisted cards instead of silently dropping them', async () => {
+    const { app } = await publicHistoryApp([{ id: turnId, role: 'assistant', content: 'Результат',
+      metadata: { productCards: [{ id: null, name: 'Broken' }] } }]);
+    const response = await app.inject({ method: 'GET', url: `/api/chat/sessions/${sessionId}/messages`,
+      headers: { 'x-bakaut-visitor-id': visitorId } });
+    expect(response.statusCode).toBe(500);
+    expect(response.json().error).toBe('history_message_invalid');
+  });
+  it('restores only safe availability scope and queued state, without contact internals or a reopened legacy form', async () => {
+    const requestId = '33333333-3333-4333-8333-333333333333';
+    const { app } = await publicHistoryApp([{ id: 'availability', role: 'assistant', content: 'Заявка в очереди',
+      metadata: { availabilityRequest: { id: requestId, state: 'queued', question: 'Наличие K770', productIds: [],
+        phone: '+79990000000', consentQuote: 'Напишите на private@example.org' },
+        availabilityReceipt: { requestId, outcome: 'queued', warehouseChecked: false, email: 'private@example.org' },
+        leadCreated: true, answerContract: { offer_form: true } } }]);
+    const response = await app.inject({ method: 'GET', url: `/api/chat/sessions/${sessionId}/messages`,
+      headers: { 'x-bakaut-visitor-id': visitorId } });
+    expect(response.statusCode).toBe(200);
+    expect(response.json().messages[0]).toMatchObject({ leadCreated: true,
+      availabilityRequest: { id: requestId, state: 'queued', question: 'Наличие K770', productIds: [] } });
+    expect(response.json().messages[0].availabilityReceipt).toEqual({ requestId, outcome: 'queued', warehouseChecked: false });
+    expect(response.json().messages[0].leadRequested).toBeUndefined();
+    expect(response.body).not.toContain('9990000000');
+    expect(response.body).not.toContain('private@example.org');
+    expect(response.body).not.toContain('consentQuote');
+  });
   it('authorizes and idempotently cancels only the identified active agent turn', async () => {
     const { app } = await publicHistoryApp([]);
     const originalKey = config.OPENAI_API_KEY;
@@ -91,6 +128,32 @@ describe('public chat history API', () => {
       expect(retry.json()).toEqual({ status: 'cancelled' });
       expect(cancel).toHaveBeenCalledOnce();
       expect(cancel).toHaveBeenCalledWith('agent-session');
+    } finally {
+      connect.mockRestore(); latest.mockRestore(); cancel.mockRestore();
+      Object.assign(config, { OPENAI_API_KEY: originalKey, OPENAI_PLATFORM_AGENT_ID: originalAgent });
+    }
+  });
+  it('cancels the current controlled search instead of the older platform discovery', async () => {
+    const { app } = await publicHistoryApp([]);
+    const originalKey = config.OPENAI_API_KEY;
+    const originalAgent = config.OPENAI_PLATFORM_AGENT_ID;
+    Object.assign(config, { OPENAI_API_KEY: 'test', OPENAI_PLATFORM_AGENT_ID: 'agent-test' });
+    const query = vi.fn(async (sql: string) => {
+      if (sql.includes('SELECT id FROM conversation_sessions')) return { rowCount: 1, rows: [{ id: sessionId }] };
+      if (sql.includes('SELECT status,error_code')) return { rowCount: 1, rows: [{ status: 'answering' }] };
+      if (sql.includes('SELECT payload FROM turn_checkpoints')) return { rowCount: 2, rows: [
+        { payload: { responseId: 'resp_search2', step: 1 } },
+        { payload: { agentSessionId: 'old-agent', previousTurnId: null } }
+      ] };
+      return { rowCount: 1, rows: [] };
+    });
+    const connect = vi.spyOn(pool, 'connect').mockResolvedValue({ query, release: vi.fn() } as never);
+    const latest = vi.spyOn(PlatformAgentClient.prototype, 'latestTurn').mockResolvedValue({ id: 'resp_search2', status: 'in_progress' });
+    const cancel = vi.spyOn(PlatformAgentClient.prototype, 'cancelTurn').mockResolvedValue(undefined);
+    try {
+      const response = await app.inject({ method: 'POST', url: `/api/chat/sessions/${sessionId}/messages/${turnId}/cancel`, headers: { 'x-bakaut-visitor-id': visitorId } });
+      expect(response.json()).toEqual({ status: 'cancelled' });
+      expect(cancel).toHaveBeenCalledExactlyOnceWith('controlled:resp_search2');
     } finally {
       connect.mockRestore(); latest.mockRestore(); cancel.mockRestore();
       Object.assign(config, { OPENAI_API_KEY: originalKey, OPENAI_PLATFORM_AGENT_ID: originalAgent });
@@ -158,6 +221,25 @@ describe('public chat history API', () => {
     expect(conversations.getFinalAnswerContract).toHaveBeenCalledWith(sessionId, turnId);
   });
 
+  it('returns the same consultation and queued receipt through history and durable event replay after form capture', async () => {
+    const availabilityRequest = { id: turnId, state: 'queued', question: 'Наличие модели A', productIds: [] };
+    const availabilityReceipt = { requestId: turnId, outcome: 'queued', warehouseChecked: false };
+    const consultation = 'Модель A легче модели B.';
+    const { app, conversations } = await publicHistoryApp([{ id: 'answer', role: 'assistant', content: consultation,
+      metadata: { availabilityRequest, availabilityReceipt, leadRequested: false, leadCreated: true } }]);
+    conversations.getFinalAnswerContract.mockResolvedValue({ response_payload: {
+      answer: consultation, productCards: [], availabilityRequest, availabilityReceipt, leadRequested: false, leadCreated: true
+    } });
+    const headers = { 'x-bakaut-visitor-id': visitorId };
+    const history = await app.inject({ method: 'GET', url: `/api/chat/sessions/${sessionId}/messages`, headers });
+    const replay = await app.inject({ method: 'GET', url: `/api/chat/sessions/${sessionId}/messages/${turnId}/events`, headers });
+    expect(history.statusCode).toBe(200); expect(replay.statusCode).toBe(200);
+    expect(history.json().messages[0].content).toBe(consultation);
+    expect(replay.json().result).toMatchObject({ answer: consultation, leadRequested: false, leadCreated: true,
+      availabilityRequest, availabilityReceipt });
+    expect(history.json().messages[0].availabilityReceipt).toEqual(replay.json().result.availabilityReceipt);
+  });
+
   it('returns the same 404 for a missing, wrong, or unknown restoration capability', async () => {
     const { app, conversations } = await publicHistoryApp([]);
 
@@ -199,7 +281,7 @@ describe('public chat history API', () => {
 
     expect(response.statusCode).toBe(200);
     expect(conversations.restoreSession).toHaveBeenCalledWith(sessionId, visitorId);
-    expect(conversations.getHistorySnapshot).toHaveBeenCalledWith(sessionId);
+    expect(conversations.getHistorySnapshot).toHaveBeenCalledWith(sessionId, 81, null);
   });
 
   it('authenticates heartbeat without disclosing the visitor capability or session data', async () => {
@@ -348,6 +430,16 @@ describe('public chat history API', () => {
     expect(response.statusCode).toBe(200);
     expect(new TextEncoder().encode(response.body).byteLength).toBeLessThanOrEqual(PUBLIC_HISTORY_MAX_RESPONSE_BYTES);
     expect((response.json() as { messages: unknown[] }).messages.length).toBeLessThan(hugeMessages.length);
+    expect(response.json().nextBefore).toBeTruthy();
+  });
+
+  it('reports an oversized single message instead of silently losing it', async () => {
+    const { app } = await publicHistoryApp([{ id: turnId, sessionId, role: 'assistant',
+      content: 'я'.repeat(4_100_000), metadata: {}, createdAt: '2026-07-27T12:00:05.000Z' }]);
+    const response = await app.inject({ method: 'GET', url: `/api/chat/sessions/${sessionId}/messages`,
+      headers: { 'x-bakaut-visitor-id': visitorId } });
+    expect(response.statusCode).toBe(413);
+    expect(response.json().error).toBe('history_message_too_large');
   });
 
   it('returns an allowlisted pending turn state without execution or error internals', async () => {
@@ -387,9 +479,101 @@ describe('public chat history API', () => {
 });
 
 describe('public chat history client', () => {
+  it.each([80, 81, 160, 161])('restores %i messages across the route boundary', async count => {
+    const messages = Array.from({ length: count }, (_, index) => ({
+      id: `00000000-0000-4000-8000-${String(index).padStart(12, '0')}`,
+      role: 'user', content: `message ${index}`, metadata: {}, createdAt: '2026-01-01T00:00:00.000Z'
+    }));
+    const { app } = await publicHistoryApp(messages);
+    const fetcher = vi.fn(async (url: string | URL | Request) => {
+      const response = await app.inject({ method: 'GET', url: String(url), headers: { 'x-bakaut-visitor-id': visitorId } });
+      return new Response(response.body, { status: response.statusCode, headers: { 'content-type': 'application/json' } });
+    }) as unknown as typeof fetch;
+    const history = await loadChatHistoryState('', sessionId, visitorId, fetcher);
+    expect(history.messages.map(message => message.id)).toEqual(messages.map(message => message.id));
+  });
+
+  it('does not return a partial history when a later page fails or completeness is missing', async () => {
+    const id = '00000000-0000-4000-8000-000000000001';
+    const fetcher = vi.fn().mockResolvedValueOnce(Response.json({ messages: [{ id, role: 'user', content: 'text' }],
+      historyComplete: false, nextBefore: id })).mockResolvedValueOnce(new Response('', { status: 503 }));
+    await expect(loadChatHistoryState('', sessionId, visitorId, fetcher)).rejects.toThrow('503');
+    await expect(loadChatHistoryState('', sessionId, visitorId, vi.fn(async () => Response.json({ messages: [] }))))
+      .rejects.toThrow('completeness');
+  });
+
+  it('rejects malformed messages instead of returning a shorter history', async () => {
+    const fetcher = vi.fn(async () => Response.json({ historyComplete: true, messages: [
+      { id: 'one', role: 'user', content: 'valid' }, { id: 'two', role: 'assistant', content: 42 }
+    ] }));
+    await expect(loadChatHistoryState('', sessionId, visitorId, fetcher)).rejects.toThrow('History message is invalid');
+  });
+
+  it('rejects malformed refresh messages instead of returning an earlier history', async () => {
+    const id = '00000000-0000-4000-8000-000000000001';
+    const fetcher = vi.fn().mockResolvedValueOnce(Response.json({ messages: [{ id, role: 'user', content: 'valid' }],
+      historyComplete: false, nextBefore: id })).mockResolvedValueOnce(Response.json({ messages: [], historyComplete: true }))
+      .mockResolvedValueOnce(Response.json({ messages: [{ id, role: 'user', content: 42 }], historyComplete: true }));
+    await expect(loadChatHistoryState('', sessionId, visitorId, fetcher)).rejects.toThrow('History message is invalid');
+  });
+
+  it('does not restore an old session when it changes while pages are loading', async () => {
+    const storage = memorySessionStorage(sessionId);
+    const id = '00000000-0000-4000-8000-000000000001';
+    const fetcher = vi.fn().mockResolvedValueOnce(Response.json({ messages: [{ id, role: 'user', content: 'text' }],
+      historyComplete: false, nextBefore: id })).mockImplementationOnce(async () => {
+      storage.replace(otherSessionId);
+      return Response.json({ messages: [], historyComplete: true });
+    });
+    await expect(restoreSavedChatSession('', sessionId, visitorId, storage, fetcher))
+      .resolves.toEqual({ kind: 'superseded', sessionId: otherSessionId });
+  });
+  it('loads every history page in order without repeating messages', async () => {
+    const messages = Array.from({ length: 120 }, (_, index) => ({
+      id: `00000000-0000-4000-8000-${String(index).padStart(12, '0')}`,
+      role: 'user', content: `message ${index}`
+    }));
+    const fetcher = vi.fn(async (url: string | URL | Request) => String(url).includes('?before=')
+      ? Response.json({ messages: messages.slice(0, 40), historyComplete: true })
+      : Response.json({ messages: messages.slice(40), historyComplete: false, nextBefore: messages[40].id })) as unknown as typeof fetch;
+    const history = await loadChatHistoryState('', sessionId, visitorId, fetcher);
+    expect(history.messages.map(message => message.id)).toEqual(messages.map(message => message.id));
+    expect(fetcher).toHaveBeenCalledTimes(3);
+  });
+
+  it('includes a new message committed while older pages were loading', async () => {
+    const id1 = '00000000-0000-4000-8000-000000000001';
+    const id2 = '00000000-0000-4000-8000-000000000002';
+    const id3 = '00000000-0000-4000-8000-000000000003';
+    const message = (id: string) => ({ id, role: 'user', content: id });
+    const fetcher = vi.fn().mockResolvedValueOnce(Response.json({ messages: [message(id2)], historyComplete: false, nextBefore: id2 }))
+      .mockResolvedValueOnce(Response.json({ messages: [message(id1)], historyComplete: true }))
+      .mockResolvedValueOnce(Response.json({ messages: [message(id2), message(id3)], historyComplete: true }));
+    const result = await loadChatHistoryState('', sessionId, visitorId, fetcher);
+    expect(result.messages.map(item => item.id)).toEqual([id1, id2, id3]);
+  });
+
+  it('follows refresh pages when more than one page of new messages arrived', async () => {
+    const items = Array.from({ length: 84 }, (_, index) => ({
+      id: `00000000-0000-4000-8000-${String(index).padStart(12, '0')}`,
+      role: 'user', content: `message ${index}`
+    }));
+    const fetcher = vi.fn().mockResolvedValueOnce(Response.json({ messages: [items[1]], historyComplete: false, nextBefore: items[1].id }))
+      .mockResolvedValueOnce(Response.json({ messages: [items[0]], historyComplete: true }))
+      .mockResolvedValueOnce(Response.json({ messages: items.slice(4), historyComplete: false, nextBefore: items[4].id }))
+      .mockResolvedValueOnce(Response.json({ messages: items.slice(0, 4), historyComplete: true }));
+    const result = await loadChatHistoryState('', sessionId, visitorId, fetcher);
+    expect(result.messages.map(item => item.id)).toEqual(items.map(item => item.id));
+  });
+
+  it('fails explicitly if a history cursor repeats', async () => {
+    const id = '00000000-0000-4000-8000-000000000001';
+    const fetcher = vi.fn(async () => Response.json({ messages: [{ id, role: 'user', content: 'message' }], historyComplete: false, nextBefore: id })) as unknown as typeof fetch;
+    await expect(loadChatHistoryState('', sessionId, visitorId, fetcher)).rejects.toThrow('duplicate');
+  });
   it('parses a typed pending turn for hydrate recovery', async () => {
     const fetcher = vi.fn(async () => new Response(JSON.stringify({
-      messages: [{ id: 'user-1', role: 'user', content: 'Нужен генератор' }],
+      historyComplete: true, messages: [{ id: 'user-1', role: 'user', content: 'Нужен генератор' }],
       pendingTurn: {
         turnId: '33333333-3333-4333-8333-333333333333',
         status: 'answering',
@@ -415,8 +599,7 @@ describe('public chat history client', () => {
 
   it('sends the visitor restoration capability and normalizes malformed legacy cards', async () => {
     const fetcher = vi.fn(async () => new Response(JSON.stringify({
-      messages: [
-        { role: 'system', content: 'must be dropped' },
+      historyComplete: true, messages: [
         {
           id: 'message-1',
           role: 'assistant',
@@ -431,8 +614,7 @@ describe('public chat history client', () => {
               imageUrl: 'data:text/html,bad',
               sourceUrl: 'http://example.test/card',
               metadata: { secret: true }
-            },
-            { id: null, name: 'invalid card' }
+            }
           ],
           cardDisplay: { initialVisibleCount: -5, secret: true },
           leadRequested: true
@@ -470,7 +652,7 @@ describe('public chat history client', () => {
 
   it('distinguishes a history 404 from a valid empty history', async () => {
     const notFoundFetcher = vi.fn(async () => new Response('{}', { status: 404 }));
-    const emptyFetcher = vi.fn(async () => new Response('{"messages":[]}', {
+    const emptyFetcher = vi.fn(async () => new Response('{"messages":[],"historyComplete":true}', {
       status: 200,
       headers: { 'content-type': 'application/json' }
     }));
@@ -484,7 +666,7 @@ describe('public chat history client', () => {
     expect(initialChatHydrationState(null)).toBe('ready');
     const storage = memorySessionStorage(sessionId);
     const fetcher = vi.fn(async (_input: string | URL | Request) => new Response(JSON.stringify({
-      messages: [{ role: 'assistant', content: 'Оставьте контакты', leadRequested: true }]
+      historyComplete: true, messages: [{ id: 'offer', role: 'assistant', content: 'Оставьте контакты', leadRequested: true }]
     }), { status: 200, headers: { 'content-type': 'application/json' } }));
 
     const restored = await restoreSavedChatSession('', sessionId, visitorId, storage, fetcher);
@@ -501,7 +683,7 @@ describe('public chat history client', () => {
   it('carries pending turn state through saved-session restoration', async () => {
     const storage = memorySessionStorage(sessionId);
     const fetcher = vi.fn(async () => new Response(JSON.stringify({
-      messages: [{ id: 'user-1', role: 'user', content: 'Нужен генератор' }],
+      historyComplete: true, messages: [{ id: 'user-1', role: 'user', content: 'Нужен генератор' }],
       pendingTurn: {
         turnId: '33333333-3333-4333-8333-333333333333',
         status: 'failed',
@@ -527,7 +709,7 @@ describe('public chat history client', () => {
   it('does not reopen lead capture from an old assistant offer after a newer assistant response', async () => {
     const storage = memorySessionStorage(sessionId);
     const fetcher = vi.fn(async () => new Response(JSON.stringify({
-      messages: [
+      historyComplete: true, messages: [
         { id: 'assistant-old', role: 'assistant', content: 'Оставьте контакты', leadRequested: true },
         { id: 'user-next', role: 'user', content: 'Не сейчас' },
         { id: 'assistant-latest', role: 'assistant', content: 'Хорошо, продолжим без заявки', leadRequested: false }
@@ -542,7 +724,7 @@ describe('public chat history client', () => {
   it('reopens lead capture when the latest assistant response requests it', async () => {
     const storage = memorySessionStorage(sessionId);
     const fetcher = vi.fn(async () => new Response(JSON.stringify({
-      messages: [
+      historyComplete: true, messages: [
         { id: 'assistant-old', role: 'assistant', content: 'Продолжим подбор', leadRequested: false },
         { id: 'user-next', role: 'user', content: 'Передайте специалисту' },
         { id: 'assistant-latest', role: 'assistant', content: 'Оставьте контакты', leadRequested: true }
@@ -557,7 +739,7 @@ describe('public chat history client', () => {
   it('does not reopen the latest lead offer after a durable lead was submitted for it', async () => {
     const storage = memorySessionStorage(sessionId);
     const fetcher = vi.fn(async () => new Response(JSON.stringify({
-      messages: [
+      historyComplete: true, messages: [
         { id: 'assistant-latest', role: 'assistant', content: 'Оставьте контакты', leadRequested: true }
       ],
       leadOfferConsumed: true

@@ -67,6 +67,7 @@ export function createOpenAIClient() {
   if (client.embeddings?.create) {
     const create = client.embeddings.create.bind(client.embeddings);
     client.embeddings.create = async (body: Record<string, unknown>, options?: unknown) => {
+      if (config.OPENAI_MONETARY_GUARD_ENABLED) throw new Error('Monetary admission cannot bound direct embeddings');
       const span = startTimingSpan('provider', 'embeddings.create', {model: String(body.model ?? '')});
       try {
         const response = await span.run(() => create(body, options));

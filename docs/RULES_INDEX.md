@@ -5,7 +5,7 @@
 ## Авторитетность
 
 1. `AGENTS.md` — цель продукта, граница LLM/кода, обязательный proof loop и production-widget gate.
-2. Исполняемый код и схемы в `src/ai/agentManager*` — фактический runtime.
+2. `src/ai/assistant.ts`, `platformAgentAssistant.ts`, `platformAgentClient.ts`, `controlledResponsesClient.ts`, `platformAgentContract.ts` и `catalog-service/` описывают текущий путь. Сверяйте рабочее дерево с commit production. Старый `AgentManagerOrchestrator` не является обработчиком `AssistantService`.
 3. Текущие документы ниже — объяснение действующей архитектуры и эксплуатации.
 4. `.agent/tasks/*` — evidence конкретных задач, не постоянная product policy.
 5. `local-live-tests/*` — протоколы конкретных версий, не инструкции для runtime.

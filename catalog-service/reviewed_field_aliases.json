@@ -1,0 +1,1397 @@
+{
+  "008b05f3fd414291c69b91e3": {
+    "Расход топлива": {
+      "raw_sha256": "a304919f0adba6ce3ceb5d69bc617a679e614b0d0e4e8acb10a70ac9f42fe7d8",
+      "target": "Расход топлива, л/ч",
+      "value_sha256": "272f4c9ea6eecffeb390b073584702240b57abe97f30d1ef36fd641c63e623b8"
+    },
+    "Топливный бак": {
+      "raw_sha256": "a304919f0adba6ce3ceb5d69bc617a679e614b0d0e4e8acb10a70ac9f42fe7d8",
+      "target": "Объём топливного бака, л",
+      "value_sha256": "ef2d127de37b942baad06145e54b0c619a1f22327b2ebbcfbec78f5564afe39d"
+    },
+    "Центробежная сила": {
+      "raw_sha256": "a304919f0adba6ce3ceb5d69bc617a679e614b0d0e4e8acb10a70ac9f42fe7d8",
+      "target": "Центробежная сила, кН",
+      "value_sha256": "624b60c58c9d8bfb6ff1886c2fd605d2adeb6ea4da576068201b6c6958ce93f4"
+    }
+  },
+  "010dd344fdd5b592007941b3": {
+    "Объём двигателя, см³": {
+      "raw_sha256": "0cfcdaf774153ae2777457d99e8c7bc7cdc95e3daf2a2a79d060ec529a67e4cc",
+      "target": "Рабочий объём",
+      "value_sha256": "47ddc8ae86dbefa509cac05c805c63ae200f985a6e53681c0e724e6cdeb1ebbf"
+    },
+    "Объём топливного бака, л": {
+      "raw_sha256": "0cfcdaf774153ae2777457d99e8c7bc7cdc95e3daf2a2a79d060ec529a67e4cc",
+      "target": "Топливный бак",
+      "value_sha256": "33208cd3606b8d8accab0a4d0b90d5cd228f5e12808ea0a99c947a9635e45175"
+    },
+    "Расход топлива, л/ч": {
+      "raw_sha256": "0cfcdaf774153ae2777457d99e8c7bc7cdc95e3daf2a2a79d060ec529a67e4cc",
+      "target": "Расход топлива",
+      "value_sha256": "740e83034fb7232208d972597025d22d64b5e5e58e1d943c60e57cc5a698c0ad"
+    },
+    "Центробежная сила, кН": {
+      "raw_sha256": "0cfcdaf774153ae2777457d99e8c7bc7cdc95e3daf2a2a79d060ec529a67e4cc",
+      "target": "Центробежная сила",
+      "value_sha256": "77f88fc9a04a3944347205cc724d5e48ac7380b6e607a6187850dd57c87717a8"
+    }
+  },
+  "095e180b7e1fe4e3e84bfd75": {
+    "Частота вибрации, Гц": {
+      "raw_sha256": "2bd9b4d3d29925c5840fcbbbf53cfe4ee3cc67324d998d62c19d9f47928b08ce",
+      "target": "Частота вибрации",
+      "value_sha256": "cd5331a0507eb25d474f0e9c9e680459d087073053b02817b03034fbe66d7505"
+    }
+  },
+  "09653dd6556bd85d880c5b09": {
+    "Объём двигателя, см³": {
+      "raw_sha256": "16386930c439993123374b378c2d9fb5bf1ea68a4228090b1d6925c3562dd340",
+      "target": "Рабочий объём",
+      "value_sha256": "47ddc8ae86dbefa509cac05c805c63ae200f985a6e53681c0e724e6cdeb1ebbf"
+    },
+    "Объём топливного бака, л": {
+      "raw_sha256": "16386930c439993123374b378c2d9fb5bf1ea68a4228090b1d6925c3562dd340",
+      "target": "Топливный бак",
+      "value_sha256": "33208cd3606b8d8accab0a4d0b90d5cd228f5e12808ea0a99c947a9635e45175"
+    },
+    "Рабочая масса, кг": {
+      "raw_sha256": "16386930c439993123374b378c2d9fb5bf1ea68a4228090b1d6925c3562dd340",
+      "target": "Рабочая масса",
+      "value_sha256": "a77902feda9857e10219d712a366ebdfaceb786edbbe0a4657256738bfe98b59"
+    },
+    "Расход топлива, л/ч": {
+      "raw_sha256": "16386930c439993123374b378c2d9fb5bf1ea68a4228090b1d6925c3562dd340",
+      "target": "Расход топлива",
+      "value_sha256": "740e83034fb7232208d972597025d22d64b5e5e58e1d943c60e57cc5a698c0ad"
+    },
+    "Центробежная сила, кН": {
+      "raw_sha256": "16386930c439993123374b378c2d9fb5bf1ea68a4228090b1d6925c3562dd340",
+      "target": "Центробежная сила",
+      "value_sha256": "77f88fc9a04a3944347205cc724d5e48ac7380b6e607a6187850dd57c87717a8"
+    }
+  },
+  "096f11e7589da8f03a628f0f": {
+    "Рабочая масса, кг": {
+      "raw_sha256": "187398a4edb377c044b3ca947efba224965361ac0bde0183bbbf971904baaeed",
+      "target": "Рабочая масса",
+      "value_sha256": "a8b91b59cca6e45254f24242407d7b3c74d18824651ce754b1701856bb0d220e"
+    },
+    "Центробежная сила, кН": {
+      "raw_sha256": "187398a4edb377c044b3ca947efba224965361ac0bde0183bbbf971904baaeed",
+      "target": "Центробежная сила",
+      "value_sha256": "118235307a3d20705400b9334268f98e91b430052988d462a761722e5a029273"
+    }
+  },
+  "1048f0f2d5e44e895d1ca482": {
+    "Расход топлива": {
+      "raw_sha256": "3d2b4892f24749ad075e90db4807def252c5ab110025ff6e1c20f58a5535bc01",
+      "target": "Расход топлива, л/ч",
+      "value_sha256": "d20465aa92ad20bd51754db3cfab305f77a88a0db6def53ed9c4574b9e9de045"
+    },
+    "Центробежная сила": {
+      "raw_sha256": "3d2b4892f24749ad075e90db4807def252c5ab110025ff6e1c20f58a5535bc01",
+      "target": "Центробежная сила, кН",
+      "value_sha256": "f5ca38f748a1d6eaf726b8a42fb575c3c71f1864a8143301782de13da2d9202b"
+    }
+  },
+  "15fa3347ede931c088a6f04c": {
+    "Топливный бак": {
+      "raw_sha256": "298929240933652444e066f62102537805a1ce5c3b8a3ffd113f0cdab2757582",
+      "target": "Объём топливного бака, л",
+      "value_sha256": "4f56bd3e3fa47d2d19672f121dfcbb2e7708f834bc95ecca8b4f2a4e31840932"
+    },
+    "Центробежная сила": {
+      "raw_sha256": "298929240933652444e066f62102537805a1ce5c3b8a3ffd113f0cdab2757582",
+      "target": "Центробежная сила, кН",
+      "value_sha256": "02d20bbd7e394ad5999a4cebabac9619732c343a4cac99470c03e23ba2bdc2bc"
+    }
+  },
+  "166896404e307ea38866ed52": {
+    "Объём двигателя, см³": {
+      "raw_sha256": "18eb9ac594548bd323073c88477e28bec374e635974d79df4e8acd5b776d7e14",
+      "target": "Рабочий объём",
+      "value_sha256": "10a1dd9a824e0ef7583ef52e45ab0ac3fec8788bca675a3388722370f8a3737b"
+    },
+    "Объём топливного бака, л": {
+      "raw_sha256": "18eb9ac594548bd323073c88477e28bec374e635974d79df4e8acd5b776d7e14",
+      "target": "Топливный бак",
+      "value_sha256": "4bb5e95e0b753f95ab8bb408a05d4a451ec265bb508feba1d6395ccbe983d668"
+    },
+    "Рабочая масса, кг": {
+      "raw_sha256": "18eb9ac594548bd323073c88477e28bec374e635974d79df4e8acd5b776d7e14",
+      "target": "Рабочая масса",
+      "value_sha256": "132e0c0c66507b5fe0392fd29b93b81595c6dbf6126a78a7d93883a461c8fbab"
+    },
+    "Расход топлива, л/ч": {
+      "raw_sha256": "18eb9ac594548bd323073c88477e28bec374e635974d79df4e8acd5b776d7e14",
+      "target": "Расход топлива",
+      "value_sha256": "215200d6035ec1515c9ffbde95881caaae689d9351f45c3fe31581b5f98eedb4"
+    }
+  },
+  "1fb4708e0f2435ab3c2421ad": {
+    "Расход топлива": {
+      "raw_sha256": "78d9eddc9618b6559d40d01f47db6ceeeffd0346760d3e2ec78fa6c9466e2a58",
+      "target": "Расход топлива, л/ч",
+      "value_sha256": "6b86b273ff34fce19d6b804eff5a3f5747ada4eaa22f1d49c01e52ddb7875b4b"
+    },
+    "Топливный бак": {
+      "raw_sha256": "78d9eddc9618b6559d40d01f47db6ceeeffd0346760d3e2ec78fa6c9466e2a58",
+      "target": "Объём топливного бака, л",
+      "value_sha256": "43885ddd7140669b87ea1d78bfa5fde81e122858f366d1ae25b0bbe444d5f98e"
+    }
+  },
+  "208d800a0d7cb80d15c43fe3": {
+    "Объём топливного бака, л": {
+      "raw_sha256": "35a7c9175916e96f699fd5779af144247c8caacdd9e3b22ee6cc2d24194c4d06",
+      "target": "Топливный бак",
+      "value_sha256": "e7f8f896e6e082ca18aa43aca15ce3e86661de8d35a0cc7ae1140af1eb7477ad"
+    },
+    "Рабочая масса, кг": {
+      "raw_sha256": "35a7c9175916e96f699fd5779af144247c8caacdd9e3b22ee6cc2d24194c4d06",
+      "target": "Рабочая масса",
+      "value_sha256": "4520f7a9b61fab4dcc06acd72701fb0c99af006bd62b8169af81427903888460"
+    },
+    "Расход топлива, л/ч": {
+      "raw_sha256": "35a7c9175916e96f699fd5779af144247c8caacdd9e3b22ee6cc2d24194c4d06",
+      "target": "Расход топлива",
+      "value_sha256": "d71c992f128c54b3be792fdac86945bb52194c8d63134c0968bb00f088231590"
+    },
+    "Центробежная сила, кН": {
+      "raw_sha256": "35a7c9175916e96f699fd5779af144247c8caacdd9e3b22ee6cc2d24194c4d06",
+      "target": "Центробежная сила",
+      "value_sha256": "fab71f521f4508e6b68d3840cc6c6149da54e05d84d2f9b8623a716967f23ed6"
+    }
+  },
+  "2bee3457b1be9c9715e75143": {
+    "Объём топливного бака, л": {
+      "raw_sha256": "f6675da86329f1c1852a5376b3e89ed12e07afd88a308577b7dffc936b787d94",
+      "target": "Топливный бак",
+      "value_sha256": "6dac113a2c6f65f07861d85fb4a41d5fa9b3dd8a5d5b68badfdfae2aff6d561d"
+    },
+    "Частота вибрации, Гц": {
+      "raw_sha256": "f6675da86329f1c1852a5376b3e89ed12e07afd88a308577b7dffc936b787d94",
+      "target": "Частота вибрации",
+      "value_sha256": "273f7415a8a608435443de79be74e28b96063436c80091f5bd597098951837a5"
+    }
+  },
+  "2c5134ed69559060504a2f10": {
+    "Объём двигателя, см³": {
+      "raw_sha256": "613363a327aea778e327e38be0eaf92d5170907af6a05bf605e22c7ce1350902",
+      "target": "Рабочий объём двигателя",
+      "value_sha256": "a88d7977d6203426538d19d72b4d2afd2fd2a01dc6da2e210cacb500aaec3771"
+    },
+    "Объём топливного бака, л": {
+      "raw_sha256": "613363a327aea778e327e38be0eaf92d5170907af6a05bf605e22c7ce1350902",
+      "target": "Объём топливного бака",
+      "value_sha256": "e7f8f896e6e082ca18aa43aca15ce3e86661de8d35a0cc7ae1140af1eb7477ad"
+    },
+    "Рабочая масса, кг": {
+      "raw_sha256": "613363a327aea778e327e38be0eaf92d5170907af6a05bf605e22c7ce1350902",
+      "target": "Рабочая масса",
+      "value_sha256": "b344839528cf0388b98db7f78c50aa7d1c14bbaac7ba1eee5cfcf35f6fd34f6b"
+    },
+    "Расход топлива, л/ч": {
+      "raw_sha256": "613363a327aea778e327e38be0eaf92d5170907af6a05bf605e22c7ce1350902",
+      "target": "Расход топлива",
+      "value_sha256": "f34158eef64e2bc26ccb568eb277527421c9c3f2b6f5d5ecb61698f8c6434145"
+    },
+    "Топливный бак": {
+      "raw_sha256": "613363a327aea778e327e38be0eaf92d5170907af6a05bf605e22c7ce1350902",
+      "target": "Объём топливного бака",
+      "value_sha256": "e7f8f896e6e082ca18aa43aca15ce3e86661de8d35a0cc7ae1140af1eb7477ad"
+    },
+    "Центробежная сила, кН": {
+      "raw_sha256": "613363a327aea778e327e38be0eaf92d5170907af6a05bf605e22c7ce1350902",
+      "target": "Центробежная сила",
+      "value_sha256": "cf3599c1ded711a926e39ac102a26bc69333e42d4d67b87f921b744451289172"
+    }
+  },
+  "30a39958b00d7827a3f995f3": {
+    "Объём топливного бака, л": {
+      "raw_sha256": "bf39e9e5b6a4278bec89c27ecc48d7548d98f55db7285d0f2b8d0ff348dacd16",
+      "target": "Топливный бак",
+      "value_sha256": "e7f8f896e6e082ca18aa43aca15ce3e86661de8d35a0cc7ae1140af1eb7477ad"
+    },
+    "Рабочая масса, кг": {
+      "raw_sha256": "bf39e9e5b6a4278bec89c27ecc48d7548d98f55db7285d0f2b8d0ff348dacd16",
+      "target": "Рабочая масса",
+      "value_sha256": "41914a130afeb16c0bb497099df97800bcabb0bfd66808de68182dd4d85c6bf0"
+    },
+    "Расход топлива, л/ч": {
+      "raw_sha256": "bf39e9e5b6a4278bec89c27ecc48d7548d98f55db7285d0f2b8d0ff348dacd16",
+      "target": "Расход топлива",
+      "value_sha256": "d71c992f128c54b3be792fdac86945bb52194c8d63134c0968bb00f088231590"
+    },
+    "Центробежная сила, кН": {
+      "raw_sha256": "bf39e9e5b6a4278bec89c27ecc48d7548d98f55db7285d0f2b8d0ff348dacd16",
+      "target": "Центробежная сила",
+      "value_sha256": "fab71f521f4508e6b68d3840cc6c6149da54e05d84d2f9b8623a716967f23ed6"
+    }
+  },
+  "340c3d66ea8ce4b692249027": {
+    "Сила удара, кн": {
+      "raw_sha256": "5fd20d1fd24c857e1bd18960a15518f45ea396e68968ca165ba5e7041e9c4232",
+      "target": "Сила удара, кН",
+      "value_sha256": "4523540f1504cd17100c4835e85b7eefd49911580f8efff0599a8f283be6b9e3"
+    },
+    "Частота ударов": {
+      "raw_sha256": "5fd20d1fd24c857e1bd18960a15518f45ea396e68968ca165ba5e7041e9c4232",
+      "target": "Частота ударов, уд/мин",
+      "value_sha256": "fc4fb94d36f45aa9d13358022455e55db4b6f0eb536a1b2897c90dfd3df9eb9b"
+    }
+  },
+  "347b639a0cc1294666bf3991": {
+    "Объём двигателя, см³": {
+      "raw_sha256": "c843b5fd066ff850f07f68cea20b3ac642ed653150ad1fe0d32458555a585f6b",
+      "target": "Рабочий объём двигателя",
+      "value_sha256": "5830e6c8602688b3fc5af3b4221d44b6d7216e44fde6e2bdd9ae701b4ea9ae27"
+    },
+    "Объём топливного бака, л": {
+      "raw_sha256": "c843b5fd066ff850f07f68cea20b3ac642ed653150ad1fe0d32458555a585f6b",
+      "target": "Топливный бак",
+      "value_sha256": "c1dd5c83cc1c87611c806477a5e05f1dd86d1b6b89f51717e190e446f43d9601"
+    },
+    "Центробежная сила, кН": {
+      "raw_sha256": "c843b5fd066ff850f07f68cea20b3ac642ed653150ad1fe0d32458555a585f6b",
+      "target": "Центробежная сила",
+      "value_sha256": "e376d92d2b7afa5fb69ce5394ab44aed9673d83ec5b31205e44c766c4584702a"
+    }
+  },
+  "38f4ed65743bf3fd07d22387": {
+    "Объём двигателя, см³": {
+      "raw_sha256": "394bb3b3d0f947b9c44c11c1a587eb8286fdbbd3cfcdde82a6375ea5955a12b8",
+      "target": "Рабочий объём двигателя",
+      "value_sha256": "3779335a0a1bd4502f2bbf404618280bfa627070ff3efdd9b985da53ee398782"
+    },
+    "Расход топлива, л/ч": {
+      "raw_sha256": "394bb3b3d0f947b9c44c11c1a587eb8286fdbbd3cfcdde82a6375ea5955a12b8",
+      "target": "Расход топлива",
+      "value_sha256": "663bc419c1dd83a8d5b62424e7765ed6344169e275f4548ad47f777e644ce97b"
+    },
+    "Частота вибрации, Гц": {
+      "raw_sha256": "394bb3b3d0f947b9c44c11c1a587eb8286fdbbd3cfcdde82a6375ea5955a12b8",
+      "target": "Частота вибрации",
+      "value_sha256": "06b759ae5a8b1039a1448f320d7bc88be9108b7023ed28be96e9ed0270a4f35d"
+    }
+  },
+  "39c4ee337be1d8bd431fa4b0": {
+    "Расход топлива": {
+      "raw_sha256": "a6db88befeb2cc29fc795c76b0e6e59f43fa73d6c6c6d1fb3e023d98e7ea49bb",
+      "target": "Расход топлива, л/ч",
+      "value_sha256": "e3d64bd359500f03e5e851eeb72a301aef654583d781b295840f6092db9d2792"
+    },
+    "Топливный бак": {
+      "raw_sha256": "a6db88befeb2cc29fc795c76b0e6e59f43fa73d6c6c6d1fb3e023d98e7ea49bb",
+      "target": "Объём топливного бака, л",
+      "value_sha256": "12bdb8ee85e12d6f4b381aadc021b447e333ff957132665c7dd2adf73bccdd36"
+    }
+  },
+  "3b4d1965d197a96fa895b90a": {
+    "Объём топливного бака, л": {
+      "raw_sha256": "62852ed0b030957b168fb58c49803d684e540b49f6862c28f25c1277cb82aa2f",
+      "target": "Объём топливного бака",
+      "value_sha256": "49625d9e174e9b368b9c01ed5927a5381c17f66ab05234df0ded2d378a4df1ba"
+    },
+    "Расход топлива, л/ч": {
+      "raw_sha256": "62852ed0b030957b168fb58c49803d684e540b49f6862c28f25c1277cb82aa2f",
+      "target": "Расход топлива",
+      "value_sha256": "50678738f14c73900d2dd4f887acb1049d5690293875075430809484ad6d9534"
+    },
+    "Топливный бак": {
+      "raw_sha256": "62852ed0b030957b168fb58c49803d684e540b49f6862c28f25c1277cb82aa2f",
+      "target": "Объём топливного бака",
+      "value_sha256": "49625d9e174e9b368b9c01ed5927a5381c17f66ab05234df0ded2d378a4df1ba"
+    }
+  },
+  "3e4f91a47b4002a0ba292d12": {
+    "Объём топливного бака, л": {
+      "raw_sha256": "7afb73c758b7d4d71ec07fa648700f74c4a54690466bf98c6427c13b2a5544e2",
+      "target": "Объём топливного бака",
+      "value_sha256": "49625d9e174e9b368b9c01ed5927a5381c17f66ab05234df0ded2d378a4df1ba"
+    },
+    "Расход топлива, л/ч": {
+      "raw_sha256": "7afb73c758b7d4d71ec07fa648700f74c4a54690466bf98c6427c13b2a5544e2",
+      "target": "Расход топлива",
+      "value_sha256": "50678738f14c73900d2dd4f887acb1049d5690293875075430809484ad6d9534"
+    },
+    "Топливный бак": {
+      "raw_sha256": "7afb73c758b7d4d71ec07fa648700f74c4a54690466bf98c6427c13b2a5544e2",
+      "target": "Объём топливного бака",
+      "value_sha256": "49625d9e174e9b368b9c01ed5927a5381c17f66ab05234df0ded2d378a4df1ba"
+    }
+  },
+  "430a63fb8ee6568e722f275e": {
+    "Расход топлива": {
+      "raw_sha256": "1e04a0202a47c25f941fca2e559753c63152e73ad2e41ec7888547f17c4860ba",
+      "target": "Расход топлива, л/ч",
+      "value_sha256": "d20465aa92ad20bd51754db3cfab305f77a88a0db6def53ed9c4574b9e9de045"
+    },
+    "Топливный бак": {
+      "raw_sha256": "1e04a0202a47c25f941fca2e559753c63152e73ad2e41ec7888547f17c4860ba",
+      "target": "Объём топливного бака, л",
+      "value_sha256": "4e07408562bedb8b60ce05c1decfe3ad16b72230967de01f640b7e4729b49fce"
+    },
+    "Центробежная сила": {
+      "raw_sha256": "1e04a0202a47c25f941fca2e559753c63152e73ad2e41ec7888547f17c4860ba",
+      "target": "Центробежная сила, кН",
+      "value_sha256": "b7a56873cd771f2c446d369b649430b65a756ba278ff97ec81bb6f55b2e73569"
+    }
+  },
+  "44e1034a8f76a6433a8da01e": {
+    "Объём двигателя, см³": {
+      "raw_sha256": "5ff8f670356d4a8bf5f29bbd61858d14ae180b2380e483bed85bf9f6319c4159",
+      "target": "Рабочий объём",
+      "value_sha256": "10a1dd9a824e0ef7583ef52e45ab0ac3fec8788bca675a3388722370f8a3737b"
+    },
+    "Объём топливного бака, л": {
+      "raw_sha256": "5ff8f670356d4a8bf5f29bbd61858d14ae180b2380e483bed85bf9f6319c4159",
+      "target": "Топливный бак",
+      "value_sha256": "4bb5e95e0b753f95ab8bb408a05d4a451ec265bb508feba1d6395ccbe983d668"
+    },
+    "Рабочая масса, кг": {
+      "raw_sha256": "5ff8f670356d4a8bf5f29bbd61858d14ae180b2380e483bed85bf9f6319c4159",
+      "target": "Рабочая масса",
+      "value_sha256": "b217556959eee28de6573e6ece2557e96608442bb38bbc8b6e1855d1803b3504"
+    },
+    "Расход топлива, л/ч": {
+      "raw_sha256": "5ff8f670356d4a8bf5f29bbd61858d14ae180b2380e483bed85bf9f6319c4159",
+      "target": "Расход топлива",
+      "value_sha256": "215200d6035ec1515c9ffbde95881caaae689d9351f45c3fe31581b5f98eedb4"
+    }
+  },
+  "4769d32089583364827baa1d": {
+    "Расход топлива": {
+      "raw_sha256": "54358d4010195d92e6e5d5c1a547668fde2f566a8387590e6aaa8a2706a172c7",
+      "target": "Расход топлива, л/ч",
+      "value_sha256": "272f4c9ea6eecffeb390b073584702240b57abe97f30d1ef36fd641c63e623b8"
+    },
+    "Топливный бак": {
+      "raw_sha256": "54358d4010195d92e6e5d5c1a547668fde2f566a8387590e6aaa8a2706a172c7",
+      "target": "Объём топливного бака, л",
+      "value_sha256": "ef2d127de37b942baad06145e54b0c619a1f22327b2ebbcfbec78f5564afe39d"
+    },
+    "Центробежная сила": {
+      "raw_sha256": "54358d4010195d92e6e5d5c1a547668fde2f566a8387590e6aaa8a2706a172c7",
+      "target": "Центробежная сила, кН",
+      "value_sha256": "7a61b53701befdae0eeeffaecc73f14e20b537bb0f8b91ad7c2936dc63562b25"
+    }
+  },
+  "492faf1e30322edbe9798684": {
+    "Расход топлива": {
+      "raw_sha256": "e12c8269917f246cd8f2b9da9154516766d56a2f3293d33d47785378c0a42b36",
+      "target": "Расход топлива, л/ч",
+      "value_sha256": "d20465aa92ad20bd51754db3cfab305f77a88a0db6def53ed9c4574b9e9de045"
+    },
+    "Центробежная сила": {
+      "raw_sha256": "e12c8269917f246cd8f2b9da9154516766d56a2f3293d33d47785378c0a42b36",
+      "target": "Центробежная сила, кН",
+      "value_sha256": "f5ca38f748a1d6eaf726b8a42fb575c3c71f1864a8143301782de13da2d9202b"
+    }
+  },
+  "4b06332e976b467ea0f1cbc1": {
+    "Объём топливного бака, л": {
+      "raw_sha256": "408cb37f21caebb0b224199fb56d15b83b262bae93c3d26c0933cf0a580f4322",
+      "target": "Топливный бак",
+      "value_sha256": "6dac113a2c6f65f07861d85fb4a41d5fa9b3dd8a5d5b68badfdfae2aff6d561d"
+    },
+    "Частота вибрации, Гц": {
+      "raw_sha256": "408cb37f21caebb0b224199fb56d15b83b262bae93c3d26c0933cf0a580f4322",
+      "target": "Частота вибрации",
+      "value_sha256": "273f7415a8a608435443de79be74e28b96063436c80091f5bd597098951837a5"
+    }
+  },
+  "4d3978ef2f07d55fbc6ae000": {
+    "Расход топлива": {
+      "raw_sha256": "7474321e4e432222bf962ca9d84af8e80e3be72c55632b8ebf90ba4d632870cb",
+      "target": "Расход топлива, л/ч",
+      "value_sha256": "870832a6e38931f23a57956d831088219bc8ffeb8e92666132c67793f3b18749"
+    },
+    "Топливный бак": {
+      "raw_sha256": "7474321e4e432222bf962ca9d84af8e80e3be72c55632b8ebf90ba4d632870cb",
+      "target": "Объём топливного бака, л",
+      "value_sha256": "b21f6955827adddc2f062a66c3078f5f9f208540e0defae199d89e6f594e0b28"
+    }
+  },
+  "4d5be9cef6806cd2ab24234a": {
+    "Расход топлива": {
+      "raw_sha256": "0a40f82ac6179e07fe2367d80d01924b619b6088ff22d1da7abde360ab79cb26",
+      "target": "Расход топлива, л/ч",
+      "value_sha256": "d20465aa92ad20bd51754db3cfab305f77a88a0db6def53ed9c4574b9e9de045"
+    },
+    "Топливный бак": {
+      "raw_sha256": "0a40f82ac6179e07fe2367d80d01924b619b6088ff22d1da7abde360ab79cb26",
+      "target": "Объём топливного бака, л",
+      "value_sha256": "4e07408562bedb8b60ce05c1decfe3ad16b72230967de01f640b7e4729b49fce"
+    }
+  },
+  "504979a9362fd3f25d97dc8e": {
+    "Объём топливного бака, л": {
+      "raw_sha256": "af72de99b43df99fb08b6e613b1712057aec32fd83f18ee1adf6dcc67bc6836d",
+      "target": "Объём топливного бака",
+      "value_sha256": "e1fbb346756a10b148496f51b753e1d7bb7a82a2991a8f9b84ee643c92ae42c7"
+    },
+    "Рабочая масса, кг": {
+      "raw_sha256": "af72de99b43df99fb08b6e613b1712057aec32fd83f18ee1adf6dcc67bc6836d",
+      "target": "Рабочая масса",
+      "value_sha256": "a8b91b59cca6e45254f24242407d7b3c74d18824651ce754b1701856bb0d220e"
+    },
+    "Расход топлива, л/ч": {
+      "raw_sha256": "af72de99b43df99fb08b6e613b1712057aec32fd83f18ee1adf6dcc67bc6836d",
+      "target": "Расход топлива",
+      "value_sha256": "edd3834f56b998a7c6e21ed00165177331e1d22441d155684877045dd73a12a6"
+    },
+    "Центробежная сила, кН": {
+      "raw_sha256": "af72de99b43df99fb08b6e613b1712057aec32fd83f18ee1adf6dcc67bc6836d",
+      "target": "Центробежная сила",
+      "value_sha256": "eacbc3624cdfc7e9ee0de07b80f0b9bf194b904beca2b366c158139bf7d2f02e"
+    }
+  },
+  "52db7ecc524bc91a545ad8d5": {
+    "Объём двигателя, см³": {
+      "raw_sha256": "4e57706b07596192365882c77722ac0f2c9a45797f6a6be69fe48e960bea10e8",
+      "target": "Рабочий объём",
+      "value_sha256": "47ddc8ae86dbefa509cac05c805c63ae200f985a6e53681c0e724e6cdeb1ebbf"
+    },
+    "Объём топливного бака, л": {
+      "raw_sha256": "4e57706b07596192365882c77722ac0f2c9a45797f6a6be69fe48e960bea10e8",
+      "target": "Топливный бак",
+      "value_sha256": "33208cd3606b8d8accab0a4d0b90d5cd228f5e12808ea0a99c947a9635e45175"
+    },
+    "Рабочая масса, кг": {
+      "raw_sha256": "4e57706b07596192365882c77722ac0f2c9a45797f6a6be69fe48e960bea10e8",
+      "target": "Рабочая масса",
+      "value_sha256": "9a0f5506f4bcc2bc573f2f6d1a42103b3e9d65a9d334d898e447b4b41c5c975b"
+    },
+    "Расход топлива, л/ч": {
+      "raw_sha256": "4e57706b07596192365882c77722ac0f2c9a45797f6a6be69fe48e960bea10e8",
+      "target": "Расход топлива",
+      "value_sha256": "740e83034fb7232208d972597025d22d64b5e5e58e1d943c60e57cc5a698c0ad"
+    },
+    "Центробежная сила, кН": {
+      "raw_sha256": "4e57706b07596192365882c77722ac0f2c9a45797f6a6be69fe48e960bea10e8",
+      "target": "Центробежная сила",
+      "value_sha256": "77f88fc9a04a3944347205cc724d5e48ac7380b6e607a6187850dd57c87717a8"
+    }
+  },
+  "576eb83dc93261d5e708cb92": {
+    "Рабочая масса, кг": {
+      "raw_sha256": "22300e1f16e28d207643856391bc8700b12404aee84cb8df71a8801338020e92",
+      "target": "Рабочая масса",
+      "value_sha256": "a8b91b59cca6e45254f24242407d7b3c74d18824651ce754b1701856bb0d220e"
+    },
+    "Центробежная сила, кН": {
+      "raw_sha256": "22300e1f16e28d207643856391bc8700b12404aee84cb8df71a8801338020e92",
+      "target": "Центробежная сила",
+      "value_sha256": "eacbc3624cdfc7e9ee0de07b80f0b9bf194b904beca2b366c158139bf7d2f02e"
+    }
+  },
+  "5a5fee905fbf037fabaae7a6": {
+    "Расход топлива": {
+      "raw_sha256": "f0c09f361108c5160986b29d62f926125f3f09ecdecd61cd77b91c9625bdc600",
+      "target": "Расход топлива, л/ч",
+      "value_sha256": "272f4c9ea6eecffeb390b073584702240b57abe97f30d1ef36fd641c63e623b8"
+    },
+    "Топливный бак": {
+      "raw_sha256": "f0c09f361108c5160986b29d62f926125f3f09ecdecd61cd77b91c9625bdc600",
+      "target": "Объём топливного бака, л",
+      "value_sha256": "ef2d127de37b942baad06145e54b0c619a1f22327b2ebbcfbec78f5564afe39d"
+    },
+    "Центробежная сила": {
+      "raw_sha256": "f0c09f361108c5160986b29d62f926125f3f09ecdecd61cd77b91c9625bdc600",
+      "target": "Центробежная сила, кН",
+      "value_sha256": "624b60c58c9d8bfb6ff1886c2fd605d2adeb6ea4da576068201b6c6958ce93f4"
+    }
+  },
+  "5aaeca83ae2262473cf66dde": {
+    "Объём двигателя, см³": {
+      "raw_sha256": "2c2e6e2e5fd985c74fed556f2d2a39f63a47f8012f2ffa980c3310eff1ff57ff",
+      "target": "Рабочий объём двигателя",
+      "value_sha256": "a88d7977d6203426538d19d72b4d2afd2fd2a01dc6da2e210cacb500aaec3771"
+    },
+    "Объём топливного бака, л": {
+      "raw_sha256": "2c2e6e2e5fd985c74fed556f2d2a39f63a47f8012f2ffa980c3310eff1ff57ff",
+      "target": "Топливный бак",
+      "value_sha256": "e7f8f896e6e082ca18aa43aca15ce3e86661de8d35a0cc7ae1140af1eb7477ad"
+    },
+    "Рабочая масса, кг": {
+      "raw_sha256": "2c2e6e2e5fd985c74fed556f2d2a39f63a47f8012f2ffa980c3310eff1ff57ff",
+      "target": "Рабочая масса",
+      "value_sha256": "a57d1857a3e40f597c1a80297f7e55b13a533d714ad741c7607ddda063a22612"
+    },
+    "Расход топлива, л/ч": {
+      "raw_sha256": "2c2e6e2e5fd985c74fed556f2d2a39f63a47f8012f2ffa980c3310eff1ff57ff",
+      "target": "Расход топлива",
+      "value_sha256": "d71c992f128c54b3be792fdac86945bb52194c8d63134c0968bb00f088231590"
+    },
+    "Центробежная сила, кН": {
+      "raw_sha256": "2c2e6e2e5fd985c74fed556f2d2a39f63a47f8012f2ffa980c3310eff1ff57ff",
+      "target": "Центробежная сила",
+      "value_sha256": "fab71f521f4508e6b68d3840cc6c6149da54e05d84d2f9b8623a716967f23ed6"
+    }
+  },
+  "5adb7679e2b777f6d7281737": {
+    "Частота ударов": {
+      "raw_sha256": "ac370f62f4b2f5d4344350f2f3d431bd9086c3ca388352dd86214773d3c80111",
+      "target": "Частота ударов, уд/мин",
+      "value_sha256": "a4c6af0cb6f02dff01ba174e4cf11f24f73d9ed16ca7a1e3c9d831c0139faa5c"
+    }
+  },
+  "608466e271a39c68de66dc3a": {
+    "Объём двигателя, см³": {
+      "raw_sha256": "4213b56863edc4e1957cfcf89aa0d6bce5f796de8fa8aef9fa3af5e7802decb0",
+      "target": "Рабочий объём",
+      "value_sha256": "47ddc8ae86dbefa509cac05c805c63ae200f985a6e53681c0e724e6cdeb1ebbf"
+    },
+    "Объём топливного бака, л": {
+      "raw_sha256": "4213b56863edc4e1957cfcf89aa0d6bce5f796de8fa8aef9fa3af5e7802decb0",
+      "target": "Топливный бак",
+      "value_sha256": "33208cd3606b8d8accab0a4d0b90d5cd228f5e12808ea0a99c947a9635e45175"
+    },
+    "Рабочая масса, кг": {
+      "raw_sha256": "4213b56863edc4e1957cfcf89aa0d6bce5f796de8fa8aef9fa3af5e7802decb0",
+      "target": "Рабочая масса",
+      "value_sha256": "22a35e0c7609ddd642611635a10fc73d5d5c58a1fa84c77fc8b075f0622d3bb0"
+    },
+    "Расход топлива, л/ч": {
+      "raw_sha256": "4213b56863edc4e1957cfcf89aa0d6bce5f796de8fa8aef9fa3af5e7802decb0",
+      "target": "Расход топлива",
+      "value_sha256": "740e83034fb7232208d972597025d22d64b5e5e58e1d943c60e57cc5a698c0ad"
+    },
+    "Центробежная сила, кН": {
+      "raw_sha256": "4213b56863edc4e1957cfcf89aa0d6bce5f796de8fa8aef9fa3af5e7802decb0",
+      "target": "Центробежная сила",
+      "value_sha256": "77f88fc9a04a3944347205cc724d5e48ac7380b6e607a6187850dd57c87717a8"
+    }
+  },
+  "615939f211e4aba19d0e5da4": {
+    "Сила удара, кн": {
+      "raw_sha256": "5200465f8a7a4dd61b6e7aec30781b59c2cbf041175d9b5ca1c8a403e2dc9401",
+      "target": "Сила удара, кН",
+      "value_sha256": "4ec9599fc203d176a301536c2e091a19bc852759b255bd6818810a42c5fed14a"
+    },
+    "Частота ударов": {
+      "raw_sha256": "5200465f8a7a4dd61b6e7aec30781b59c2cbf041175d9b5ca1c8a403e2dc9401",
+      "target": "Частота ударов, уд/мин",
+      "value_sha256": "d62a7b3da232bd0ac1f7520a3b5bb57b171aec57f960f55b47b1987d4e398f68"
+    }
+  },
+  "62d482fa6bd449416ca22029": {
+    "Объём двигателя, см³": {
+      "raw_sha256": "21d64f9cac2239fdfa2cd8c9b6cdc53c75963ba7f607b20b2b110bbdb1425cc5",
+      "target": "Рабочий объём двигателя",
+      "value_sha256": "a88d7977d6203426538d19d72b4d2afd2fd2a01dc6da2e210cacb500aaec3771"
+    },
+    "Объём топливного бака, л": {
+      "raw_sha256": "21d64f9cac2239fdfa2cd8c9b6cdc53c75963ba7f607b20b2b110bbdb1425cc5",
+      "target": "Объём топливного бака",
+      "value_sha256": "e7f8f896e6e082ca18aa43aca15ce3e86661de8d35a0cc7ae1140af1eb7477ad"
+    },
+    "Рабочая масса, кг": {
+      "raw_sha256": "21d64f9cac2239fdfa2cd8c9b6cdc53c75963ba7f607b20b2b110bbdb1425cc5",
+      "target": "Рабочая масса",
+      "value_sha256": "b344839528cf0388b98db7f78c50aa7d1c14bbaac7ba1eee5cfcf35f6fd34f6b"
+    },
+    "Расход топлива, л/ч": {
+      "raw_sha256": "21d64f9cac2239fdfa2cd8c9b6cdc53c75963ba7f607b20b2b110bbdb1425cc5",
+      "target": "Расход топлива",
+      "value_sha256": "f34158eef64e2bc26ccb568eb277527421c9c3f2b6f5d5ecb61698f8c6434145"
+    },
+    "Центробежная сила, кН": {
+      "raw_sha256": "21d64f9cac2239fdfa2cd8c9b6cdc53c75963ba7f607b20b2b110bbdb1425cc5",
+      "target": "Центробежная сила",
+      "value_sha256": "cf3599c1ded711a926e39ac102a26bc69333e42d4d67b87f921b744451289172"
+    }
+  },
+  "63db1c055466757d094b61bd": {
+    "Объём топливного бака, л": {
+      "raw_sha256": "5e54449ed6d13eb700016356aeede9eac3c08b52c787d88a2b174c784b81c22f",
+      "target": "Объём топливного бака",
+      "value_sha256": "e1fbb346756a10b148496f51b753e1d7bb7a82a2991a8f9b84ee643c92ae42c7"
+    },
+    "Рабочая масса, кг": {
+      "raw_sha256": "5e54449ed6d13eb700016356aeede9eac3c08b52c787d88a2b174c784b81c22f",
+      "target": "Рабочая масса",
+      "value_sha256": "a8b91b59cca6e45254f24242407d7b3c74d18824651ce754b1701856bb0d220e"
+    },
+    "Расход топлива, л/ч": {
+      "raw_sha256": "5e54449ed6d13eb700016356aeede9eac3c08b52c787d88a2b174c784b81c22f",
+      "target": "Расход топлива",
+      "value_sha256": "edd3834f56b998a7c6e21ed00165177331e1d22441d155684877045dd73a12a6"
+    },
+    "Центробежная сила, кН": {
+      "raw_sha256": "5e54449ed6d13eb700016356aeede9eac3c08b52c787d88a2b174c784b81c22f",
+      "target": "Центробежная сила",
+      "value_sha256": "118235307a3d20705400b9334268f98e91b430052988d462a761722e5a029273"
+    }
+  },
+  "6500159a101fa015910c5b5b": {
+    "Центробежная сила": {
+      "raw_sha256": "900801274888f17612e3c67d76f2a90bec8e94bceb14e7793866c247ce45cf73",
+      "target": "Центробежная сила, кН",
+      "value_sha256": "5f9c4ab08cac7457e9111a30e4664920607ea2c115a1433d7be98e97e64244ca"
+    }
+  },
+  "66426cbb59280d9d7cadccc8": {
+    "Объём топливного бака, л": {
+      "raw_sha256": "69b0d988c055bbd18030b85bcdb7e051da2e748aff9770dc43333a7b9a6ba5c6",
+      "target": "Топливный бак",
+      "value_sha256": "f47d64e06449994d0fb135f22b737e89c4a692ff4d3ae1beafba3159d7be0fa2"
+    },
+    "Центробежная сила, кН": {
+      "raw_sha256": "69b0d988c055bbd18030b85bcdb7e051da2e748aff9770dc43333a7b9a6ba5c6",
+      "target": "Центробежная сила",
+      "value_sha256": "48cd5256e5785cf124b229e1ef1824507e79cf5bbbc5be92a6d985d76f11cec3"
+    }
+  },
+  "6a141e481208ed502d23508c": {
+    "Рабочая масса, кг": {
+      "raw_sha256": "ee62327367093e4195a33b56d6023bdff384a82ff17d71b982d4b0b26c696c6e",
+      "target": "Рабочая масса",
+      "value_sha256": "3708e9d857b59fb0b2a2a02315fddefc378ba670b90dff2a3259ed9bbb70f865"
+    },
+    "Центробежная сила, кН": {
+      "raw_sha256": "ee62327367093e4195a33b56d6023bdff384a82ff17d71b982d4b0b26c696c6e",
+      "target": "Центробежная сила",
+      "value_sha256": "465b896576af75ebac4494c26b686cb9449294b5e0f52cce948c3aeaa5c92947"
+    }
+  },
+  "6a271be8a5d88eeb43d51bac": {
+    "Сила удара, кн": {
+      "raw_sha256": "cf034d4c80f1da85228a41acb459f8196a8eefec816249cc91e5ace7dcc4e12e",
+      "target": "Сила удара, кН",
+      "value_sha256": "4523540f1504cd17100c4835e85b7eefd49911580f8efff0599a8f283be6b9e3"
+    },
+    "Частота ударов": {
+      "raw_sha256": "cf034d4c80f1da85228a41acb459f8196a8eefec816249cc91e5ace7dcc4e12e",
+      "target": "Частота ударов, уд/мин",
+      "value_sha256": "c2077253a9b10166e7c8ffda8f2377456f332029eea3d27def7fb2b23502c0d4"
+    }
+  },
+  "6e95a5c7cfa51163ab546d8f": {
+    "Частота ударов": {
+      "raw_sha256": "788c6fb3d22e791e7cbbd9109b8947d70b512cfb633a0ad9770b565b3e91825c",
+      "target": "Частота ударов, уд/мин",
+      "value_sha256": "c2077253a9b10166e7c8ffda8f2377456f332029eea3d27def7fb2b23502c0d4"
+    }
+  },
+  "6eb7487f1605de08e888f866": {
+    "Рабочая масса, кг": {
+      "raw_sha256": "7b60dd7d603d1b6c6b850a9f72642ac65682b73b3761d2d931973a541311c7ed",
+      "target": "Рабочая масса",
+      "value_sha256": "c2c1ad350e7632cc1272a4d974ab743da5303e78c3957e118b266c699e264634"
+    },
+    "Центробежная сила, кН": {
+      "raw_sha256": "7b60dd7d603d1b6c6b850a9f72642ac65682b73b3761d2d931973a541311c7ed",
+      "target": "Центробежная сила",
+      "value_sha256": "eacbc3624cdfc7e9ee0de07b80f0b9bf194b904beca2b366c158139bf7d2f02e"
+    }
+  },
+  "70d878e44687b732c27790f3": {
+    "Частота ударов": {
+      "raw_sha256": "3427f73c81c7ef314b5b0014d336155b2a9aa4ef546aafe4af891c8cf8ef4126",
+      "target": "Частота ударов, уд/мин",
+      "value_sha256": "a4c6af0cb6f02dff01ba174e4cf11f24f73d9ed16ca7a1e3c9d831c0139faa5c"
+    }
+  },
+  "78cb044efbd8b125524ae0b1": {
+    "Объём топливного бака, л": {
+      "raw_sha256": "31022555b778abaff363cde56b7f1e5c8b2c9210628f11f0e44dee4ae337e890",
+      "target": "Объём топливного бака",
+      "value_sha256": "49625d9e174e9b368b9c01ed5927a5381c17f66ab05234df0ded2d378a4df1ba"
+    },
+    "Расход топлива, л/ч": {
+      "raw_sha256": "31022555b778abaff363cde56b7f1e5c8b2c9210628f11f0e44dee4ae337e890",
+      "target": "Расход топлива",
+      "value_sha256": "50678738f14c73900d2dd4f887acb1049d5690293875075430809484ad6d9534"
+    },
+    "Топливный бак": {
+      "raw_sha256": "31022555b778abaff363cde56b7f1e5c8b2c9210628f11f0e44dee4ae337e890",
+      "target": "Объём топливного бака",
+      "value_sha256": "49625d9e174e9b368b9c01ed5927a5381c17f66ab05234df0ded2d378a4df1ba"
+    }
+  },
+  "80afc4fc7b57a44b6a4f63a0": {
+    "Объём двигателя, см³": {
+      "raw_sha256": "302bfe3bb7fba808636149a8f70ab90fb651d91f4919203f2130b81e2c616cfc",
+      "target": "Рабочий объём",
+      "value_sha256": "47ddc8ae86dbefa509cac05c805c63ae200f985a6e53681c0e724e6cdeb1ebbf"
+    },
+    "Объём топливного бака, л": {
+      "raw_sha256": "302bfe3bb7fba808636149a8f70ab90fb651d91f4919203f2130b81e2c616cfc",
+      "target": "Топливный бак",
+      "value_sha256": "33208cd3606b8d8accab0a4d0b90d5cd228f5e12808ea0a99c947a9635e45175"
+    },
+    "Рабочая масса, кг": {
+      "raw_sha256": "302bfe3bb7fba808636149a8f70ab90fb651d91f4919203f2130b81e2c616cfc",
+      "target": "Рабочая масса",
+      "value_sha256": "58ef77ee24df4347935fb55bdc9dd568d6d81117a217210610b75977812a9763"
+    },
+    "Расход топлива, л/ч": {
+      "raw_sha256": "302bfe3bb7fba808636149a8f70ab90fb651d91f4919203f2130b81e2c616cfc",
+      "target": "Расход топлива",
+      "value_sha256": "740e83034fb7232208d972597025d22d64b5e5e58e1d943c60e57cc5a698c0ad"
+    },
+    "Центробежная сила, кН": {
+      "raw_sha256": "302bfe3bb7fba808636149a8f70ab90fb651d91f4919203f2130b81e2c616cfc",
+      "target": "Центробежная сила",
+      "value_sha256": "77f88fc9a04a3944347205cc724d5e48ac7380b6e607a6187850dd57c87717a8"
+    }
+  },
+  "813286eaa233327615861679": {
+    "Сила удара, кн": {
+      "raw_sha256": "20fc3500fd487291d14effe462ab7938374a09dae988fc13c4f6813a9b320d83",
+      "target": "Сила удара, кН",
+      "value_sha256": "9400f1b21cb527d7fa3d3eabba93557a18ebe7a2ca4e471cfe5e4c5b4ca7f767"
+    },
+    "Частота ударов": {
+      "raw_sha256": "20fc3500fd487291d14effe462ab7938374a09dae988fc13c4f6813a9b320d83",
+      "target": "Частота ударов, уд/мин",
+      "value_sha256": "fc4fb94d36f45aa9d13358022455e55db4b6f0eb536a1b2897c90dfd3df9eb9b"
+    }
+  },
+  "84f62cf15cf409fddb30cb93": {
+    "Расход топлива": {
+      "raw_sha256": "83d8a5e22066214528597643b2875a0a64366e66d700b7eadc94914a1e88cc3e",
+      "target": "Расход топлива, л/ч",
+      "value_sha256": "d20465aa92ad20bd51754db3cfab305f77a88a0db6def53ed9c4574b9e9de045"
+    },
+    "Топливный бак": {
+      "raw_sha256": "83d8a5e22066214528597643b2875a0a64366e66d700b7eadc94914a1e88cc3e",
+      "target": "Объём топливного бака, л",
+      "value_sha256": "4e07408562bedb8b60ce05c1decfe3ad16b72230967de01f640b7e4729b49fce"
+    }
+  },
+  "8897b8ccb5306f64631373b1": {
+    "Вибрация на рукоятке": {
+      "raw_sha256": "765c3528ea905f8e15793a50057671968c621d8ffbb1ea6af25bfc66cbdb7639",
+      "target": "Вибрация на рукояти",
+      "value_sha256": "68af066c4efc661d6fa47cb5a4878802d9c03574eb705222aca58566dfcb5192"
+    },
+    "Расход топлива": {
+      "raw_sha256": "765c3528ea905f8e15793a50057671968c621d8ffbb1ea6af25bfc66cbdb7639",
+      "target": "Расход топлива, л/ч",
+      "value_sha256": "39ce8fd81053a2319b2cccd6e97cb4f684c0575efbc095ba1e8a7ba931ad2fd3"
+    },
+    "Топливный бак": {
+      "raw_sha256": "765c3528ea905f8e15793a50057671968c621d8ffbb1ea6af25bfc66cbdb7639",
+      "target": "Объём топливного бака, л",
+      "value_sha256": "b9c7707d529837998608296d4c60b671ef6241776fdbc1f51ab072246bec8723"
+    }
+  },
+  "8ad79f2377432382784fd5e6": {
+    "Расход топлива": {
+      "raw_sha256": "ec3dc0c6c409e6a530c54af8afa85b3f7d69eb708a522935f6c606e21177be48",
+      "target": "Расход топлива, л/ч",
+      "value_sha256": "272f4c9ea6eecffeb390b073584702240b57abe97f30d1ef36fd641c63e623b8"
+    },
+    "Топливный бак": {
+      "raw_sha256": "ec3dc0c6c409e6a530c54af8afa85b3f7d69eb708a522935f6c606e21177be48",
+      "target": "Объём топливного бака, л",
+      "value_sha256": "ef2d127de37b942baad06145e54b0c619a1f22327b2ebbcfbec78f5564afe39d"
+    },
+    "Центробежная сила": {
+      "raw_sha256": "ec3dc0c6c409e6a530c54af8afa85b3f7d69eb708a522935f6c606e21177be48",
+      "target": "Центробежная сила, кН",
+      "value_sha256": "7a61b53701befdae0eeeffaecc73f14e20b537bb0f8b91ad7c2936dc63562b25"
+    }
+  },
+  "8cd0c6db4d51693e0137a7e5": {
+    "Частота ударов": {
+      "raw_sha256": "38fa9f6d03d2c9eece7355a0989242c5d694ed1eeb0b2d2a20039df85a394133",
+      "target": "Частота ударов, уд/мин",
+      "value_sha256": "a4c6af0cb6f02dff01ba174e4cf11f24f73d9ed16ca7a1e3c9d831c0139faa5c"
+    }
+  },
+  "9543e048019a66489be69e4d": {
+    "Объём двигателя, см³": {
+      "raw_sha256": "f8d5c2c862d2394c1be32b9c21b1c331fdaefc589f94dd1b2f4dac2b4cab656e",
+      "target": "Рабочий объём",
+      "value_sha256": "47ddc8ae86dbefa509cac05c805c63ae200f985a6e53681c0e724e6cdeb1ebbf"
+    },
+    "Объём топливного бака, л": {
+      "raw_sha256": "f8d5c2c862d2394c1be32b9c21b1c331fdaefc589f94dd1b2f4dac2b4cab656e",
+      "target": "Топливный бак",
+      "value_sha256": "33208cd3606b8d8accab0a4d0b90d5cd228f5e12808ea0a99c947a9635e45175"
+    },
+    "Рабочая масса, кг": {
+      "raw_sha256": "f8d5c2c862d2394c1be32b9c21b1c331fdaefc589f94dd1b2f4dac2b4cab656e",
+      "target": "Рабочая масса",
+      "value_sha256": "a08d672e61c509451214d53a56f53b0b07bbab3e3d9eb8dd030b16d85aeba6d7"
+    },
+    "Расход топлива, л/ч": {
+      "raw_sha256": "f8d5c2c862d2394c1be32b9c21b1c331fdaefc589f94dd1b2f4dac2b4cab656e",
+      "target": "Расход топлива",
+      "value_sha256": "740e83034fb7232208d972597025d22d64b5e5e58e1d943c60e57cc5a698c0ad"
+    },
+    "Центробежная сила, кН": {
+      "raw_sha256": "f8d5c2c862d2394c1be32b9c21b1c331fdaefc589f94dd1b2f4dac2b4cab656e",
+      "target": "Центробежная сила",
+      "value_sha256": "77f88fc9a04a3944347205cc724d5e48ac7380b6e607a6187850dd57c87717a8"
+    }
+  },
+  "9785be0c946a681fdc627423": {
+    "Рабочая масса, кг": {
+      "raw_sha256": "a4cad061ff6c93bce18986653cd4d8bdfc50a148e1f34fe2dbbe0bb39949c7e6",
+      "target": "Рабочая масса",
+      "value_sha256": "786e9404a53ed37f0de38103f548e5c03eefc3a73fe9548239f6d67524aaeebb"
+    },
+    "Центробежная сила, кН": {
+      "raw_sha256": "a4cad061ff6c93bce18986653cd4d8bdfc50a148e1f34fe2dbbe0bb39949c7e6",
+      "target": "Центробежная сила",
+      "value_sha256": "465b896576af75ebac4494c26b686cb9449294b5e0f52cce948c3aeaa5c92947"
+    }
+  },
+  "98161f1d8d1c58a018cc56cb": {
+    "Объём двигателя, см³": {
+      "raw_sha256": "225c9cf3bcf69669b3af2e2ed1494eda2f370cf0f068c87d4f8e45414d8983b8",
+      "target": "Рабочий объём",
+      "value_sha256": "47ddc8ae86dbefa509cac05c805c63ae200f985a6e53681c0e724e6cdeb1ebbf"
+    },
+    "Объём топливного бака, л": {
+      "raw_sha256": "225c9cf3bcf69669b3af2e2ed1494eda2f370cf0f068c87d4f8e45414d8983b8",
+      "target": "Топливный бак",
+      "value_sha256": "33208cd3606b8d8accab0a4d0b90d5cd228f5e12808ea0a99c947a9635e45175"
+    },
+    "Рабочая масса, кг": {
+      "raw_sha256": "225c9cf3bcf69669b3af2e2ed1494eda2f370cf0f068c87d4f8e45414d8983b8",
+      "target": "Рабочая масса",
+      "value_sha256": "ffc362dbd5a717119f2c3efd2dd286ee5858b9226da00c01cb9ffc7d79744260"
+    },
+    "Расход топлива, л/ч": {
+      "raw_sha256": "225c9cf3bcf69669b3af2e2ed1494eda2f370cf0f068c87d4f8e45414d8983b8",
+      "target": "Расход топлива",
+      "value_sha256": "740e83034fb7232208d972597025d22d64b5e5e58e1d943c60e57cc5a698c0ad"
+    },
+    "Центробежная сила, кН": {
+      "raw_sha256": "225c9cf3bcf69669b3af2e2ed1494eda2f370cf0f068c87d4f8e45414d8983b8",
+      "target": "Центробежная сила",
+      "value_sha256": "77f88fc9a04a3944347205cc724d5e48ac7380b6e607a6187850dd57c87717a8"
+    }
+  },
+  "9bf628d69627ac48a74eda09": {
+    "Частота ударов": {
+      "raw_sha256": "06984f60e44c4990cc0f8b1f4118eb766b387f231a863f1a9a362d6e03c05dce",
+      "target": "Частота ударов, уд/мин",
+      "value_sha256": "c2077253a9b10166e7c8ffda8f2377456f332029eea3d27def7fb2b23502c0d4"
+    }
+  },
+  "a2fe8f572c8d0261593d3f77": {
+    "Частота вибрации, Гц": {
+      "raw_sha256": "96fa68b7d4a6b77c79c9924205f49839bfeb29059346c289413ce8069d9971d2",
+      "target": "Частота вибрации",
+      "value_sha256": "cd5331a0507eb25d474f0e9c9e680459d087073053b02817b03034fbe66d7505"
+    }
+  },
+  "a5880a5294a23bcc8fdc9dbe": {
+    "Объём двигателя, см³": {
+      "raw_sha256": "bb1c25e7cd9f879be6b5d6b6e8c685864929eef1b53d0e60073e5377c998ca55",
+      "target": "Рабочий объём двигателя",
+      "value_sha256": "483a69195c3cb6053f3e1a5da318fe317579be7e148874aeb3c56eff1aa61316"
+    },
+    "Объём топливного бака, л": {
+      "raw_sha256": "bb1c25e7cd9f879be6b5d6b6e8c685864929eef1b53d0e60073e5377c998ca55",
+      "target": "Топливный бак",
+      "value_sha256": "33208cd3606b8d8accab0a4d0b90d5cd228f5e12808ea0a99c947a9635e45175"
+    },
+    "Способ запуска": {
+      "raw_sha256": "bb1c25e7cd9f879be6b5d6b6e8c685864929eef1b53d0e60073e5377c998ca55",
+      "target": "Запуск",
+      "value_sha256": "1743e9fc29692fdc1ef3e28c026187c176a2e4a4d6cea3a4f27437d60c603ee5"
+    }
+  },
+  "a61866136cbba348bb27f43a": {
+    "Объём двигателя, см³": {
+      "raw_sha256": "e3168f659499cf0f6a35963a26f112a1f855def44a30081038eeb291075c0999",
+      "target": "Рабочий объём",
+      "value_sha256": "47ddc8ae86dbefa509cac05c805c63ae200f985a6e53681c0e724e6cdeb1ebbf"
+    },
+    "Объём топливного бака, л": {
+      "raw_sha256": "e3168f659499cf0f6a35963a26f112a1f855def44a30081038eeb291075c0999",
+      "target": "Топливный бак",
+      "value_sha256": "33208cd3606b8d8accab0a4d0b90d5cd228f5e12808ea0a99c947a9635e45175"
+    },
+    "Рабочая масса, кг": {
+      "raw_sha256": "e3168f659499cf0f6a35963a26f112a1f855def44a30081038eeb291075c0999",
+      "target": "Рабочая масса",
+      "value_sha256": "a08d672e61c509451214d53a56f53b0b07bbab3e3d9eb8dd030b16d85aeba6d7"
+    },
+    "Расход топлива, л/ч": {
+      "raw_sha256": "e3168f659499cf0f6a35963a26f112a1f855def44a30081038eeb291075c0999",
+      "target": "Расход топлива",
+      "value_sha256": "740e83034fb7232208d972597025d22d64b5e5e58e1d943c60e57cc5a698c0ad"
+    },
+    "Центробежная сила, кН": {
+      "raw_sha256": "e3168f659499cf0f6a35963a26f112a1f855def44a30081038eeb291075c0999",
+      "target": "Центробежная сила",
+      "value_sha256": "77f88fc9a04a3944347205cc724d5e48ac7380b6e607a6187850dd57c87717a8"
+    }
+  },
+  "a64bea3f47639e358fd01dd3": {
+    "Объём двигателя, см³": {
+      "raw_sha256": "c417e5b2ba5b9db211efcaef327eb70830f53142e60ac36f8d4045197eb7b498",
+      "target": "Рабочий объём",
+      "value_sha256": "10a1dd9a824e0ef7583ef52e45ab0ac3fec8788bca675a3388722370f8a3737b"
+    },
+    "Объём топливного бака, л": {
+      "raw_sha256": "c417e5b2ba5b9db211efcaef327eb70830f53142e60ac36f8d4045197eb7b498",
+      "target": "Топливный бак",
+      "value_sha256": "4bb5e95e0b753f95ab8bb408a05d4a451ec265bb508feba1d6395ccbe983d668"
+    },
+    "Рабочая масса, кг": {
+      "raw_sha256": "c417e5b2ba5b9db211efcaef327eb70830f53142e60ac36f8d4045197eb7b498",
+      "target": "Рабочая масса",
+      "value_sha256": "9a52f41bd973f11c1b95f8209d762a16bb195069a02c4a60c237593b00c435e9"
+    },
+    "Расход топлива, л/ч": {
+      "raw_sha256": "c417e5b2ba5b9db211efcaef327eb70830f53142e60ac36f8d4045197eb7b498",
+      "target": "Расход топлива",
+      "value_sha256": "215200d6035ec1515c9ffbde95881caaae689d9351f45c3fe31581b5f98eedb4"
+    }
+  },
+  "a7a3f0eaff16db10a08d668b": {
+    "Частота ударов": {
+      "raw_sha256": "a7747a19086f09a8321ff8d2505c76b87cb4f319b84379866fe50de716871a3c",
+      "target": "Частота ударов, уд/мин",
+      "value_sha256": "c2077253a9b10166e7c8ffda8f2377456f332029eea3d27def7fb2b23502c0d4"
+    }
+  },
+  "abf9276f014ea0722f65883a": {
+    "Расход топлива": {
+      "raw_sha256": "4a676ab6ed64fc8a42747dbb66c1044db48c8c66a28050ee57935d92bcdf34aa",
+      "target": "Расход топлива, л/ч",
+      "value_sha256": "39ce8fd81053a2319b2cccd6e97cb4f684c0575efbc095ba1e8a7ba931ad2fd3"
+    },
+    "Топливный бак": {
+      "raw_sha256": "4a676ab6ed64fc8a42747dbb66c1044db48c8c66a28050ee57935d92bcdf34aa",
+      "target": "Объём топливного бака, л",
+      "value_sha256": "b9c7707d529837998608296d4c60b671ef6241776fdbc1f51ab072246bec8723"
+    },
+    "Центробежная сила": {
+      "raw_sha256": "4a676ab6ed64fc8a42747dbb66c1044db48c8c66a28050ee57935d92bcdf34aa",
+      "target": "Центробежная сила, кН",
+      "value_sha256": "624b60c58c9d8bfb6ff1886c2fd605d2adeb6ea4da576068201b6c6958ce93f4"
+    }
+  },
+  "abfdb8424d5b89ea7037d57e": {
+    "Объём двигателя, см³": {
+      "raw_sha256": "965e76b25a5db29dd5741ffbd2eee7392c91058e652de400fbcfb9b8063e2dc6",
+      "target": "Рабочий объём",
+      "value_sha256": "47ddc8ae86dbefa509cac05c805c63ae200f985a6e53681c0e724e6cdeb1ebbf"
+    },
+    "Объём топливного бака, л": {
+      "raw_sha256": "965e76b25a5db29dd5741ffbd2eee7392c91058e652de400fbcfb9b8063e2dc6",
+      "target": "Топливный бак",
+      "value_sha256": "33208cd3606b8d8accab0a4d0b90d5cd228f5e12808ea0a99c947a9635e45175"
+    },
+    "Рабочая масса, кг": {
+      "raw_sha256": "965e76b25a5db29dd5741ffbd2eee7392c91058e652de400fbcfb9b8063e2dc6",
+      "target": "Рабочая масса",
+      "value_sha256": "ffc362dbd5a717119f2c3efd2dd286ee5858b9226da00c01cb9ffc7d79744260"
+    },
+    "Расход топлива, л/ч": {
+      "raw_sha256": "965e76b25a5db29dd5741ffbd2eee7392c91058e652de400fbcfb9b8063e2dc6",
+      "target": "Расход топлива",
+      "value_sha256": "740e83034fb7232208d972597025d22d64b5e5e58e1d943c60e57cc5a698c0ad"
+    },
+    "Центробежная сила, кН": {
+      "raw_sha256": "965e76b25a5db29dd5741ffbd2eee7392c91058e652de400fbcfb9b8063e2dc6",
+      "target": "Центробежная сила",
+      "value_sha256": "77f88fc9a04a3944347205cc724d5e48ac7380b6e607a6187850dd57c87717a8"
+    }
+  },
+  "b7dbb5ac9054f37da3f3752e": {
+    "Рабочая масса, кг": {
+      "raw_sha256": "375915da9a7ec0e48cb53e661209f6f4dd996caa0369a9beecfd95f0dfa71514",
+      "target": "Рабочая масса",
+      "value_sha256": "c2c1ad350e7632cc1272a4d974ab743da5303e78c3957e118b266c699e264634"
+    },
+    "Центробежная сила, кН": {
+      "raw_sha256": "375915da9a7ec0e48cb53e661209f6f4dd996caa0369a9beecfd95f0dfa71514",
+      "target": "Центробежная сила",
+      "value_sha256": "118235307a3d20705400b9334268f98e91b430052988d462a761722e5a029273"
+    }
+  },
+  "c07a00ae2f5bc77e040986bc": {
+    "Объём двигателя, см³": {
+      "raw_sha256": "956a9a9c589b8880e4056b3f3ea50b4522c05d16bf0a9f78d4c5ed89f076aef1",
+      "target": "Рабочий объём двигателя",
+      "value_sha256": "ef232bf8c38f7656ff1940997d7e42baceec0267e4ffdbe7c3fad3449dfecf89"
+    },
+    "Объём топливного бака, л": {
+      "raw_sha256": "956a9a9c589b8880e4056b3f3ea50b4522c05d16bf0a9f78d4c5ed89f076aef1",
+      "target": "Объём топливного бака",
+      "value_sha256": "91a2659282b04a667ce641212e2e089d65bd0540da1c34783516f17461448e6e"
+    },
+    "Рабочая масса, кг": {
+      "raw_sha256": "956a9a9c589b8880e4056b3f3ea50b4522c05d16bf0a9f78d4c5ed89f076aef1",
+      "target": "Рабочая масса",
+      "value_sha256": "159ae017fd4a8f403a77d0e02e618ca5853efc087d9bda7de2d354afc3690f3f"
+    },
+    "Топливный бак": {
+      "raw_sha256": "956a9a9c589b8880e4056b3f3ea50b4522c05d16bf0a9f78d4c5ed89f076aef1",
+      "target": "Объём топливного бака",
+      "value_sha256": "91a2659282b04a667ce641212e2e089d65bd0540da1c34783516f17461448e6e"
+    }
+  },
+  "c2a5c4625b834203858180b5": {
+    "Сила удара, кн": {
+      "raw_sha256": "e9c7f3e098ee7afb7e02b995f632182967394dcda809346e894d902aec9b762c",
+      "target": "Сила удара, кН",
+      "value_sha256": "9400f1b21cb527d7fa3d3eabba93557a18ebe7a2ca4e471cfe5e4c5b4ca7f767"
+    },
+    "Частота ударов": {
+      "raw_sha256": "e9c7f3e098ee7afb7e02b995f632182967394dcda809346e894d902aec9b762c",
+      "target": "Частота ударов, уд/мин",
+      "value_sha256": "c2077253a9b10166e7c8ffda8f2377456f332029eea3d27def7fb2b23502c0d4"
+    }
+  },
+  "c76120f3108e2c06201ea849": {
+    "Сила удара, кн": {
+      "raw_sha256": "061f15db88e01220ed661f44cf11feac34ca86d5f47d089222e8ef50c44f9af7",
+      "target": "Сила удара, кН",
+      "value_sha256": "9400f1b21cb527d7fa3d3eabba93557a18ebe7a2ca4e471cfe5e4c5b4ca7f767"
+    },
+    "Частота ударов": {
+      "raw_sha256": "061f15db88e01220ed661f44cf11feac34ca86d5f47d089222e8ef50c44f9af7",
+      "target": "Частота ударов, уд/мин",
+      "value_sha256": "fc4fb94d36f45aa9d13358022455e55db4b6f0eb536a1b2897c90dfd3df9eb9b"
+    }
+  },
+  "c8a7ef1977aa54c647acf988": {
+    "Расход топлива": {
+      "raw_sha256": "f23c5af3c44ab733bb58f965b81904b29d64a83b0e053104eecc788e5cce7fc2",
+      "target": "Расход топлива, л/ч",
+      "value_sha256": "870832a6e38931f23a57956d831088219bc8ffeb8e92666132c67793f3b18749"
+    },
+    "Топливный бак": {
+      "raw_sha256": "f23c5af3c44ab733bb58f965b81904b29d64a83b0e053104eecc788e5cce7fc2",
+      "target": "Объём топливного бака, л",
+      "value_sha256": "b21f6955827adddc2f062a66c3078f5f9f208540e0defae199d89e6f594e0b28"
+    },
+    "Центробежная сила, кН": {
+      "raw_sha256": "f23c5af3c44ab733bb58f965b81904b29d64a83b0e053104eecc788e5cce7fc2",
+      "target": "Центробежная сила",
+      "value_sha256": "53c160b1807965d27623bc97f798e6271e906ed21f404056bc817b00fd3616ed"
+    }
+  },
+  "cfe6e420c29f086710784060": {
+    "Объём двигателя, см³": {
+      "raw_sha256": "6d2e5425fd8c84dccd8dd6b8381dc35fbd502da6333049358d86c66996b12757",
+      "target": "Рабочий объём",
+      "value_sha256": "47ddc8ae86dbefa509cac05c805c63ae200f985a6e53681c0e724e6cdeb1ebbf"
+    },
+    "Объём топливного бака, л": {
+      "raw_sha256": "6d2e5425fd8c84dccd8dd6b8381dc35fbd502da6333049358d86c66996b12757",
+      "target": "Топливный бак",
+      "value_sha256": "33208cd3606b8d8accab0a4d0b90d5cd228f5e12808ea0a99c947a9635e45175"
+    },
+    "Рабочая масса, кг": {
+      "raw_sha256": "6d2e5425fd8c84dccd8dd6b8381dc35fbd502da6333049358d86c66996b12757",
+      "target": "Рабочая масса",
+      "value_sha256": "283124e6d05ef1a741ae1789438fdda713350861c17d6ad9b31635f9f8c68727"
+    },
+    "Расход топлива, л/ч": {
+      "raw_sha256": "6d2e5425fd8c84dccd8dd6b8381dc35fbd502da6333049358d86c66996b12757",
+      "target": "Расход топлива",
+      "value_sha256": "740e83034fb7232208d972597025d22d64b5e5e58e1d943c60e57cc5a698c0ad"
+    },
+    "Центробежная сила, кН": {
+      "raw_sha256": "6d2e5425fd8c84dccd8dd6b8381dc35fbd502da6333049358d86c66996b12757",
+      "target": "Центробежная сила",
+      "value_sha256": "77f88fc9a04a3944347205cc724d5e48ac7380b6e607a6187850dd57c87717a8"
+    }
+  },
+  "d5c1e8f8305465e267c861e3": {
+    "Сила удара, кн": {
+      "raw_sha256": "0d9dad155ed62469d153f2bf2e2d5bdff5adf8c026f4a6a309f69870cde31c9c",
+      "target": "Сила удара, кН",
+      "value_sha256": "4523540f1504cd17100c4835e85b7eefd49911580f8efff0599a8f283be6b9e3"
+    },
+    "Частота ударов": {
+      "raw_sha256": "0d9dad155ed62469d153f2bf2e2d5bdff5adf8c026f4a6a309f69870cde31c9c",
+      "target": "Частота ударов, уд/мин",
+      "value_sha256": "c2077253a9b10166e7c8ffda8f2377456f332029eea3d27def7fb2b23502c0d4"
+    }
+  },
+  "d63619ead8e929b95529e2f8": {
+    "Расход топлива": {
+      "raw_sha256": "87c8099b788e89330a29804dd9aeafa0c906747b28e7c3cbfe75ca17b8023ed5",
+      "target": "Расход топлива, л/ч",
+      "value_sha256": "b9c7707d529837998608296d4c60b671ef6241776fdbc1f51ab072246bec8723"
+    },
+    "Топливный бак": {
+      "raw_sha256": "87c8099b788e89330a29804dd9aeafa0c906747b28e7c3cbfe75ca17b8023ed5",
+      "target": "Объём топливного бака, л",
+      "value_sha256": "4ec9599fc203d176a301536c2e091a19bc852759b255bd6818810a42c5fed14a"
+    },
+    "Центробежная сила": {
+      "raw_sha256": "87c8099b788e89330a29804dd9aeafa0c906747b28e7c3cbfe75ca17b8023ed5",
+      "target": "Центробежная сила, кН",
+      "value_sha256": "38d66d9692ac590000a91b03a88da1c88d51fab2b78f63171f553ecc551a0c6f"
+    }
+  },
+  "d65f7a5879b129ae3adc06ad": {
+    "Объём двигателя, см³": {
+      "raw_sha256": "e089f88c6c60a3c23a587eacf3c6d845f4a39380f1c40fb6b1a0a388e7415213",
+      "target": "Рабочий объём",
+      "value_sha256": "47ddc8ae86dbefa509cac05c805c63ae200f985a6e53681c0e724e6cdeb1ebbf"
+    },
+    "Объём топливного бака, л": {
+      "raw_sha256": "e089f88c6c60a3c23a587eacf3c6d845f4a39380f1c40fb6b1a0a388e7415213",
+      "target": "Топливный бак",
+      "value_sha256": "33208cd3606b8d8accab0a4d0b90d5cd228f5e12808ea0a99c947a9635e45175"
+    },
+    "Рабочая масса, кг": {
+      "raw_sha256": "e089f88c6c60a3c23a587eacf3c6d845f4a39380f1c40fb6b1a0a388e7415213",
+      "target": "Рабочая масса",
+      "value_sha256": "283124e6d05ef1a741ae1789438fdda713350861c17d6ad9b31635f9f8c68727"
+    },
+    "Расход топлива, л/ч": {
+      "raw_sha256": "e089f88c6c60a3c23a587eacf3c6d845f4a39380f1c40fb6b1a0a388e7415213",
+      "target": "Расход топлива",
+      "value_sha256": "740e83034fb7232208d972597025d22d64b5e5e58e1d943c60e57cc5a698c0ad"
+    },
+    "Центробежная сила, кН": {
+      "raw_sha256": "e089f88c6c60a3c23a587eacf3c6d845f4a39380f1c40fb6b1a0a388e7415213",
+      "target": "Центробежная сила",
+      "value_sha256": "77f88fc9a04a3944347205cc724d5e48ac7380b6e607a6187850dd57c87717a8"
+    }
+  },
+  "db27cd0bbd7ae0346a5ff2fc": {
+    "Объём двигателя, см³": {
+      "raw_sha256": "bf715ed2dbf1c040d2c9e7864178e0c4c3620505e643664e58bb3d0ac004f5b0",
+      "target": "Рабочий объём",
+      "value_sha256": "47ddc8ae86dbefa509cac05c805c63ae200f985a6e53681c0e724e6cdeb1ebbf"
+    },
+    "Объём топливного бака, л": {
+      "raw_sha256": "bf715ed2dbf1c040d2c9e7864178e0c4c3620505e643664e58bb3d0ac004f5b0",
+      "target": "Топливный бак",
+      "value_sha256": "33208cd3606b8d8accab0a4d0b90d5cd228f5e12808ea0a99c947a9635e45175"
+    },
+    "Рабочая масса, кг": {
+      "raw_sha256": "bf715ed2dbf1c040d2c9e7864178e0c4c3620505e643664e58bb3d0ac004f5b0",
+      "target": "Рабочая масса",
+      "value_sha256": "9a0f5506f4bcc2bc573f2f6d1a42103b3e9d65a9d334d898e447b4b41c5c975b"
+    },
+    "Расход топлива, л/ч": {
+      "raw_sha256": "bf715ed2dbf1c040d2c9e7864178e0c4c3620505e643664e58bb3d0ac004f5b0",
+      "target": "Расход топлива",
+      "value_sha256": "740e83034fb7232208d972597025d22d64b5e5e58e1d943c60e57cc5a698c0ad"
+    },
+    "Центробежная сила, кН": {
+      "raw_sha256": "bf715ed2dbf1c040d2c9e7864178e0c4c3620505e643664e58bb3d0ac004f5b0",
+      "target": "Центробежная сила",
+      "value_sha256": "77f88fc9a04a3944347205cc724d5e48ac7380b6e607a6187850dd57c87717a8"
+    }
+  },
+  "dd7a7255eee44ae69799e5b9": {
+    "Объём топливного бака, л": {
+      "raw_sha256": "d1878fb7e206b0fc8df38fa5ab336b7f833544f22184c9d8cfa500b184c4cbdc",
+      "target": "Топливный бак",
+      "value_sha256": "e7f8f896e6e082ca18aa43aca15ce3e86661de8d35a0cc7ae1140af1eb7477ad"
+    },
+    "Рабочая масса, кг": {
+      "raw_sha256": "d1878fb7e206b0fc8df38fa5ab336b7f833544f22184c9d8cfa500b184c4cbdc",
+      "target": "Рабочая масса",
+      "value_sha256": "41914a130afeb16c0bb497099df97800bcabb0bfd66808de68182dd4d85c6bf0"
+    },
+    "Центробежная сила, кН": {
+      "raw_sha256": "d1878fb7e206b0fc8df38fa5ab336b7f833544f22184c9d8cfa500b184c4cbdc",
+      "target": "Центробежная сила",
+      "value_sha256": "fab71f521f4508e6b68d3840cc6c6149da54e05d84d2f9b8623a716967f23ed6"
+    }
+  },
+  "ded0878f8f0c10713ebca015": {
+    "Рабочая масса, кг": {
+      "raw_sha256": "1fb399d8ff508f89e3aea6bae89b93478ed60d2f56bd83ce0e6d010188ed2195",
+      "target": "Рабочая масса",
+      "value_sha256": "c2c1ad350e7632cc1272a4d974ab743da5303e78c3957e118b266c699e264634"
+    },
+    "Центробежная сила, кН": {
+      "raw_sha256": "1fb399d8ff508f89e3aea6bae89b93478ed60d2f56bd83ce0e6d010188ed2195",
+      "target": "Центробежная сила",
+      "value_sha256": "eacbc3624cdfc7e9ee0de07b80f0b9bf194b904beca2b366c158139bf7d2f02e"
+    }
+  },
+  "e816ceea60ff7853cb095f96": {
+    "Объём топливного бака, л": {
+      "raw_sha256": "ad2d352292e09f140a2d0e764a7334e4472eb4dc226e66529b924879e79d54e7",
+      "target": "Объём топливного бака",
+      "value_sha256": "7fa08e5a8d4358836412419a9e775f0e4a241089897621514f7bb3a4bb639cb0"
+    },
+    "Рабочая масса, кг": {
+      "raw_sha256": "ad2d352292e09f140a2d0e764a7334e4472eb4dc226e66529b924879e79d54e7",
+      "target": "Рабочая масса",
+      "value_sha256": "cdaddd66f3fa173478af1080008289a8626fa7a6f79dece7acfb312f9fee9be4"
+    },
+    "Топливный бак": {
+      "raw_sha256": "ad2d352292e09f140a2d0e764a7334e4472eb4dc226e66529b924879e79d54e7",
+      "target": "Объём топливного бака",
+      "value_sha256": "7fa08e5a8d4358836412419a9e775f0e4a241089897621514f7bb3a4bb639cb0"
+    },
+    "Центробежная сила, кН": {
+      "raw_sha256": "ad2d352292e09f140a2d0e764a7334e4472eb4dc226e66529b924879e79d54e7",
+      "target": "Центробежная сила",
+      "value_sha256": "cf3599c1ded711a926e39ac102a26bc69333e42d4d67b87f921b744451289172"
+    }
+  },
+  "e9233c07d29b7e1aed2f8e3d": {
+    "Сила удара, кн": {
+      "raw_sha256": "738ea66855e919ec4b0a4aeab7e77a53443c2bc8ed21948a78cb68ad44b9f4d2",
+      "target": "Сила удара, кН",
+      "value_sha256": "4523540f1504cd17100c4835e85b7eefd49911580f8efff0599a8f283be6b9e3"
+    },
+    "Частота ударов": {
+      "raw_sha256": "738ea66855e919ec4b0a4aeab7e77a53443c2bc8ed21948a78cb68ad44b9f4d2",
+      "target": "Частота ударов, уд/мин",
+      "value_sha256": "fc4fb94d36f45aa9d13358022455e55db4b6f0eb536a1b2897c90dfd3df9eb9b"
+    }
+  },
+  "e95472ccdc1eff0a17916a2d": {
+    "Объём топливного бака, л": {
+      "raw_sha256": "0766ed7c42fba5bfb6cc8305242f919e98c62e3b17d5d700cd34a121954bf19b",
+      "target": "Топливный бак",
+      "value_sha256": "c3ea58a9fe4c3d4a7de056ba46661b8ede5e8f67f102a132ef5ebe2b2c9929dc"
+    }
+  },
+  "ec2d6682f8d6915be19091ca": {
+    "Сила удара, кн": {
+      "raw_sha256": "4692bb79f81560e32a31e6aa7801ea5cc342a2ffc861428b56a210f650b35405",
+      "target": "Сила удара, кН",
+      "value_sha256": "9400f1b21cb527d7fa3d3eabba93557a18ebe7a2ca4e471cfe5e4c5b4ca7f767"
+    },
+    "Частота ударов": {
+      "raw_sha256": "4692bb79f81560e32a31e6aa7801ea5cc342a2ffc861428b56a210f650b35405",
+      "target": "Частота ударов, уд/мин",
+      "value_sha256": "c2077253a9b10166e7c8ffda8f2377456f332029eea3d27def7fb2b23502c0d4"
+    }
+  },
+  "ee3a59f276d99542706f6bb2": {
+    "Расход топлива": {
+      "raw_sha256": "84ac5247af3ca975611bf23c76842b905732da64882e2a624ea68a62da981e67",
+      "target": "Расход топлива, л/ч",
+      "value_sha256": "272f4c9ea6eecffeb390b073584702240b57abe97f30d1ef36fd641c63e623b8"
+    },
+    "Топливный бак": {
+      "raw_sha256": "84ac5247af3ca975611bf23c76842b905732da64882e2a624ea68a62da981e67",
+      "target": "Объём топливного бака, л",
+      "value_sha256": "ef2d127de37b942baad06145e54b0c619a1f22327b2ebbcfbec78f5564afe39d"
+    },
+    "Центробежная сила": {
+      "raw_sha256": "84ac5247af3ca975611bf23c76842b905732da64882e2a624ea68a62da981e67",
+      "target": "Центробежная сила, кН",
+      "value_sha256": "624b60c58c9d8bfb6ff1886c2fd605d2adeb6ea4da576068201b6c6958ce93f4"
+    }
+  },
+  "ee7bdd91408dc64e1805561a": {
+    "Расход топлива": {
+      "raw_sha256": "95680e4ec1c76595db86e60233b4b9188a41d7c036018fbf31b57b783b15eefe",
+      "target": "Расход топлива, л/ч",
+      "value_sha256": "870832a6e38931f23a57956d831088219bc8ffeb8e92666132c67793f3b18749"
+    },
+    "Топливный бак": {
+      "raw_sha256": "95680e4ec1c76595db86e60233b4b9188a41d7c036018fbf31b57b783b15eefe",
+      "target": "Объём топливного бака, л",
+      "value_sha256": "b21f6955827adddc2f062a66c3078f5f9f208540e0defae199d89e6f594e0b28"
+    },
+    "Центробежная сила, кН": {
+      "raw_sha256": "95680e4ec1c76595db86e60233b4b9188a41d7c036018fbf31b57b783b15eefe",
+      "target": "Центробежная сила",
+      "value_sha256": "5984755bb15cef9737c43f705436fadb2212eaa2be5fbc7c374746ecd6dc6514"
+    }
+  },
+  "f1b5850de46bf99d58c20ba8": {
+    "Частота ударов": {
+      "raw_sha256": "dffc3ec129a1122e58449634a4ea36f411380fd157f3d9f26eefc559ba9995aa",
+      "target": "Частота ударов, уд/мин",
+      "value_sha256": "c032851ed192d8ac0a3ad04b0ef3060b44d1f6d62f8c17414006702787c5d88b"
+    }
+  },
+  "f54b323633bd777cecd2453f": {
+    "Объём двигателя, см³": {
+      "raw_sha256": "401b667e12495cebaf5fffd49325aeff469848023161c3e29904be80682883cc",
+      "target": "Рабочий объём двигателя",
+      "value_sha256": "3779335a0a1bd4502f2bbf404618280bfa627070ff3efdd9b985da53ee398782"
+    },
+    "Расход топлива, л/ч": {
+      "raw_sha256": "401b667e12495cebaf5fffd49325aeff469848023161c3e29904be80682883cc",
+      "target": "Расход топлива",
+      "value_sha256": "663bc419c1dd83a8d5b62424e7765ed6344169e275f4548ad47f777e644ce97b"
+    },
+    "Частота вибрации, Гц": {
+      "raw_sha256": "401b667e12495cebaf5fffd49325aeff469848023161c3e29904be80682883cc",
+      "target": "Частота вибрации",
+      "value_sha256": "06b759ae5a8b1039a1448f320d7bc88be9108b7023ed28be96e9ed0270a4f35d"
+    }
+  },
+  "f5840196007114b8ea662a8f": {
+    "Объём двигателя, см³": {
+      "raw_sha256": "c3b1c612277603a70d0563ae6f442c2cf81004a96a9cc2484aa5b47d16fc206e",
+      "target": "Рабочий объём двигателя",
+      "value_sha256": "72bb9e620d89cccc1acd803a23d15833ce62499ce3ac949824e516a27748d58f"
+    },
+    "Объём топливного бака, л": {
+      "raw_sha256": "c3b1c612277603a70d0563ae6f442c2cf81004a96a9cc2484aa5b47d16fc206e",
+      "target": "Объём топливного бака",
+      "value_sha256": "7fa08e5a8d4358836412419a9e775f0e4a241089897621514f7bb3a4bb639cb0"
+    },
+    "Рабочая масса, кг": {
+      "raw_sha256": "c3b1c612277603a70d0563ae6f442c2cf81004a96a9cc2484aa5b47d16fc206e",
+      "target": "Рабочая масса",
+      "value_sha256": "b93956b85609421c7650d391480bae05a0ef03ca18d8e5fb49f6beece8604b9b"
+    },
+    "Расход топлива, л/ч": {
+      "raw_sha256": "c3b1c612277603a70d0563ae6f442c2cf81004a96a9cc2484aa5b47d16fc206e",
+      "target": "Расход топлива",
+      "value_sha256": "e5de5cf64b9697f09f0af77169cad846016cf35d4984fd3dbd90c9e2589979b5"
+    },
+    "Топливный бак": {
+      "raw_sha256": "c3b1c612277603a70d0563ae6f442c2cf81004a96a9cc2484aa5b47d16fc206e",
+      "target": "Объём топливного бака",
+      "value_sha256": "7fa08e5a8d4358836412419a9e775f0e4a241089897621514f7bb3a4bb639cb0"
+    },
+    "Центробежная сила, кН": {
+      "raw_sha256": "c3b1c612277603a70d0563ae6f442c2cf81004a96a9cc2484aa5b47d16fc206e",
+      "target": "Центробежная сила",
+      "value_sha256": "34d53ac139f87367fef8c050eda69e7662736425017fa8acac159a2225ad75de"
+    }
+  },
+  "f66a7ca141a5424a811e7ed9": {
+    "Сила удара, кн": {
+      "raw_sha256": "16e3f92b0e3657c63322aa0a0c59bfaf854b5c0fe11751a09874584d45ff3fec",
+      "target": "Сила удара, кН",
+      "value_sha256": "4523540f1504cd17100c4835e85b7eefd49911580f8efff0599a8f283be6b9e3"
+    },
+    "Частота ударов": {
+      "raw_sha256": "16e3f92b0e3657c63322aa0a0c59bfaf854b5c0fe11751a09874584d45ff3fec",
+      "target": "Частота ударов, уд/мин",
+      "value_sha256": "c2077253a9b10166e7c8ffda8f2377456f332029eea3d27def7fb2b23502c0d4"
+    }
+  },
+  "f98c53d89f1e604c5f263c14": {
+    "Сила удара, кн": {
+      "raw_sha256": "72ba7d456a7db0e93126de5b793f20161da0d7799a3f380646bd2387be501a36",
+      "target": "Сила удара, кН",
+      "value_sha256": "4523540f1504cd17100c4835e85b7eefd49911580f8efff0599a8f283be6b9e3"
+    },
+    "Частота ударов": {
+      "raw_sha256": "72ba7d456a7db0e93126de5b793f20161da0d7799a3f380646bd2387be501a36",
+      "target": "Частота ударов, уд/мин",
+      "value_sha256": "c2077253a9b10166e7c8ffda8f2377456f332029eea3d27def7fb2b23502c0d4"
+    }
+  },
+  "fd840c558418fa5125c90324": {
+    "Сила удара, кн": {
+      "raw_sha256": "2bddd199553e912571f3a6dc605ef6911b7285d59a172758da8a79e2a33a45c0",
+      "target": "Сила удара, кН",
+      "value_sha256": "b17ef6d19c7a5b1ee83b907c595526dcb1eb06db8227d650d5dda0a9f4ce8cd9"
+    },
+    "Частота ударов": {
+      "raw_sha256": "2bddd199553e912571f3a6dc605ef6911b7285d59a172758da8a79e2a33a45c0",
+      "target": "Частота ударов, уд/мин",
+      "value_sha256": "d62a7b3da232bd0ac1f7520a3b5bb57b171aec57f960f55b47b1987d4e398f68"
+    }
+  }
+}

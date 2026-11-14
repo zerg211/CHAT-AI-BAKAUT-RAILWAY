@@ -1,13 +1,14 @@
 import {describe,it,expect,vi} from 'vitest';
 import {randomUUID} from 'node:crypto';
 import {textPdfPages} from './fixtures/pdfTextFixture.js';
+import {acceptanceDatabaseUrl,assertAcceptanceDatabaseEndpoint} from './fixtures/acceptanceDatabaseGuard.js';
 const fixture = vi.hoisted(() => ({ fetch: vi.fn() }));
 vi.mock('../src/security/outboundHttp.js', async importOriginal => ({
   ...await importOriginal<typeof import('../src/security/outboundHttp.js')>(), safeFetchBytes: fixture.fetch
 }));
-const isolated = (() => {try {const u=new URL(process.env.DATABASE_URL||'file:///missing');return ['127.0.0.1','localhost','[::1]'].includes(u.hostname)&&u.pathname.startsWith('/bakaut_acceptance_');}catch{return false;}})();
+const testUrl = acceptanceDatabaseUrl(process.env.BAKAUT_TEST_DATABASE_URL, process.env.DATABASE_URL, process.env.BAKAUT_TEST_DATABASE_CONFIRM);
 
-describe.skipIf(!isolated)('source lifecycle I: actual executor, PostgreSQL artifacts and replay; HTTP boundary controlled',()=>{
+describe.skipIf(!testUrl)('source lifecycle I: actual executor, PostgreSQL artifacts and replay; HTTP boundary controlled',()=>{
  it('preserves late scoped facts, blank-summary content, changed representations and unavailable-source semantics through durable execution',async()=>{
   const {pool}=await import('../src/db/pool.js');
   const {ConversationRepository,ProductRepository,LeadRepository}=await import('../src/db/repositories.js');
@@ -17,6 +18,10 @@ describe.skipIf(!isolated)('source lifecycle I: actual executor, PostgreSQL arti
   const {compactToolResultsForModel}=await import('../src/ai/agentManagerModelContext.js');
   const {validateToolResultOutput}=await import('../src/ai/agentManagerToolRegistry.js');
   const {config}=await import('../src/config.js');
+  try {
+   const endpoint = await pool.query('SELECT current_database() AS db, inet_server_addr()::text AS address');
+   assertAcceptanceDatabaseEndpoint(endpoint.rows[0], decodeURIComponent(testUrl!.pathname.slice(1)));
+  } catch (error) { await pool.end(); throw error; }
   const repo=new ConversationRepository(),products=new ProductRepository(),visitor=randomUUID();
   const session=await repo.createSession({visitorId:visitor});
   const owner=randomUUID(),pageUrl=config.CATALOG_BASE_URL+'/contacts/'+randomUUID();
@@ -127,10 +132,11 @@ describe.skipIf(!isolated)('source lifecycle I: actual executor, PostgreSQL arti
    expect((await pool.query("SELECT count(*)::int AS n FROM verified_fact_enrichment_jobs WHERE page_payload->>'sourceUrl'=$1",[cancelledUrl])).rows[0].n).toBe(0);
    console.log(JSON.stringify({status:'PASS',level:'I',checks:['A02','A03','A09','A10/source-change-fence','I03','I07','I08/foreign-redirect-and-challenge','Z14','Z20/multipage-pdf-and-unsupported-image'],modelCalls:0,controlledBoundary:'HTTP bytes only',database:'real PostgreSQL; actual executor persists tool artifacts'}));
   }finally{
-   await pool.query("DELETE FROM verified_fact_enrichment_jobs WHERE page_payload->>'sourceUrl'=ANY($1::text[])",[[pageUrl,pageUrl+'/challenge',pageUrl+'/soft-404',pageUrl+'/category']]);
-   await pool.query('DELETE FROM catalog_pages WHERE source_url=ANY($1::text[])',[[pageUrl,pageUrl+'/blank']]);
-   await pool.query('DELETE FROM conversation_sessions WHERE id=$1',[session.id]);
-   await pool.end();
+   try {
+    await pool.query("DELETE FROM verified_fact_enrichment_jobs WHERE page_payload->>'sourceUrl'=ANY($1::text[])",[[pageUrl,pageUrl+'/challenge',pageUrl+'/soft-404',pageUrl+'/category']]);
+    await pool.query('DELETE FROM catalog_pages WHERE source_url=ANY($1::text[])',[[pageUrl,pageUrl+'/blank']]);
+    await pool.query('DELETE FROM conversation_sessions WHERE id=$1',[session.id]);
+   } finally { await pool.end(); }
   }
  },30000);
 });

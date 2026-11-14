@@ -18,7 +18,7 @@ import {
   ConversationSessionUnavailableError,
   ConversationRepository
 } from '../db/repositories.js';
-import { limitPublicHistoryResponse, normalizePublicHistoryMessage } from '../shared/publicChatHistory.js';
+import { limitPublicHistoryResponse, normalizePublicHistoryMessage, PUBLIC_HISTORY_MAX_RESPONSE_BYTES } from '../shared/publicChatHistory.js';
 import { closeSseReply, createStageStatusSender, customerStatusForStage, openSseReply } from './sse.js';
 import { sseCorsHeaders } from '../cors.js';
 
@@ -43,6 +43,7 @@ const turnEventsQuerySchema = z.object({
 
 // Must exceed the turn budget wall time (150s) plus SSE delivery headroom.
 const TURN_DEADLINE_MS = 160_000;
+const RESEARCH_WINDOW_MS = 80_000;
 
 function remainingTurnDeadlineMs(deadlineAt: string | null | undefined, graceMs = 0) {
   const parsed = deadlineAt ? Date.parse(deadlineAt) : Number.NaN;
@@ -105,9 +106,13 @@ function publicHistoryMessage(message: Awaited<ReturnType<ConversationRepository
   if (message.role === 'assistant') {
     candidate.products = metadata.productCards;
     candidate.cardDisplay = metadata.cardDisplay;
+    candidate.availabilityRequest = metadata.availabilityRequest;
+    candidate.availabilityReceipt = metadata.availabilityReceipt;
+    candidate.leadCreated = metadata.leadCreated;
+    if (metadata.leadRequested === true) candidate.leadRequested = true;
     const answerContract = metadata.answerContract;
     if (
-      answerContract &&
+      !metadata.availabilityRequest && answerContract &&
       typeof answerContract === 'object' &&
       !Array.isArray(answerContract) &&
       (answerContract as Record<string, unknown>).leadAction === 'offer_form'
@@ -177,15 +182,30 @@ export async function registerChatRoutes(
     const params = z.object({ id: z.string().uuid() }).parse(request.params);
     const session = await restoreAuthorizedSession(request, reply, conversations, params.id);
     if (!session) return sessionNotFound(reply);
-    const history = await conversations.getHistorySnapshot(params.id);
-    return reply.send({
-      messages: limitPublicHistoryResponse(history.messages
-        .filter((message) => message.role === 'user' || message.role === 'assistant')
-        .map(publicHistoryMessage)
-        .filter((message) => message !== null)),
-      leadOfferConsumed: history.leadOfferConsumed,
-      pendingTurn: history.pendingTurn ? publicPendingTurn(history.pendingTurn) : null
-    });
+    const query = z.object({ before: z.string().uuid().optional() }).strict().parse(request.query);
+    const history = await conversations.getHistorySnapshot(params.id, 81, query.before ?? null);
+    if (history.cursorValid === false) return reply.code(400).send({ error: 'invalid_history_cursor' });
+    const visible = history.messages.filter((message) => message.role === 'user' || message.role === 'assistant');
+    const converted = visible.map(publicHistoryMessage);
+    if (converted.some((message, index) => {
+      const products = visible[index].metadata?.productCards;
+      return !message || (products !== undefined && (!Array.isArray(products) || (message.products?.length ?? 0) !== products.length));
+    })) {
+      return reply.code(500).send({ error: 'history_message_invalid' });
+    }
+    const validMessages = converted.filter((message) => message !== null);
+    const messages = limitPublicHistoryResponse(validMessages.slice(-80));
+    if (validMessages.length && !messages.length) return reply.code(413).send({ error: 'history_message_too_large' });
+    for (;;) {
+      const nextBefore = messages.length < validMessages.length ? messages[0]?.id : undefined;
+      if (messages.length < validMessages.length && !nextBefore) return reply.code(500).send({ error: 'history_cursor_unavailable' });
+      const payload = { messages, historyComplete: !nextBefore, ...(nextBefore ? { nextBefore } : {}),
+        leadOfferConsumed: history.leadOfferConsumed,
+        pendingTurn: history.pendingTurn ? publicPendingTurn(history.pendingTurn) : null };
+      if (Buffer.byteLength(JSON.stringify(payload), 'utf8') <= PUBLIC_HISTORY_MAX_RESPONSE_BYTES) return reply.send(payload);
+      if (messages.length <= 1) return reply.code(413).send({ error: 'history_message_too_large' });
+      messages.shift();
+    }
   });
 
   app.get('/api/chat/sessions/:id/messages/:turnId/events', async (request, reply) => {
@@ -317,23 +337,23 @@ export async function registerChatRoutes(
       if (turn.error_code === 'cancelled_by_user') { await db.query('COMMIT'); return reply.send({ status: 'cancelled' }); }
       if (turn.status === 'completed' || turn.status === 'recovered') { await db.query('COMMIT'); return reply.send({ status: 'completed' }); }
       if (turn.status === 'failed') { await db.query('COMMIT'); return reply.send({ status: 'failed' }); }
-      const checkpoints = await db.query("SELECT payload FROM turn_checkpoints WHERE session_id=$1 AND turn_id=$2 AND checkpoint='platform_agent_submission'", [params.id, params.turnId]);
+      const checkpoints = await db.query("SELECT payload FROM turn_checkpoints WHERE session_id=$1 AND turn_id=$2 AND (checkpoint='platform_agent_submission' OR checkpoint LIKE 'controlled_web_search%' OR checkpoint LIKE 'controlled_web_continuation%') ORDER BY updated_at DESC", [params.id, params.turnId]);
       const data = checkpoints.rows[0]?.payload as Record<string, unknown> | undefined;
-      if (!data || typeof data.agentSessionId !== 'string' || !(data.previousTurnId === null || typeof data.previousTurnId === 'string') ||
+      const controlledId = typeof data?.responseId === 'string' && data.responseId.startsWith('resp_') ? data.responseId : null;
+      const remoteSessionId = controlledId ? `controlled:${controlledId}` : typeof data?.agentSessionId === 'string' ? data.agentSessionId : null;
+      if (!data || !remoteSessionId || (!controlledId && !(data.previousTurnId === null || typeof data.previousTurnId === 'string')) ||
           !config.OPENAI_API_KEY || !config.OPENAI_PLATFORM_AGENT_ID) {
         await db.query('ROLLBACK');
         return reply.code(409).send({ error: 'turn_identity_not_ready' });
       }
       const client = new PlatformAgentClient(config.OPENAI_API_KEY, config.OPENAI_PLATFORM_AGENT_ID,
         config.OPENAI_PLATFORM_AGENT_VAULT_ID ? [config.OPENAI_PLATFORM_AGENT_VAULT_ID] : []);
-      const remote = await client.latestTurn(data.agentSessionId);
-      if (!remote || remote.id === data.previousTurnId) {
+      const remote = await client.latestTurn(remoteSessionId);
+      if (!remote || (!controlledId && remote.id === data.previousTurnId)) {
         await db.query('ROLLBACK');
         return reply.code(409).send({ error: 'turn_identity_not_ready' });
       }
-      if (remote.status === 'completed') { await db.query('COMMIT'); return reply.send({ status: 'completed' }); }
-      if (remote.status === 'failed') { await db.query('COMMIT'); return reply.send({ status: 'failed' }); }
-      if (remote.status !== 'cancelled') await client.cancelTurn(data.agentSessionId);
+      if (!['completed', 'failed', 'cancelled', 'incomplete'].includes(remote.status)) await client.cancelTurn(remoteSessionId);
       await db.query("UPDATE conversation_turns SET status='failed',stage='cancelled_by_user',error_code='cancelled_by_user',error_message=NULL,execution_owner=NULL,execution_lease_expires_at=NULL,updated_at=now() WHERE session_id=$1 AND id=$2", [params.id, params.turnId]);
       await db.query('COMMIT');
       bindDiagnosticIdentity({sessionId:params.id,turnId:params.turnId});
@@ -367,7 +387,7 @@ export async function registerChatRoutes(
         requestHash: requestHash(params.id, input.message),
         content: input.message,
         activeNeedsBefore: session.needState.activeNeeds ?? [],
-        deadlineAt: new Date(Date.now() + TURN_DEADLINE_MS).toISOString()
+        deadlineAt: config.OPENAI_PLATFORM_AGENT_ID ? null : new Date(Date.now() + TURN_DEADLINE_MS).toISOString()
       });
     } catch (error) {
       diagnosticError('turn.acceptance.failed',error);
@@ -391,7 +411,8 @@ export async function registerChatRoutes(
     diagnosticEvent('turn.accepted',{deduplicated:turnId !== requestedTurnId});
     const controller = new AbortController();
     const unregisterController = registerController(turnId, controller);
-    const timeout = setTimeout(() => { diagnosticEvent('turn.abort.requested',{abortSource:'server_deadline'}); controller.abort('turn_deadline_exceeded'); }, remainingTurnDeadlineMs(turn.deadlineAt));
+    const resumable = Boolean(config.OPENAI_PLATFORM_AGENT_ID) && !turn.deadlineAt;
+    const timeout = setTimeout(() => { diagnosticEvent('turn.abort.requested',{abortSource:resumable ? 'research_window' : 'server_deadline'}); controller.abort(resumable ? 'research_window_elapsed' : 'turn_deadline_exceeded'); }, resumable ? RESEARCH_WINDOW_MS : remainingTurnDeadlineMs(turn.deadlineAt));
     timeout.unref?.();
 
     const send = openSseReply(reply, {
@@ -435,6 +456,10 @@ export async function registerChatRoutes(
         typeof conversations.listTurnCheckpoints === 'function'
         ? await conversations.listTurnCheckpoints(params.id, turnId).catch(() => []) : [];
       const checkpointAvailable = checkpoints.some((row) => row.checkpoint === 'platform_agent_submission');
+      if (!explicitlyCancelled && checkpointAvailable && controller.signal.reason === 'research_window_elapsed') {
+        send('pending', { turnId });
+        return;
+      }
       if (!executionInProgress && !checkpointAvailable && !explicitlyCancelled) {
         await conversations.updateTurn({
           sessionId: params.id,
@@ -493,7 +518,8 @@ export async function registerChatRoutes(
     // during grace; one started earlier must still stop remote work at deadline.
     const recoveryGraceMs = config.OPENAI_PLATFORM_AGENT_ID && persistedTurn.deadlineAt &&
       Date.parse(persistedTurn.deadlineAt) <= Date.now() ? 30_000 : 0;
-    const timeout = setTimeout(() => { diagnosticEvent('turn.abort.requested',{abortSource:recoveryGraceMs ? 'recovery_grace' : 'server_deadline'}); controller.abort(recoveryGraceMs ? 'recovery_grace_exceeded' : 'turn_deadline_exceeded'); }, remainingTurnDeadlineMs(persistedTurn.deadlineAt, recoveryGraceMs));
+    const resumable = Boolean(config.OPENAI_PLATFORM_AGENT_ID) && !persistedTurn.deadlineAt;
+    const timeout = setTimeout(() => { diagnosticEvent('turn.abort.requested',{abortSource:resumable ? 'research_window' : recoveryGraceMs ? 'recovery_grace' : 'server_deadline'}); controller.abort(resumable ? 'research_window_elapsed' : recoveryGraceMs ? 'recovery_grace_exceeded' : 'turn_deadline_exceeded'); }, resumable ? RESEARCH_WINDOW_MS : remainingTurnDeadlineMs(persistedTurn.deadlineAt, recoveryGraceMs));
     timeout.unref?.();
 
     const send = openSseReply(reply, {
@@ -531,9 +557,13 @@ export async function registerChatRoutes(
       const explicitlyCancelled = controller.signal.reason === 'platform_agent_explicit_cancel' ||
         (typeof conversations.getTurn === 'function' && (await conversations.getTurn(params.id, params.turnId).catch(() => null))?.errorCode === 'cancelled_by_user');
       const recoveryCheckpoints = !executionInProgress && !explicitlyCancelled && Boolean(config.OPENAI_PLATFORM_AGENT_ID) &&
-        typeof conversations.listTurnCheckpoints === 'function' && remainingTurnDeadlineMs(persistedTurn.deadlineAt, 30_000) > 1
+        typeof conversations.listTurnCheckpoints === 'function' && (resumable || remainingTurnDeadlineMs(persistedTurn.deadlineAt, 30_000) > 1)
         ? await conversations.listTurnCheckpoints(params.id, params.turnId).catch(() => []) : [];
       const checkpointAvailable = recoveryCheckpoints.some((row) => row.checkpoint === 'platform_agent_submission');
+      if (!explicitlyCancelled && checkpointAvailable && controller.signal.reason === 'research_window_elapsed') {
+        send('pending', { turnId: params.turnId });
+        return;
+      }
       if (!executionInProgress && !explicitlyCancelled && !checkpointAvailable) {
         await conversations.updateTurn({
           sessionId: params.id,

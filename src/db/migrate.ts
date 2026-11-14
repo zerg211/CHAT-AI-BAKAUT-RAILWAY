@@ -110,8 +110,7 @@ export async function repairRequiredSchema(client: QueryableClient) {
       ADD COLUMN IF NOT EXISTS recovery_attempts integer NOT NULL DEFAULT 0
   `);
   await client.query('UPDATE conversation_turns SET client_message_id = id WHERE client_message_id IS NULL');
-  await client.query("UPDATE conversation_turns SET deadline_at = created_at + interval '60 seconds' WHERE deadline_at IS NULL");
-  await client.query('ALTER TABLE conversation_turns ALTER COLUMN deadline_at SET NOT NULL');
+  await client.query('ALTER TABLE conversation_turns ALTER COLUMN deadline_at DROP NOT NULL');
   await client.query(`
     ALTER TABLE conversation_turns
       ALTER COLUMN client_message_id SET DEFAULT gen_random_uuid(),

@@ -33,7 +33,7 @@ export function openSseReply(reply: SseReply, headers: Record<string, string> = 
 
 export function createSseSender(reply: SseReply): SseSender {
   return (event: string, data: unknown) => {
-    const eventType = ['start','turn','status','delta','done','error','cancelled'].includes(event) ? event : 'unknown';
+    const eventType = ['start','turn','status','delta','done','error','cancelled','pending'].includes(event) ? event : 'unknown';
     if (reply.raw.destroyed || reply.raw.writableEnded) { diagnosticEvent('delivery.sse.skipped',{eventType,destroyed:reply.raw.destroyed,writableEnded:reply.raw.writableEnded}); return; }
     const frame = `data: ${JSON.stringify(data)}\n\n`;
     const headerAccepted = reply.raw.write(`event: ${event}\n`);

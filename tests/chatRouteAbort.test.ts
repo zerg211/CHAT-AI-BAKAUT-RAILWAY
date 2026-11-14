@@ -9,7 +9,7 @@ describe('chat route SSE abort policy', () => {
     expect(source).not.toMatch(/request\.raw\.once\(['"]close['"]/);
     expect(source).not.toMatch(/request\.raw\.once\(['"]aborted['"]/);
     expect(source).toContain('const TURN_DEADLINE_MS = 160_000');
-    expect(source).toContain('deadlineAt: new Date(Date.now() + TURN_DEADLINE_MS).toISOString()');
+    expect(source).toContain('deadlineAt: config.OPENAI_PLATFORM_AGENT_ID ? null : new Date(Date.now() + TURN_DEADLINE_MS).toISOString()');
     expect(source).toContain('remainingTurnDeadlineMs(turn.deadlineAt)');
     expect(source).toContain('remainingTurnDeadlineMs(persistedTurn.deadlineAt, recoveryGraceMs)');
   });

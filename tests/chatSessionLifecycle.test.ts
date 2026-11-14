@@ -2,6 +2,7 @@ import Fastify from 'fastify';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ConversationSessionUnavailableError } from '../src/db/repositories.js';
 import { registerChatRoutes } from '../src/routes/chat.js';
+import { config } from '../src/config.js';
 
 const sessionId = '11111111-1111-4111-8111-111111111111';
 const messageId = '22222222-2222-4222-8222-222222222222';
@@ -54,6 +55,33 @@ async function buildApp() {
 }
 
 describe('session-scoped chat route capability', () => {
+  it('yields a saved research turn at the HTTP window without failing it or imposing a global deadline', async () => {
+    const { app, conversations, assistant } = await buildApp();
+    await app.ready();
+    const previousAgent = config.OPENAI_PLATFORM_AGENT_ID;
+    config.OPENAI_PLATFORM_AGENT_ID = 'test-agent';
+    conversations.createTurnWithUserMessage.mockResolvedValue({ id: turnId, deadlineAt: null });
+    conversations.getTurn.mockResolvedValue({ id: turnId, status: 'answering', deadlineAt: null });
+    Object.assign(conversations, { listTurnCheckpoints: vi.fn(async () => [{ checkpoint: 'platform_agent_submission' }]) });
+    let started!: () => void;
+    const running = new Promise<void>(resolve => { started = resolve; });
+    assistant.generateAnswer.mockImplementation(async ({ signal }: { signal: AbortSignal }) => {
+      started();
+      return new Promise((_resolve, reject) => signal.addEventListener('abort', () => reject(new Error(String(signal.reason))), { once: true }));
+    });
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      const request = app.inject({ method: 'POST', url: `/api/chat/sessions/${sessionId}/messages`,
+        headers: { 'x-bakaut-visitor-id': visitorId }, payload: { message: 'Проверьте все модели' } }).then(value => value);
+      await running;
+      await vi.advanceTimersByTimeAsync(80_000);
+      const response = await request;
+      expect(response.body).toContain('event: pending');
+      expect(response.body).not.toContain('event: error');
+      expect(conversations.updateTurn).not.toHaveBeenCalled();
+      expect(conversations.createTurnWithUserMessage).toHaveBeenCalledWith(expect.objectContaining({ deadlineAt: null }));
+    } finally { vi.useRealTimers(); config.OPENAI_PLATFORM_AGENT_ID = previousAgent; }
+  });
   it('records bounded delivery telemetry only for the authorized session', async () => {
     const {app,conversations}=await buildApp();
     const request={method:'POST' as const,url:`/api/chat/sessions/${sessionId}/messages/${messageId}/delivery`,payload:{firstUsefulContentMs:1200}};
@@ -186,7 +214,7 @@ describe('session-scoped chat route capability', () => {
     expect(response.statusCode).toBe(200);
     expect(response.json()).toMatchObject({ leadOfferConsumed: true });
     expect(conversations.getHistorySnapshot).toHaveBeenCalledOnce();
-    expect(conversations.getHistorySnapshot).toHaveBeenCalledWith(sessionId);
+    expect(conversations.getHistorySnapshot).toHaveBeenCalledWith(sessionId, 81, null);
     expect(conversations.getLatestUnansweredTurn).not.toHaveBeenCalled();
     expect(conversations.listMessages).not.toHaveBeenCalled();
   });

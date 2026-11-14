@@ -1,4 +1,5 @@
-import type { CardDisplayOptions, ChatResponsePayload, ProductCard } from '../shared/types.js';
+import type { AvailabilityReceipt, AvailabilityRequest, CardDisplayOptions, ChatResponsePayload, ProductCard } from '../shared/types.js';
+import { availabilityReceiptMatchesRequest, normalizeAvailabilityReceipt, normalizeAvailabilityRequest } from '../shared/publicChatHistory.js';
 
 export interface PublicCustomerResponsePayload {
   turnId?: string;
@@ -6,6 +7,9 @@ export interface PublicCustomerResponsePayload {
   productCards: ProductCard[];
   cardDisplay?: CardDisplayOptions;
   leadRequested?: boolean;
+  leadCreated?: boolean;
+  availabilityRequest?: AvailabilityRequest;
+  availabilityReceipt?: AvailabilityReceipt;
   assistantMessageId?: string;
 }
 
@@ -21,14 +25,12 @@ export interface CustomerOutputGuardResult {
 }
 
 // Runtime identifiers and error telemetry retain a deterministic boundary.
-// Source attribution and search/check completion require buyer context and are
-// owned by the mandatory, fail-closed semantic reviewer. See the independent
-// missing/malformed-review and disclosure regressions before changing this list.
+// This literal filter is not a semantic review; the platform answer contract
+// separately requires a model assessment before publication.
 const forbiddenCustomerFragments = [
   'agent_manager',
   'turncontract',
   'turn contract',
-  'planner',
   'tool result',
   'web tool',
   'search tool',
@@ -36,19 +38,12 @@ const forbiddenCustomerFragments = [
   'tool call',
   'tool execution',
   'the tool failed',
-  'timeout',
-  'тайм-аут',
-  'таймаут',
-  'recovery',
-  'retry',
-  'pipeline',
   'internal error',
   'поисковый инструмент',
   'исследовательский инструмент',
   'инструмент поиска',
   'инструмент не сработал',
-  'пайплайн',
-  'промежуточный результат',
+  'это промежуточный результат поиска',
   'как я уже искал',
   'инструмент уже искал'
 ] as const;
@@ -73,7 +68,7 @@ export function guardCustomerOutput(input: {
     return { ok: false, issues };
   }
 
-  const normalized = [answerText, ...input.productCards.flatMap((card) => [...card.reasons, ...card.caveats])]
+  const normalized = [answerText, ...input.productCards.flatMap((card) => [...(card.reasons ?? []), ...(card.caveats ?? [])])]
     .join('\n').toLowerCase();
   const leaked = forbiddenCustomerFragments.filter((fragment) => normalized.includes(fragment));
   if (leaked.length) {
@@ -112,12 +107,18 @@ function publicCard(card: ProductCard): ProductCard {
 export function buildPublicCustomerResponse(
   payload: ChatResponsePayload
 ): PublicCustomerResponsePayload {
+  const availabilityRequest = normalizeAvailabilityRequest(payload.availabilityRequest);
+  const receipt = normalizeAvailabilityReceipt(payload.availabilityReceipt);
+  const availabilityReceipt = receipt && availabilityReceiptMatchesRequest(receipt, availabilityRequest) ? receipt : undefined;
   return {
     ...(payload.turnId ? { turnId: payload.turnId } : {}),
     answer: payload.answer,
     productCards: payload.productCards.map(publicCard),
     ...(payload.cardDisplay ? { cardDisplay: payload.cardDisplay } : {}),
     ...(payload.leadRequested !== undefined ? { leadRequested: payload.leadRequested } : {}),
+    ...(payload.leadCreated !== undefined ? { leadCreated: payload.leadCreated } : {}),
+    ...(availabilityRequest ? { availabilityRequest } : {}),
+    ...(availabilityReceipt ? { availabilityReceipt } : {}),
     ...(payload.assistantMessageId ? { assistantMessageId: payload.assistantMessageId } : {})
   };
 }

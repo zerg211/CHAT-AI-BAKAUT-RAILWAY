@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { buildApp, corsOriginsForEnvironment } from '../src/app.js';
+import { AI_MANAGER_RUNTIME_MANIFEST } from '../src/ai/aiManagerRuntimeManifest.js';
 
 describe('app', () => {
   it('does not reflect arbitrary origins in production defaults', () => {
@@ -19,8 +20,8 @@ describe('app', () => {
     expect(response.json()).toMatchObject({
       ok: true,
       runtime: {
-        version: '2026-11-03.platform-agent-v1',
-        contractVersion: '2026-11-03.catalog-snapshot-v1',
+        version: AI_MANAGER_RUNTIME_MANIFEST.version,
+        contractVersion: AI_MANAGER_RUNTIME_MANIFEST.contractVersion,
         productionRuntime: 'openai_platform_agent'
       }
     });

@@ -19,20 +19,21 @@ from pathlib import Path
 import numpy as np
 import tiktoken
 
+from monetary_send_guard import refuse_paid_send_when_guarded
+
 MODEL = 'text-embedding-3-large'
 DIMENSIONS = 3072
 MAX_CHUNK_TOKENS = 7800  # Leaves space under the API's 8192-token input limit.
 OVERLAP_TOKENS = 128
-EXPECTED_CARDS = 4324
 
 
 def source_rows(source_db):
     connection = sqlite3.connect('file:' + Path(source_db).resolve().as_posix() + '?mode=ro', uri=True)
     connection.row_factory = sqlite3.Row
-    revision = connection.execute('SELECT revision FROM metadata').fetchone()[0]
+    revision, expected_cards = connection.execute('SELECT revision,count FROM metadata').fetchone()
     rows = connection.execute('SELECT id,source,sha,raw FROM products ORDER BY source').fetchall()
-    if len(rows) != EXPECTED_CARDS or len({row['id'] for row in rows}) != len(rows):
-        raise ValueError('The catalog must contain exactly 4324 distinct cards')
+    if not isinstance(expected_cards, int) or expected_cards < 1 or len(rows) != expected_cards or len({row['id'] for row in rows}) != len(rows):
+        raise ValueError('Catalog count must match its revision metadata and contain distinct cards')
     digest = hashlib.sha256(''.join(row['source'] + '\t' + row['sha'] + '\n' for row in rows).encode()).hexdigest()
     return connection, revision, digest, rows
 
@@ -109,10 +110,12 @@ def init_work(path, revision, digest, model, dimensions):
 
 
 def embed_batch(texts, model, dimensions, key):
+    refuse_paid_send_when_guarded()
     payload = json.dumps({'model': model, 'dimensions': dimensions, 'input': texts}, ensure_ascii=False).encode()
     request = urllib.request.Request('https://api.openai.com/v1/embeddings', data=payload,
         headers={'Authorization': 'Bearer ' + key, 'Content-Type': 'application/json'}, method='POST')
     for attempt in range(8):
+        refuse_paid_send_when_guarded()
         try:
             with urllib.request.urlopen(request, timeout=120) as response:
                 result = json.load(response)
@@ -139,6 +142,7 @@ def embed_batch(texts, model, dimensions, key):
 
 
 def embed_query(text, model=MODEL, dimensions=DIMENSIONS):
+    refuse_paid_send_when_guarded()
     if not isinstance(text, str) or not text.strip():
         raise ValueError('Search query must be nonempty')
     key = os.environ.get('OPENAI_API_KEY')
@@ -165,7 +169,7 @@ def inspect(source_db, index_path):
             p.chunk_count != (SELECT COUNT(*) FROM chunks c WHERE c.product_id=p.product_id)''').fetchone()[0]
         source_ids = {row['id']: row['sha'] for row in rows}
         indexed_ids = {pid: sha for pid, sha in index.execute('SELECT product_id,source_sha FROM products')}
-        if products != EXPECTED_CARDS or source_ids != indexed_ids or wrong or chunks < products:
+        if products != len(rows) or source_ids != indexed_ids or wrong or chunks < products:
             raise ValueError('Embedding index does not cover every source card')
         dimensions = int(details['dimensions'])
         malformed = index.execute('SELECT COUNT(*) FROM chunks WHERE length(vector) != ?',
@@ -197,6 +201,7 @@ def plan(source_db):
 
 
 def build(source_db, output, model=MODEL, dimensions=DIMENSIONS, batch_size=24):
+    refuse_paid_send_when_guarded()
     if batch_size < 1 or batch_size > 32:
         raise ValueError('Batch size must be 1..32')
     key = os.environ.get('OPENAI_API_KEY')

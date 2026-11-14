@@ -1,5 +1,4 @@
-import hmac,json,os,hashlib,sqlite3,base64,threading,urllib.request,urllib.error
-from collections import OrderedDict
+import hmac,json,os,hashlib,sqlite3,base64
 from functools import lru_cache
 from pathlib import Path
 from starlette.responses import JSONResponse
@@ -8,8 +7,8 @@ from mcp.types import CallToolResult,TextContent
 from mcp.server.transport_security import TransportSecuritySettings
 from knowledge import Knowledge
 from get_products_batch import get_products_batch as read_product_batch
-from embedding_index import EmbeddingIndex,embed_query
-from semantic_selector import MODEL as SELECTOR_MODEL,select_products
+from embedding_index import EmbeddingIndex
+from candidate_discovery import discover_candidates
 import uvicorn
 TOKEN=os.environ['BAKAUT_MCP_TOKEN']
 EXPECTED_REVISION=os.environ['BAKAUT_EXPECTED_REVISION']
@@ -38,133 +37,12 @@ def embedding_index():
     finally:kb.db.close()
     return loaded_embedding_index(path,Path(path).stat().st_mtime_ns,revision)
 
-@lru_cache(maxsize=32)
-def cached_ranking(query,path,mtime_ns,revision):
-    index=loaded_embedding_index(path,mtime_ns,revision)
-    vector,usage=embed_query(query,index.info['model'],index.info['dimensions'])
-    return tuple(index.rank(vector)),usage
-
-@lru_cache(maxsize=128)
-def cached_semantic_selection(revision,path,mtime_ns,requirement,category,min_nominal_kw,max_nominal_kw,max_price_rub):
-    kb=Knowledge('fts')
-    try:
-        if kb.revision!=revision:raise ValueError('Catalog revision changed during selection')
-        ranked,usage=cached_ranking(requirement,path,mtime_ns,revision)
-        if len(ranked)!=kb.db.execute('SELECT COUNT(*) FROM products').fetchone()[0]:
-            raise ValueError('Embedding ranking lost a catalog product')
-        return select_products(kb,requirement,category,min_nominal_kw,max_nominal_kw,
-            max_price_rub,ranking=ranked,embedding_tokens=usage)
-    finally:kb.db.close()
-
-_selection_aliases=OrderedDict()
-_selection_alias_lock=threading.Lock()
-
-def equivalent_cached_requirement(requirement,known,category):
-    """Reuse a result only when the model confirms identical product eligibility."""
-    body=json.dumps({'model':SELECTOR_MODEL,'reasoning':{'effort':'low'},
-        'instructions':('Compare requirements only for products already filtered to the supplied category. '
-            'A category name added to a requirement does not change eligibility within that category. '
-            'Copy the EXACT text of one previous requirement into "match" only if both requirements '
-            'would include and exclude exactly the same products within the category. '
-            'Different model, size, material, use, negation, or other condition means no match. '
-            'If unsure, return null. Return only JSON: {"match":previous_requirement_text_or_null}.'),
-        'input':json.dumps({'category':category,'new':requirement,'previous':known},ensure_ascii=False),
-        'max_output_tokens':800},ensure_ascii=False).encode()
-    request=urllib.request.Request('https://api.openai.com/v1/responses',data=body,method='POST',
-        headers={'Authorization':'Bearer '+os.environ['OPENAI_API_KEY'],'Content-Type':'application/json'})
-    try:
-        with urllib.request.urlopen(request,timeout=12) as response:result=json.load(response)
-        if result.get('status')!='completed':return None,None
-        output=''.join(part.get('text','') for item in result.get('output',[])
-            for part in item.get('content',[]) if part.get('type')=='output_text')
-        match=json.loads(output).get('match')
-        if not isinstance(match,str) or match not in known:return None,None
-        usage=result.get('usage') or {}
-        return match,{'run_id':result['id'],'model':SELECTOR_MODEL,
-            'input_tokens':int(usage.get('input_tokens') or 0),
-            'output_tokens':int(usage.get('output_tokens') or 0),
-            'cached_input_tokens':int((usage.get('input_tokens_details') or {}).get('cached_tokens') or 0)}
-    except (OSError,ValueError,KeyError,TimeoutError):
-        return None,None
-
-def selection_with_cache(revision,path,mtime_ns,requirement,category,min_nominal_kw,max_nominal_kw,max_price_rub):
-    base=(revision,path,mtime_ns,category,min_nominal_kw,max_nominal_kw,max_price_rub)
-    key=(base,requirement)
-    with _selection_alias_lock:
-        alias=_selection_aliases.get(key)
-        known=list(dict.fromkeys(source for (candidate_base,_),source in reversed(_selection_aliases.items())
-            if candidate_base==base))[:32] if alias is None else []
-    lookup=None
-    if alias is None and known:
-        alias,lookup=equivalent_cached_requirement(requirement,known,category)
-    source=alias or requirement
-    selection=cached_semantic_selection(revision,path,mtime_ns,source,category,
-        min_nominal_kw,max_nominal_kw,max_price_rub)
-    with _selection_alias_lock:
-        _selection_aliases[key]=source
-        _selection_aliases.move_to_end(key)
-        while len(_selection_aliases)>128:_selection_aliases.popitem(last=False)
-    if source!=requirement:
-        return {**selection,'cache_hit':True,**({'cache_lookup_usage':lookup} if lookup else {})}
-    return selection
-
-def ranked_products(query,offset=0,page_size=50):
-    if not isinstance(query,str) or not query.strip():raise ValueError('query must be a nonempty string')
-    if not isinstance(offset,int) or offset<0:raise ValueError('offset must be a nonnegative integer')
-    if not isinstance(page_size,int) or page_size<1 or page_size>200:raise ValueError('page_size must be 1..200')
-    index=embedding_index()
-    path=os.environ['BAKAUT_EMBEDDING_DB_PATH']
-    kb=Knowledge('fts')
-    try:
-        ranked,usage=cached_ranking(query,path,Path(path).stat().st_mtime_ns,kb.revision)
-        if len(ranked)!=kb.db.execute('SELECT COUNT(*) FROM products').fetchone()[0]:
-            raise ValueError('Embedding ranking lost a catalog product')
-        items=[]
-        for product_id,score in ranked[offset:offset+page_size]:
-            row=kb.row(product_id)
-            if row is None:raise ValueError('Embedding product is missing from the catalog')
-            items.append({**kb.compact(row),'similarity':round(score,5)})
-        return {'status':'ok','query':query,'items':items,'count':len(ranked),
-                'offset':offset,'next_offset':offset+len(items) if offset+len(items)<len(ranked) else None,
-                'source_revision':kb.revision,'index_model':index.info['model'],
-                'candidate_basis':'complete_catalog_embedding_ranking',
-                'selection_complete':False,'input_tokens':usage}
-    finally:kb.db.close()
-
 def compact_result(data):return CallToolResult(content=[TextContent(type='text',text=json.dumps(data,ensure_ascii=False,separators=(',',':')))])
 @server.tool(structured_output=False)
 def web_search_facts(query:str)->CallToolResult:
-    """Search the public web for a missing or conflicting product fact. Prefer the exact model and manufacturer documentation. Return concise evidence with source URLs; catalog search remains the source of available products."""
+    """Report unavailable until this paid tool has a trusted turn reservation."""
     if not isinstance(query,str) or not query.strip() or len(query)>500:raise ValueError('query must contain 1..500 characters')
-    body=json.dumps({'model':SELECTOR_MODEL,'reasoning':{'effort':'low'},
-        'tools':[{'type':'web_search','search_context_size':'low'}],
-        'tool_choice':{'type':'web_search'},'include':['web_search_call.action.sources'],
-        'instructions':('Find the requested factual product information. Prefer the manufacturer official site, manual or datasheet. '
-            'State only facts supported by the found sources and distinguish exact model variants. Reply concisely.'),
-        'input':query,'max_output_tokens':1000},ensure_ascii=False).encode()
-    request=urllib.request.Request('https://api.openai.com/v1/responses',data=body,method='POST',
-        headers={'Authorization':'Bearer '+os.environ['OPENAI_API_KEY'],'Content-Type':'application/json'})
-    try:
-        with urllib.request.urlopen(request,timeout=35) as response:result=json.load(response)
-    except (OSError,ValueError,TimeoutError):
-        return compact_result({'status':'unavailable','reason':'web_search_failed'})
-    if result.get('status')!='completed':return compact_result({'status':'unavailable','reason':'web_search_incomplete'})
-    answer='\n'.join(part.get('text','') for item in result.get('output',[])
-        for part in item.get('content',[]) if part.get('type')=='output_text')
-    sources=[]
-    for item in result.get('output',[]):
-        if item.get('type')=='web_search_call':
-            sources.extend((source.get('url',''),source.get('title','')) for source in (item.get('action') or {}).get('sources',[]))
-        for part in item.get('content',[]):
-            sources.extend((annotation.get('url',''),annotation.get('title','')) for annotation in part.get('annotations',[])
-                if annotation.get('type')=='url_citation')
-    unique={url:{'url':url,'title':title} for url,title in sources if isinstance(url,str) and url.startswith('https://')}
-    usage=result.get('usage') or {}
-    return compact_result({'status':'ok','answer':answer,'sources':list(unique.values())[:12],
-        'usage':{'run_id':result.get('id'),'model':SELECTOR_MODEL,
-            'input_tokens':int(usage.get('input_tokens') or 0),
-            'output_tokens':int(usage.get('output_tokens') or 0),
-            'cached_input_tokens':int((usage.get('input_tokens_details') or {}).get('cached_tokens') or 0)}})
+    return compact_result({'status':'unavailable','reason':'trusted_budget_context_unavailable'})
 @server.tool(structured_output=False)
 def list_categories()->CallToolResult:
     """List the current catalog categories and product counts for choosing where to search. This does not select products."""
@@ -176,33 +54,34 @@ def list_categories()->CallToolResult:
     finally:kb.db.close()
 @server.tool(structured_output=False)
 def search_products(query:str='',category:str|None=None,min_nominal_kw:float|None=None,max_nominal_kw:float|None=None,max_price_rub:float|None=None,cursor:str|None=None,group:str='matches')->CallToolResult:
-    """Search catalog. Generator category choices: Инверторные генераторы, Бензиновые генераторы, Дизельные генераторы, Газовые генераторы, Сварочные генераторы; генераторы includes all five. min_nominal_kw/max_nominal_kw refer to the selected generator or power station's own nominal electrical output, not the rating of equipment it fits. For numeric filters choose the most precise actual category: numeric search does not apply query text, reported in unsupported_filters. applied_filters lists only enforced constraints. Unknown or conflicting fields remain separately grouped. Text matching is evidence, not proof of an arbitrary property; source_scan_complete does not cover all synonyms. Page results have stable revision, snapshot and next_cursor."""
+    """Search catalog. Generator category choices: Инверторные генераторы, Бензиновые генераторы, Дизельные генераторы, Газовые генераторы, Сварочные генераторы; генераторы includes all five. min_nominal_kw/max_nominal_kw refer to the selected generator or power station's own nominal electrical output, not the rating of equipment it fits. With category, query text does not filter products and is reported in unsupported_filters: check all candidate cards and judge suitability yourself. Numeric filters apply only to explicit numeric facts. Unknown or conflicting fields remain separately grouped. Page results have stable revision, snapshot and next_cursor."""
     return compact_result(Knowledge('fts').search_products(query,category,min_nominal_kw,max_nominal_kw,max_price_rub,cursor,group))
 @server.tool(structured_output=False)
 def get_product(identifier:str,fields:list[str]|None=None)->CallToolResult:
     """Read one original card by product ID, SKU, model or URL. Preserve SKU ambiguity and conflicting source fields. Use for additional facts not present in search results."""
     return compact_result(Knowledge('fts').get_product(identifier,fields))
 @server.tool(structured_output=False)
-def get_products_batch(identifiers:list[str],fields:list[str],expected_revision:str|None=None)->CallToolResult:
-    """Read only requested missing fields for up to 100 exact product_id values. Pass source_revision as expected_revision. Null means unknown. Do not reread fields already supplied by search; use web for unresolved material facts."""
-    return compact_result(read_product_batch(Knowledge('fts'),identifiers,fields,expected_revision))
+def get_products_batch(identifiers:list[str],fields:list[str]|None=None,expected_revision:str|None=None,
+                       mode:str='projection',cursor:str|None=None)->CallToolResult:
+    """Read exact known products. For comparison or technical follow-up use mode='full', omit fields, and follow next_cursor until complete. Full reading preserves every original field, description and document/photo link; pages of 100 are transport only, not a result limit. Pass the complete identifiers list and unchanged expected_revision on every page. Projection is for a specific fact: field_status distinguishes unknown_field from missing_value. An unknown field includes full_product fallback: read it before concluding the catalog lacks the fact or searching the web. Never infer stock from lookup status='found'."""
+    kb=Knowledge('fts')
+    try:return compact_result(read_product_batch(kb,identifiers,fields,expected_revision,mode,cursor))
+    finally:kb.db.close()
 @server.tool(structured_output=False)
 def semantic_rank_products(query:str,offset:int=0,page_size:int=50)->CallToolResult:
-    """Rank ALL 4324 original cards by meaning. Pages are transport only: next_offset reaches every card. Ranking discovers candidates; it does not prove eligibility or complete selection. Check exact card data and structured filters before recommending."""
-    return compact_result(ranked_products(query,offset,page_size))
+    """Unavailable: category discovery and the main model replace paid ranking."""
+    return compact_result({'status':'unavailable','reason':'use_complete_category_discovery'})
 @server.tool(structured_output=False)
 def semantic_select_products(requirement:str,category:str,min_nominal_kw:float|None=None,max_nominal_kw:float|None=None,max_price_rub:float|None=None)->CallToolResult:
-    """Check every product in the named category against one buyer requirement, including the requested product type. For several relevant categories call once per category. min_nominal_kw/max_nominal_kw filter the selected generator or power station's own nominal electrical output; put compatible-machine ratings and accessory dimensions in requirement instead. Return complete classification, selected_products with IDs and names, a short preview, and source revision. No top-k cutoff. The chat server loads all cards directly."""
+    """List every candidate ID in the category without filtering or judging suitability. Read ALL IDs using get_products_batch(mode='full') through every page. Then decide suitability yourself using all originals. Numeric fields here are not applied. An oversized or incomplete context must be reported explicitly, never silently reduced."""
+    if not isinstance(requirement,str) or not requirement.strip():raise ValueError('A nonempty requirement is required')
     kb=Knowledge('fts')
-    try:revision=kb.revision
+    try:return compact_result(discover_candidates(kb,category))
     finally:kb.db.close()
-    path=os.environ['BAKAUT_EMBEDDING_DB_PATH']
-    return compact_result(selection_with_cache(revision,path,Path(path).stat().st_mtime_ns,
-        requirement,category,min_nominal_kw,max_nominal_kw,max_price_rub))
 @server.custom_route('/health',methods=['GET'])
 async def health(request):
     kb=Knowledge('fts');root=Path(__file__).parent
-    code_hash=hashlib.sha256(b''.join((root/name).read_bytes() for name in ('server.py','knowledge.py','get_products_batch.py','embedding_index.py','semantic_selector.py'))).hexdigest()
+    code_hash=hashlib.sha256(b''.join((root/name).read_bytes() for name in ('server.py','knowledge.py','get_products_batch.py','candidate_discovery.py','embedding_index.py','reviewed_field_aliases.py','reviewed_field_aliases.json'))).hexdigest()
     index_path=os.environ.get('BAKAUT_EMBEDDING_DB_PATH')
     index_status='unavailable';index_cards=0
     if index_path and Path(index_path).is_file():
@@ -226,6 +105,24 @@ async def mentioned_products(request):
         finally:kb.db.close()
         return JSONResponse(result)
     except (ValueError,TypeError):
+        return JSONResponse({'status':'invalid_request'},status_code=400)
+@server.custom_route('/products-full',methods=['POST'])
+async def products_full(request):
+    """Lossless continuation of a known ID set without a model call."""
+    if not hmac.compare_digest(request.headers.get('authorization',''),'Bearer '+TOKEN):
+        return JSONResponse({'status':'unauthorized'},status_code=401)
+    try:
+        body=await request.json()
+        allowed={'identifiers','expected_revision','mode','cursor'}
+        if not isinstance(body,dict) or set(body)-allowed or body.get('mode','full')!='full' or \
+                not isinstance(body.get('expected_revision'),str) or not body['expected_revision']:
+            raise ValueError('Expected exact product IDs and catalog revision')
+        kb=Knowledge('fts')
+        try:result=read_product_batch(kb,body['identifiers'],expected_revision=body['expected_revision'],
+                                     mode='full',cursor=body.get('cursor'))
+        finally:kb.db.close()
+        return JSONResponse(result)
+    except (ValueError,KeyError,TypeError):
         return JSONResponse({'status':'invalid_request'},status_code=400)
 @server.custom_route('/search-full',methods=['POST'])
 async def search_full(request):
@@ -264,9 +161,9 @@ async def semantic_selection(request):
         criteria=body['criteria']
         if not isinstance(criteria,dict) or set(criteria)!={'requirement','category','min_nominal_kw','max_nominal_kw','max_price_rub'}:
             raise ValueError('Invalid selection criteria')
-        if not isinstance(body['candidate_count'],int) or not 0<=body['candidate_count']<=4324:
+        if type(body['candidate_count']) is not int or body['candidate_count']<0:
             raise ValueError('Invalid candidate count')
-        if not isinstance(body['status_blob'],str) or len(body['status_blob'])>1500:
+        if not isinstance(body['status_blob'],str):
             raise ValueError('Invalid status code')
         kb=Knowledge('fts')
         if body['expected_revision']!=kb.revision:
@@ -278,6 +175,8 @@ async def semantic_selection(request):
         candidates=[item for group in ('matches','needs_check','unknown') for item in snapshot['groups'][group]]
         if len(candidates)!=body['candidate_count'] or snapshot['criteria']['category']!=criteria['category']:
             raise ValueError('Catalog candidate universe changed')
+        if len(body['status_blob'])!=(((len(candidates)+3)//4)*8+5)//6:
+            raise ValueError('Invalid status code length')
         packed=base64.urlsafe_b64decode(body['status_blob']+'='*(-len(body['status_blob'])%4))
         if len(packed)!=(len(candidates)+3)//4:raise ValueError('Invalid status code length')
         selected=[];uncertain=[];rejected=[]
@@ -308,27 +207,7 @@ async def semantic_selection(request):
         return JSONResponse({'status':'invalid_request','error':str(error)},status_code=400)
 @server.custom_route('/semantic-select-buyer',methods=['POST'])
 async def semantic_select_buyer(request):
-    try:
-        body=await request.json()
-        allowed={'requirement','category','min_nominal_kw','max_nominal_kw','max_price_rub','expected_revision'}
-        if not isinstance(body,dict) or set(body)!=allowed:raise ValueError('Invalid buyer selection request')
-        if not isinstance(body['requirement'],str) or not body['requirement'].strip() or len(body['requirement'])>600:
-            raise ValueError('Invalid buyer requirement')
-        if not isinstance(body['category'],str) or not body['category'].strip():raise ValueError('Invalid category')
-        for key in ('min_nominal_kw','max_nominal_kw','max_price_rub'):
-            value=body[key]
-            if value is not None and (isinstance(value,bool) or not isinstance(value,(int,float))):raise ValueError('Invalid numeric filter')
-        kb=Knowledge('fts')
-        try:revision=kb.revision
-        finally:kb.db.close()
-        if body['expected_revision']!=revision:
-            return JSONResponse({'status':'revision_changed','source_revision':revision},status_code=409)
-        path=os.environ['BAKAUT_EMBEDDING_DB_PATH']
-        result=selection_with_cache(revision,path,Path(path).stat().st_mtime_ns,
-            body['requirement'],body['category'],body['min_nominal_kw'],body['max_nominal_kw'],body['max_price_rub'])
-        return JSONResponse(result)
-    except (ValueError,KeyError,TypeError) as error:
-        return JSONResponse({'status':'invalid_request','error':str(error)},status_code=400)
+    return JSONResponse({'status':'unavailable','reason':'use_complete_category_discovery'},status_code=410)
 inner=server.streamable_http_app()
 class Auth:
     async def __call__(self,scope,receive,send):

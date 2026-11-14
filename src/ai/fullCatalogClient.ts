@@ -5,7 +5,58 @@ type JsonObject = Record<string, unknown>;
 const asObject = (value: unknown): JsonObject | undefined => value && typeof value === 'object' && !Array.isArray(value) ? value as JsonObject : undefined;
 const same = (left: unknown, right: unknown) => JSON.stringify(left) === JSON.stringify(right);
 
-export type ExactMentionPrefetch = { source_revision: string; items: JsonObject[] };
+export type ExactMentionPrefetch = { source_revision: string; items: JsonObject[]; completeness?: 'full' | 'full_read_required';
+  groups?: { previously_known: string[]; mentioned_now: string[] } };
+export type KnownProductContext = { source_revision: string; product_ids: string[] };
+
+/** Hydrate the entire explicit known set; transport pages never select products. */
+export async function readFullKnownProducts(context: KnownProductContext, signal?: AbortSignal,
+  transport: typeof fetch = fetch): Promise<ExactMentionPrefetch> {
+  if (!config.BAKAUT_MCP_TOKEN) throw new Error('Catalog access is not configured');
+  const ids = [...context.product_ids];
+  if (typeof context.source_revision !== 'string' || !context.source_revision || ids.length < 1 ||
+      ids.some(id => typeof id !== 'string' || !id || id.length > 96) || new Set(ids).size !== ids.length) {
+    throw new Error('Invalid known product context');
+  }
+  const base = new URL(config.BAKAUT_CATALOG_URL);
+  if (base.protocol !== 'https:' || base.hostname !== 'catalog-search-production.up.railway.app') throw new Error('Catalog URL is not allowed');
+  const items: JsonObject[] = [];
+  const cursors = new Set<string>();
+  let cursor: string | undefined;
+  do {
+    const response = await transport(new URL('/products-full', base), {
+      method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${config.BAKAUT_MCP_TOKEN}` },
+      body: JSON.stringify({ identifiers: ids, expected_revision: context.source_revision, mode: 'full', ...(cursor ? { cursor } : {}) }),
+      signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(10_000)]) : AbortSignal.timeout(10_000)
+    });
+    if (!response.ok) throw new Error(`Known product hydration failed (${response.status})`);
+    const page = asObject(await response.json());
+    const results = Array.isArray(page?.results) ? page.results.map(asObject) : [];
+    if (!page || page.status !== 'ok' || page.mode !== 'full' || page.source_revision !== context.source_revision ||
+        !same(page.requested_ids, ids) || page.requested_count !== ids.length || page.offset !== items.length ||
+        results.length < 1 || results.length > 100 || page.returned_count !== results.length ||
+        !same(page.returned_ids, ids.slice(items.length, items.length + results.length)) ||
+        results.some((item, index) => !item || item.status !== 'found' || item.completeness !== 'full' ||
+          item.source_revision !== context.source_revision || item.product_id !== ids[items.length + index] ||
+          item.requested_product_id !== item.product_id || typeof item.name !== 'string' ||
+          !asObject(item.attributes) || typeof item.description !== 'string' || !Array.isArray(item.documents) ||
+          !asObject(item.original_card)) ||
+        typeof page.has_more !== 'boolean' || page.complete !== !page.has_more ||
+        (page.has_more ? typeof page.next_cursor !== 'string' || !page.next_cursor : page.next_cursor !== null)) {
+      throw new Error('Known product hydration is incomplete or inconsistent');
+    }
+    items.push(...results as JsonObject[]);
+    if (items.length > ids.length || page.has_more !== (items.length < ids.length)) {
+      throw new Error('Known product hydration lost or repeated identities');
+    }
+    if (!page.has_more) break;
+    cursor = page.next_cursor as string;
+    if (cursors.has(cursor)) throw new Error('Known product continuation did not advance');
+    cursors.add(cursor);
+  } while (true);
+  diagnosticEvent('catalog.known_products.ready', { itemCount: items.length, sourceRevision: context.source_revision });
+  return { source_revision: context.source_revision, items, completeness: 'full' };
+}
 
 export async function reselectFromBuyerMessage(page: JsonObject, message: string, signal?: AbortSignal,
   transport: typeof fetch = fetch): Promise<JsonObject | null> {
@@ -51,7 +102,7 @@ export async function reselectFromBuyerMessage(page: JsonObject, message: string
   return checked;
 }
 
-/** Exact identity evidence only; broad or oversized requests retain the regular agent tools. */
+/** Exact identity evidence; preserve all original facts regardless of packet size. */
 export async function readExactMentionPrefetch(message: string, signal?: AbortSignal,
   transport: typeof fetch = fetch): Promise<ExactMentionPrefetch | null> {
   if (!config.BAKAUT_MCP_TOKEN || !config.BAKAUT_CATALOG_URL || message.length > 2000) return null;
@@ -66,15 +117,19 @@ export async function readExactMentionPrefetch(message: string, signal?: AbortSi
   const body = asObject(await response.json());
   if (!body || body.status !== 'ok' || body.match_basis !== 'exact_model_or_sku_mention' ||
       typeof body.source_revision !== 'string' || !body.source_revision || !Array.isArray(body.items) ||
-      body.count !== body.items.length || body.items.length > 4324) throw new Error('Invalid exact catalog prefetch');
+      body.count !== body.items.length) throw new Error('Invalid exact catalog prefetch');
   const items = body.items.map(asObject);
   const ids = items.map((item) => item?.product_id);
   if (items.some((item) => !item || item.status !== 'found' || item.source_revision !== body.source_revision ||
       typeof item.name !== 'string' || typeof item.product_id !== 'string' ||
       !Array.isArray(item.matched_aliases) || !item.matched_aliases.length) ||
       new Set(ids).size !== ids.length) throw new Error('Invalid exact catalog identities');
-  const evidence = { source_revision: body.source_revision, items: items as JsonObject[] };
-  if (!items.length || Buffer.byteLength(JSON.stringify(evidence), 'utf8') > 128_000) return null;
+  const complete = items.every(item => item && item.completeness !== 'projection' &&
+    asObject(item.original_card) && asObject(item.attributes) &&
+    typeof item.description === 'string' && Array.isArray(item.documents));
+  const evidence: ExactMentionPrefetch = { source_revision: body.source_revision, items: items as JsonObject[],
+    completeness: complete ? 'full' : 'full_read_required' };
+  if (!items.length) return null;
   diagnosticEvent('catalog.exact_prefetch.ready', { itemCount: items.length, sourceRevision: body.source_revision });
   return evidence;
 }

@@ -28,7 +28,7 @@ export function adminRuntimeFlags(metadata?: ChatResponsePayload['metadata']): A
   if (!metadata) return [];
   const flags: AdminDiagnosticFlag[] = [];
   const runtimeMode = metadata.runtimeMode ?? (metadata.agentManager ? 'agent_manager' : undefined);
-  if (runtimeMode === 'agent_manager' || runtimeMode === 'openai_platform_agent') {
+  if (runtimeMode === 'agent_manager' || runtimeMode === 'openai_platform_agent' || runtimeMode === 'openai_responses_saved_agent') {
     const runtimeReason = metadata.runtimeModeReason ?? metadata.agentManagerRuntime?.reason ?? 'unknown';
     flags.push({ label: `mode: ${runtimeMode} (${shortReason(runtimeReason)})` });
   }
@@ -101,9 +101,11 @@ export function adminRuntimeFlags(metadata?: ChatResponsePayload['metadata']): A
 export function shouldShowLeadPanel(messages: ReadonlyArray<{
   role: string;
   leadRequested?: boolean;
+  availabilityRequest?: { state: string };
   status?: string;
 }>) {
   const latestAssistant = [...messages].reverse().find((message) =>
     message.role === 'assistant' && (message.status === undefined || message.status === 'done'));
-  return latestAssistant?.leadRequested === true;
+  return latestAssistant?.leadRequested === true ||
+    ['offered', 'contact_requested', 'failed'].includes(latestAssistant?.availabilityRequest?.state ?? '');
 }

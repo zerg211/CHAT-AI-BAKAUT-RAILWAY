@@ -920,6 +920,21 @@ export interface CardDisplayOptions {
   hasMore?: boolean;
 }
 
+export interface AvailabilityRequest {
+  id: string;
+  state: 'offered' | 'contact_requested' | 'queued' | 'declined' | 'failed';
+  question: string;
+  productIds: string[];
+  preferredContact?: 'message' | 'call';
+}
+
+export interface AvailabilityReceipt {
+  requestId: string;
+  outcome: 'offered' | 'contact_requested' | 'consent_required' | 'declined' | 'queued' |
+    'already_queued' | 'failed' | 'cancellation_not_confirmed';
+  warehouseChecked: false;
+}
+
 export interface ChatResponsePayload {
   turnId?: string;
   answer: string;
@@ -929,12 +944,14 @@ export interface ChatResponsePayload {
   usedWebSearch: boolean;
   leadRequested?: boolean;
   leadCreated?: boolean;
+  availabilityRequest?: AvailabilityRequest;
+  availabilityReceipt?: AvailabilityReceipt;
   assistantMessageId?: string;
   metadata?: {
-    runtimeMode?: 'agent_manager' | 'openai_platform_agent';
+    runtimeMode?: 'agent_manager' | 'openai_platform_agent' | 'openai_responses_saved_agent';
     runtimeModeReason?: string;
     agentManagerRuntime?: {
-      runtimeMode?: 'agent_manager' | 'openai_platform_agent';
+      runtimeMode?: 'agent_manager' | 'openai_platform_agent' | 'openai_responses_saved_agent';
       reason?: string;
     };
     selection?: ProductSelectionMetadata;

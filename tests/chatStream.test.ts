@@ -15,6 +15,21 @@ function sseEvent(event: string, data: unknown) {
 }
 
 describe('streamChatMessage watchdog and explicit continuation', () => {
+  it('continues multiple research windows without resending the buyer message or exhausting failure retries', async () => {
+    let windows = 0;
+    const fetcher = vi.fn(async (url: string | URL | Request) => {
+      if (String(url).includes('/events?')) return Response.json({ events: [] });
+      if (String(url).includes('/client-diagnostics')) return Response.json({ ok: true });
+      const event = ++windows <= 4 ? sseEvent('pending', { turnId: 'turn-1' })
+        : sseEvent('done', { turnId: 'turn-1', answer: 'Проверено по двум источникам', products: [] });
+      return new Response(sseEvent('turn', { turnId: 'turn-1' }) + event, { status: 200 });
+    });
+    const result = await streamChatMessage('', 'session-1', 'Проверьте модели', { onDelta: () => undefined }, undefined,
+      { fetcher: fetcher as typeof fetch, visitorId });
+    expect(result.answer).toBe('Проверено по двум источникам');
+    expect(fetcher.mock.calls.filter(([url]) => String(url).endsWith('/messages'))).toHaveLength(1);
+    expect(fetcher.mock.calls.filter(([url]) => String(url).endsWith('/recover'))).toHaveLength(4);
+  });
   it('exposes the turn ID and treats explicit server cancellation as a stopped turn', async () => {
     const stream = new ReadableStream<Uint8Array>({
       start(controller) {

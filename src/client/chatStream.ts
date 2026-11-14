@@ -62,6 +62,10 @@ class ServerSseError extends Error {
   }
 }
 
+class ResearchPending extends Error {
+  constructor(readonly turnId: string) { super('Исследование продолжается'); }
+}
+
 function parseSseEvent(rawEvent: string) {
   const lines = rawEvent.split('\n');
   const eventLine = lines.find((line) => line.startsWith('event:'));
@@ -138,6 +142,7 @@ async function consumeSse(
       if (parsed.event === 'status') handlers.onStatus?.(parsed.data.status ?? '');
       if (parsed.event === 'done') donePayload = parsed.data as ChatResponsePayload;
       if (parsed.event === 'cancelled') throw new DOMException('The turn was cancelled.', 'AbortError');
+      if (parsed.event === 'pending' && typeof parsed.data.turnId === 'string') throw new ResearchPending(parsed.data.turnId);
       if (parsed.event === 'error') {
         throw new ServerSseError(
           String(parsed.data.error ?? FRIENDLY_FINAL_ERROR),
@@ -164,7 +169,7 @@ async function recoverChatMessage(
 ) {
   let lastError: unknown = new Error(FRIENDLY_FINAL_ERROR);
   let lastSeq = 0;
-  for (let attempt = 0; attempt < MAX_RECOVERY_TRANSPORT_ATTEMPTS; attempt += 1) {
+  for (let attempt = 0; attempt < MAX_RECOVERY_TRANSPORT_ATTEMPTS;) {
     const replayed = await replayDurableTurnEvents({
       apiBase,
       sessionId,
@@ -204,10 +209,15 @@ async function recoverChatMessage(
       );
     } catch (error) {
       if (signal?.aborted || (error instanceof DOMException && error.name === 'AbortError')) throw error;
+      if (error instanceof ResearchPending && error.turnId === turnId) {
+        handlers.onStatus?.('Продолжаю проверку данных...');
+        continue;
+      }
       if (error instanceof ServerSseError && !error.recoverable) throw error;
       diagnostics.event('stream_error');
       lastError = error;
-      if (attempt + 1 >= MAX_RECOVERY_TRANSPORT_ATTEMPTS) break;
+      attempt += 1;
+      if (attempt >= MAX_RECOVERY_TRANSPORT_ATTEMPTS) break;
       await new Promise<void>((resolve, reject) => {
         const onTimeout = () => {
           signal?.removeEventListener('abort', onAbort);
@@ -348,6 +358,8 @@ export async function streamChatMessage(
       return await consumeSse(response, handlers, signal, idleTimeoutMs, undefined, diagnostics);
     } catch (error) {
       if (signal?.aborted || (error instanceof DOMException && error.name === 'AbortError')) throw error;
+      if (error instanceof ResearchPending) return await recoverChatTurn(apiBase, sessionId, error.turnId,
+        options.visitorId, handlers, signal, { fetcher: options.fetcher, idleTimeoutMs });
       throw new Error(error instanceof Error && error.message ? error.message : FRIENDLY_FINAL_ERROR);
     }
   } catch (error) {

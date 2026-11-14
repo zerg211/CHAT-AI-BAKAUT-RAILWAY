@@ -3,6 +3,32 @@ import { submitLead } from '../src/client/leadSubmit.js';
 
 describe('submitLead watchdog', () => {
   const visitorId = 'visitor-capability-with-high-entropy';
+  it.each([undefined, { requestId: '00000000-0000-4000-8000-000000000099', outcome: 'queued', warehouseChecked: false },
+    { requestId: '00000000-0000-4000-8000-000000000002', outcome: 'failed', warehouseChecked: false },
+    { requestId: '00000000-0000-4000-8000-000000000002', outcome: 'queued', warehouseChecked: true }])(
+    'rejects a missing, unrelated or contradictory availability receipt: %j', async availabilityReceipt => {
+      const requestId = '00000000-0000-4000-8000-000000000002';
+      await expect(submitLead('', { sessionId: '00000000-0000-4000-8000-000000000001', clientLeadId: requestId,
+        availabilityRequestId: requestId, email: 'buyer@example.org' }, { visitorId,
+        fetcher: async () => Response.json({ ok: true, status: 'queued', outboxId: 'durable-outbox', availabilityReceipt }) }))
+        .rejects.toThrow('lead failed');
+    });
+  it('reports a pending semantic decision as a retryable wait, never as queued', async () => {
+    await expect(submitLead('', {
+      sessionId: '00000000-0000-4000-8000-000000000001', clientLeadId: '00000000-0000-4000-8000-000000000002',
+      phone: '+79990000000'
+    }, { visitorId, fetcher: async () => Response.json({ error: 'availability_decision_pending', retryable: true }, { status: 409 }) }))
+      .rejects.toThrow('Дождитесь ответа бота');
+  });
+  it('preserves the availability request ID across form transport and reports expired sessions', async () => {
+    const requestId = '00000000-0000-4000-8000-000000000002';
+    const payload = { sessionId: '00000000-0000-4000-8000-000000000001', clientLeadId: requestId,
+      availabilityRequestId: requestId, email: 'buyer@example.org' };
+    const fetcher = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) =>
+      Response.json({ error: 'Session not found' }, { status: 404 }));
+    await expect(submitLead('', payload, { fetcher, visitorId })).rejects.toMatchObject({ statusCode: 404 });
+    expect(JSON.parse(String(fetcher.mock.calls[0][1]?.body))).toEqual(payload);
+  });
   it('fails a stalled lead request instead of leaving the form in sending state forever', async () => {
     vi.useFakeTimers();
     try {
