@@ -1303,7 +1303,7 @@ export class ConversationRepository {
        WHERE turn.session_id = active_session.id
          AND turn.id = $2
          AND turn.status IN ('received', 'need_extracted', 'planned', 'answering', 'failed')
-         AND coalesce(turn.error_code, '') NOT IN ('cancelled_by_user', 'controlled_submission_rejected')
+         AND coalesce(turn.error_code, '') NOT IN ('cancelled_by_user', 'controlled_submission_rejected', 'agent_answer_rejected')
          AND ((turn.deadline_at IS NULL OR turn.deadline_at > now()) OR (turn.deadline_at + interval '30 seconds' > now() AND EXISTS (SELECT 1 FROM turn_checkpoints cp WHERE cp.session_id = turn.session_id AND cp.turn_id = turn.id AND cp.checkpoint = 'platform_agent_submission')))
          AND (
            turn.status <> 'failed'

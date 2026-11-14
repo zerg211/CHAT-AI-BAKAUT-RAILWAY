@@ -4,6 +4,7 @@ import { ConversationSessionUnavailableError } from '../src/db/repositories.js';
 import { registerChatRoutes } from '../src/routes/chat.js';
 import { config } from '../src/config.js';
 import { ControlledRequestRejected } from '../src/ai/controlledResponsesClient.js';
+import { AgentAnswerRejectedError } from '../src/ai/agentAnswerRejected.js';
 
 const sessionId = '11111111-1111-4111-8111-111111111111';
 const messageId = '22222222-2222-4222-8222-222222222222';
@@ -56,22 +57,26 @@ async function buildApp() {
 }
 
 describe('session-scoped chat route capability', () => {
-  it.each(['messages', 'recover'])('terminalizes a definitive provider rejection through %s despite a saved checkpoint', async route => {
+  it.each([
+    { route: 'messages', kind: 'submission' }, { route: 'recover', kind: 'submission' },
+    { route: 'messages', kind: 'answer' }, { route: 'recover', kind: 'answer' }
+  ])('terminalizes a definitive $kind rejection through $route despite a saved checkpoint', async ({ route, kind }) => {
     const { app, conversations, assistant } = await buildApp();
     const previousAgent = config.OPENAI_PLATFORM_AGENT_ID;
     config.OPENAI_PLATFORM_AGENT_ID = 'test-agent';
     conversations.createTurnWithUserMessage.mockResolvedValue({ id: turnId, deadlineAt: null });
     conversations.getTurn.mockResolvedValue({ id: turnId, status: 'answering', deadlineAt: null });
-    Object.assign(conversations, { listTurnCheckpoints: vi.fn(async () => [{ checkpoint: 'platform_agent_submission', payload: { rejected: true } }]) });
-    assistant.generateAnswer.mockRejectedValue(new ControlledRequestRejected(429));
-    assistant.recoverTurn.mockRejectedValue(new ControlledRequestRejected(429));
+    Object.assign(conversations, { listTurnCheckpoints: vi.fn(async () => [{ checkpoint: 'platform_agent_submission', payload: { rejected: kind === 'submission' } }]) });
+    const error = kind === 'submission' ? new ControlledRequestRejected(429) : new AgentAnswerRejectedError('Incomplete classification');
+    assistant.generateAnswer.mockRejectedValue(error);
+    assistant.recoverTurn.mockRejectedValue(error);
     try {
       const response = await app.inject({ method: 'POST', url: route === 'messages'
         ? `/api/chat/sessions/${sessionId}/messages` : `/api/chat/sessions/${sessionId}/messages/${turnId}/recover`,
         headers: { 'x-bakaut-visitor-id': visitorId }, payload: route === 'messages' ? { message: 'Сравните' } : {} });
       expect(response.body).toContain('"recoverable":false');
       expect(conversations.updateTurn).toHaveBeenCalledWith(expect.objectContaining({ status: 'failed',
-        errorCode: 'controlled_submission_rejected', requireUnowned: true }));
+        errorCode: kind === 'submission' ? 'controlled_submission_rejected' : 'agent_answer_rejected', requireUnowned: true }));
     } finally { config.OPENAI_PLATFORM_AGENT_ID = previousAgent; }
   });
   it('yields a saved research turn at the HTTP window without failing it or imposing a global deadline', async () => {
