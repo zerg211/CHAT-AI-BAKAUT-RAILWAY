@@ -109,7 +109,7 @@ function embedScript(baseUrl: string) {
   launcher.setAttribute('aria-label', title);
   launcher.setAttribute('aria-label', 'Открыть чат по технике');
   launcher.innerHTML =
-    '<span class="bakaut-ai-widget-label"><img class="bakaut-ai-widget-icon" alt="" src="' + esc(trimTrailingSlashes(equipmentBase) + '/chat-message-circle-more.svg') + '">' +
+    '<span class="bakaut-ai-widget-label"><svg class="bakaut-ai-widget-icon" aria-hidden="true" focusable="false" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M2.992 16.342a2 2 0 0 1 .094 1.167l-1.065 3.29a1 1 0 0 0 1.236 1.168l3.413-.998a2 2 0 0 1 1.099.092 10 10 0 1 0-4.777-4.719" /> <path d="M8 12h.01" /> <path d="M12 12h.01" /> <path d="M16 12h.01" /> </svg>' +
     '<span class="bakaut-ai-widget-label-copy"><strong>ЧАТ ПО ТЕХНИКЕ</strong><small>Подбор • сравнение • вопросы</small></span></span>' +
     '<span class="bakaut-ai-widget-avatar"><img alt="" style="display:none" src="' + esc(equipmentImage) + '"></span>';
 
@@ -153,7 +153,7 @@ function embedScript(baseUrl: string) {
     '#bakaut-ai-widget-launcher{position:relative;display:flex;align-items:center;justify-content:flex-end;width:320px;height:128px;padding:0;border:0;background:transparent;color:#fff;cursor:pointer;overflow:visible;pointer-events:auto;touch-action:manipulation;zoom:.65;transition:transform .18s ease}' +
     '#bakaut-ai-widget-launcher:hover{transform:translateY(-2px)}#bakaut-ai-widget-launcher:focus-visible{outline:3px solid #f97316;outline-offset:3px}' +
     '.bakaut-ai-widget-label{width:225px;min-height:48px;box-sizing:border-box;display:flex;align-items:center;gap:8px;padding:6px 9px;background:#121212;border:1px solid rgba(255,255,255,.9);border-radius:8px;box-shadow:0 5px 14px rgba(0,0,0,.22);text-align:left;position:relative} .bakaut-ai-widget-label:after{content:"";position:absolute;right:-7px;top:50%;border-top:7px solid transparent;border-bottom:7px solid transparent;border-left:7px solid #121212;transform:translateY(-50%)}' +
-    '.bakaut-ai-widget-icon{width:23px;height:23px;filter:invert(1);flex:none}.bakaut-ai-widget-label-copy{display:flex;flex-direction:column;gap:2px;min-width:0;border-left:1px solid #bbb;padding-left:8px}.bakaut-ai-widget-label-copy strong{font-size:13px;line-height:1.1;white-space:nowrap}.bakaut-ai-widget-label-copy small{font-size:9px;line-height:1.15;white-space:nowrap}' +
+    '.bakaut-ai-widget-icon{width:23px;height:23px;color:#fff;flex:none}.bakaut-ai-widget-icon path{stroke:#fff!important;fill:none!important}.bakaut-ai-widget-label-copy{display:flex;flex-direction:column;gap:2px;min-width:0;border-left:1px solid #bbb;padding-left:8px}.bakaut-ai-widget-label-copy strong{font-size:13px;line-height:1.1;white-space:nowrap}.bakaut-ai-widget-label-copy small{font-size:9px;line-height:1.15;white-space:nowrap}' +
     '.bakaut-ai-widget-avatar{width:95px;height:120px;flex:none;display:grid;place-items:center}.bakaut-ai-widget-avatar img{width:100%;height:100%;object-fit:contain}' +
     '' +
     '#bakaut-ai-widget-panel{display:none;position:absolute;bottom:0;width:' + width + ';height:' + height + ';max-width:calc(100vw - 32px);max-height:calc(100vh - 32px);opacity:0;transform:translateY(16px) scale(.96);pointer-events:none;transition:opacity .2s ease,transform .2s ease}' +
