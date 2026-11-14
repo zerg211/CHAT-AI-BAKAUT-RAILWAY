@@ -36,8 +36,12 @@ export async function verifyResearchLifecycle(repo, db) {
     assert.notEqual(next.id, rejected.turn.id);
     await repo.updateTurn({ sessionId: rejected.session.id, turnId: next.id, status: 'failed', errorCode: 'agent_answer_rejected', requireUnowned: true });
     assert.equal(await repo.claimTurnExecution({ sessionId: rejected.session.id, turnId: next.id, ownerId, leaseMs: 10000 }), null);
+    const afterAnswer = await repo.createTurnWithUserMessage({ sessionId: rejected.session.id, visitorCapability: rejected.visitorId,
+      clientMessageId: randomUUID(), requestHash: randomUUID(), content: 'Следующий вопрос после неполного ответа', deadlineAt: null });
+    await repo.updateTurn({ sessionId: rejected.session.id, turnId: afterAnswer.id, status: 'failed', errorCode: 'provider_response_failed', requireUnowned: true });
+    assert.equal(await repo.claimTurnExecution({ sessionId: rejected.session.id, turnId: afterAnswer.id, ownerId, leaseMs: 10000 }), null);
     assert.ok(await repo.createTurnWithUserMessage({ sessionId: rejected.session.id, visitorCapability: rejected.visitorId,
-      clientMessageId: randomUUID(), requestHash: randomUUID(), content: 'Следующий вопрос после неполного ответа', deadlineAt: null }));
+      clientMessageId: randomUUID(), requestHash: randomUUID(), content: 'Повтор после сбоя провайдера', deadlineAt: null }));
     console.log('PASS orphan research expires, live lease and recent session survive, expired/rejected turns cannot restart, next buyer question is accepted');
   } finally {
     await db.query('DELETE FROM conversation_sessions WHERE id=ANY($1::uuid[])', [sessions]);

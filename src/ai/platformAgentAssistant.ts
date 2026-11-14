@@ -963,6 +963,7 @@ export class PlatformAgentAssistant {
       if (turn?.errorCode === 'cancelled_by_user') throw new Error('Turn was cancelled by the user');
       if (turn?.errorCode === 'controlled_submission_rejected') throw new ControlledRequestRejected(400);
       if (turn?.errorCode === 'agent_answer_rejected') throw new AgentAnswerRejectedError('Completed answer was rejected');
+      if (turn?.errorCode === 'provider_response_failed') throw new ControlledResponseFailure('Provider response failed', undefined, true);
       if (!turn || (turn.deadlineAt && Date.parse(turn.deadlineAt) + 30_000 <= Date.now())) throw new Error('Turn deadline expired');
       const deadlineExpired = Boolean(turn.deadlineAt && Date.parse(turn.deadlineAt) <= Date.now());
       const ownerId = randomUUID();

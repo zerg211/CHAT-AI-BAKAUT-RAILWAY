@@ -4,7 +4,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { AssistantService } from '../ai/assistant.js';
 import { PlatformAgentClient } from '../ai/platformAgentClient.js';
-import { ControlledRequestRejected } from '../ai/controlledResponsesClient.js';
+import { ControlledRequestRejected, ControlledResponseFailure } from '../ai/controlledResponsesClient.js';
 import { AgentAnswerRejectedError } from '../ai/agentAnswerRejected.js';
 import { RecoveryAttemptUnavailableError, TurnExecutionInProgressError } from '../ai/agentManagerOrchestrator.js';
 import { AgentManagerTurnBudgetExceededError } from '../ai/agentManagerTurnBudget.js';
@@ -460,7 +460,8 @@ export async function registerChatRoutes(
       const submissionRejected = error instanceof ControlledRequestRejected || checkpoints.some(row =>
         row.checkpoint === 'platform_agent_submission' && row.payload?.rejected === true);
       const answerRejected = error instanceof AgentAnswerRejectedError;
-      const checkpointAvailable = !submissionRejected && !answerRejected && checkpoints.some((row) => row.checkpoint === 'platform_agent_submission');
+      const providerFailed = error instanceof ControlledResponseFailure && error.terminal;
+      const checkpointAvailable = !submissionRejected && !answerRejected && !providerFailed && checkpoints.some((row) => row.checkpoint === 'platform_agent_submission');
       if (!explicitlyCancelled && checkpointAvailable && controller.signal.reason === 'research_window_elapsed') {
         send('pending', { turnId });
         return;
@@ -471,7 +472,7 @@ export async function registerChatRoutes(
           turnId,
           status: 'failed',
           stage: controller.signal.aborted ? 'timeout_or_aborted' : 'failed',
-          errorCode: submissionRejected ? 'controlled_submission_rejected' : answerRejected ? 'agent_answer_rejected' : controller.signal.aborted
+          errorCode: submissionRejected ? 'controlled_submission_rejected' : answerRejected ? 'agent_answer_rejected' : providerFailed ? 'provider_response_failed' : controller.signal.aborted
             ? `${runtimeDecision.runtimeMode}_generation_aborted_or_timeout`
             : `${runtimeDecision.runtimeMode}_generation_failed`,
           errorMessage: safeErrorMessage(error),
@@ -567,7 +568,8 @@ export async function registerChatRoutes(
       const submissionRejected = error instanceof ControlledRequestRejected || recoveryCheckpoints.some(row =>
         row.checkpoint === 'platform_agent_submission' && row.payload?.rejected === true);
       const answerRejected = error instanceof AgentAnswerRejectedError;
-      const checkpointAvailable = !submissionRejected && !answerRejected && recoveryCheckpoints.some((row) => row.checkpoint === 'platform_agent_submission');
+      const providerFailed = error instanceof ControlledResponseFailure && error.terminal;
+      const checkpointAvailable = !submissionRejected && !answerRejected && !providerFailed && recoveryCheckpoints.some((row) => row.checkpoint === 'platform_agent_submission');
       if (!explicitlyCancelled && checkpointAvailable && controller.signal.reason === 'research_window_elapsed') {
         send('pending', { turnId: params.turnId });
         return;
@@ -578,7 +580,7 @@ export async function registerChatRoutes(
           turnId: params.turnId,
           status: 'failed',
           stage: 'recovery_failed',
-          errorCode: submissionRejected ? 'controlled_submission_rejected' : answerRejected ? 'agent_answer_rejected' : controller.signal.aborted
+          errorCode: submissionRejected ? 'controlled_submission_rejected' : answerRejected ? 'agent_answer_rejected' : providerFailed ? 'provider_response_failed' : controller.signal.aborted
             ? `${runtimeDecision.runtimeMode}_recovery_aborted_or_timeout`
             : `${runtimeDecision.runtimeMode}_recovery_failed`,
           errorMessage: safeErrorMessage(error),
