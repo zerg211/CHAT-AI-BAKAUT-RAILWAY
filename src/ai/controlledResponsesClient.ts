@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { sameModel } from './modelIdentity.js';
+import { catalogReviewSchema, normalizeCatalogReview } from './catalogReviewOutput.js';
 import { setTimeout as delay } from 'node:timers/promises';
 import { z } from 'zod';
 import { config } from '../config.js';
@@ -126,7 +127,7 @@ export class ControlledResponsesClient {
     }, { method, endpoint });
   }
 
-  async prepare(input: { message: string; history: Message[]; prefetch: ExactMentionPrefetch; webSearchReceipt?: SearchReceipt; priorWebSearchReceipts?: SearchReceipt[]; signal?: AbortSignal }): Promise<ControlledRequest> {
+  async prepare(input: { message: string; history: Message[]; prefetch: ExactMentionPrefetch; webSearchReceipt?: SearchReceipt; priorWebSearchReceipts?: SearchReceipt[]; classificationIds?: string[]; signal?: AbortSignal }): Promise<ControlledRequest> {
     if (config.OPENAI_MONETARY_GUARD_ENABLED) throw new Error('Monetary admission cannot bound MCP and token counting');
     const saved = savedAgentSchema.parse(await this.request(`/agents/${encodeURIComponent(this.agentId)}`, input.signal));
     const limits = modelCapabilities(saved.model);
@@ -147,10 +148,13 @@ export class ControlledResponsesClient {
     if (history.at(-1)?.role === 'user' && history.at(-1)?.content === input.message) history.pop();
     const privateHistory = history.map(message => ({ id: message.id, role: message.role, content: message.content,
       shown_product_ids: Array.isArray(message.metadata.productCards) ? message.metadata.productCards.map(card => object(card)?.id) : [] }));
-    const format = { type: 'json_schema', name: 'bakaut_buyer_answer', strict: true, schema: outputFormat.schema };
+    if (input.classificationIds?.some(id => !context.product_ids.includes(id))) throw new Error('Catalog review requires complete candidate cards');
+    const format = { type: 'json_schema', name: 'bakaut_buyer_answer', strict: true,
+      schema: input.classificationIds ? catalogReviewSchema(input.classificationIds) : outputFormat.schema };
     const searches = [...input.priorWebSearchReceipts ?? [], ...input.webSearchReceipt ? [input.webSearchReceipt] : []].map(webSearchContinuation);
     const request = clone({ model: saved.model, instructions: saved.instructions + platformAgentInstructions
       + webIntentInstruction(Boolean(config.CONTROLLED_WEB_SEARCH_ENABLED && config.CONTROLLED_WEB_SEARCH_FEES_APPROVED))
+      + (input.classificationIds ? '\nВ этом продолжении вместо массивов selected/rejected/uncertain заполни candidate_decisions по каждому ID из схемы. Сервер только преобразует твои решения в группы. Сначала оцени кандидатов, затем составь согласованный с ними ответ. Не превращай прежние товары из истории в кандидатов новой темы.' : '')
       + (searches.length ? `\n${searches[0].instructions}\nОцени все полученные результаты поиска. Сам реши, достаточно ли сведений для ответа или нужен следующий источник; не повторяй уже решённый поиск без новой причины.` : ''),
       ...(saved.reasoning ? { reasoning: saved.reasoning } : {}), ...(saved.service_tier ? { service_tier: saved.service_tier } : {}),
       text: { format }, input: [
@@ -167,7 +171,8 @@ export class ControlledResponsesClient {
     diagnosticEvent('controlled.context.budget', { inputTokens: count.input_tokens, totalTokens: reserveTokens,
       maxOutputTokens: limits.maximumOutput, candidateCount: prefetch.items.length, complete: true });
     const plan: ControlledRequest = { kind: 'controlled_response', model: saved.model, request, prefetch: clone(prefetch),
-      inputTokens: count.input_tokens, reserveTokens, manifest: { ...context, hash_format: 'canonical_json_v1', request_sha256: hash(request), prefetch_sha256: hash(prefetch),
+      inputTokens: count.input_tokens, reserveTokens, manifest: { ...context, ...(input.classificationIds ? { classification_ids: [...input.classificationIds] } : {}),
+        hash_format: 'canonical_json_v1', request_sha256: hash(request), prefetch_sha256: hash(prefetch),
         original_cards: prefetch.items.map(item => ({ product_id: item.product_id, sha256: hash(item.original_card) })),
         config_sha256: hash(saved), agent_id: this.agentId } };
     plan.manifest.plan_sha256 = planHash(plan);
@@ -212,6 +217,13 @@ export class ControlledResponsesClient {
         try {
           if (!response.output) throw new Error('Controlled response output is missing');
           const items = response.output.map(item => ({ ...item, turn_id: responseId,
+            ...(Array.isArray(plan.manifest.classification_ids) && item.type === 'message' && item.role === 'assistant' &&
+              (item.phase == null || item.phase === 'final_answer') && Array.isArray(item.content) ? {
+                content: item.content.map(part => {
+                  const content = objectSchema.parse(part);
+                  return content.type === 'output_text' && typeof content.text === 'string'
+                    ? { ...content, text: normalizeCatalogReview(content.text, plan.manifest.classification_ids as string[]) } : content;
+                }) } : {}),
             ...(item.type === 'message' && item.role === 'assistant' ? { phase: item.phase ?? 'final_answer' } : {}),
             ...(item.type === 'mcp_call' ? { status: item.error ? 'failed' : item.status ?? 'completed',
               output: typeof item.output === 'string' ? { content: [{ type: 'text', text: item.output }] } : item.output } : {}) }));

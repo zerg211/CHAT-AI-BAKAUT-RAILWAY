@@ -1232,6 +1232,30 @@ describe('Controlled Responses original context', () => {
     expect(Object.isFrozen(plan.request)).toBe(true);
   });
 
+  it('carries all 132 identity-keyed model decisions through a saved response into catalog groups', async () => {
+    const prefetch = fullCards(133);
+    const ids = prefetch.items.slice(0, 132).map(item => item.product_id);
+    const decisions = Object.fromEntries(ids.map((id, i) => [id, i < 31 ? 'selected' : i < 130 ? 'rejected' : 'uncertain']));
+    const answer = { answer: 'Подбор по задаче', candidate_decisions: decisions, comparison_ids: [],
+      recommendation_status: 'confirmed', selection_snapshots: [], availability: null };
+    const { client, transport } = harness({ completed: { output: [{ type: 'message', role: 'assistant', phase: 'final_answer',
+      content: [{ type: 'output_text', text: JSON.stringify(answer) }] }] } });
+    const plan = await client.prepare({ message: 'Все подходящие товары без ограничения цены', history: [], prefetch, classificationIds: ids });
+    const schema = (plan.request.text as any).format.schema;
+    expect(schema.properties.candidate_decisions.required).toEqual(ids);
+    expect(schema.properties.selected).toBeUndefined();
+    expect(plan.manifest.classification_ids).toEqual(ids);
+    await client.submit(plan, 'review-turn');
+    const saved = JSON.parse(JSON.stringify(plan));
+    const result = await client.wait(saved, 'resp_controlled');
+    const groups = JSON.parse(result.answer);
+    expect(groups.selected).toEqual(ids.slice(0, 31));
+    expect(groups.rejected).toEqual(ids.slice(31, 130));
+    expect(groups.uncertain).toEqual(ids.slice(130));
+    expect(result.page?.items).toHaveLength(132);
+    expect(result.knownProducts?.product_ids).toHaveLength(133);
+    expect(transport.mock.calls.filter(([url, init]) => new URL(url).pathname === '/v1/responses' && init?.method === 'POST')).toHaveLength(1);
+  });
   it('resumes a saved request after JSON object keys are reordered without resubmitting or accepting changed content', async () => {
     const { client, transport } = harness();
     const plan = await client.prepare({ message: 'Сравните товары', history: [], prefetch: fullCards(2) });
