@@ -346,7 +346,6 @@ function resolveApiBase() {
 }
 
 const apiBase = resolveApiBase();
-const CHAT_TURN_TIMEOUT_MS = 300_000;
 
 function id() {
   return Math.random().toString(36).slice(2);
@@ -1524,9 +1523,6 @@ function App() {
     setBusy(true);
     const controller = new AbortController();
     const releaseController = registerChatAbortController(abortRef, controller);
-    const turnTimeout = window.setTimeout(() => {
-      controller.abort();
-    }, CHAT_TURN_TIMEOUT_MS);
     const assistantId = id();
     const userId = id();
     const clientMessageId = crypto.randomUUID();
@@ -1731,7 +1727,6 @@ function App() {
       setError(safeMessage);
       }
     } finally {
-      window.clearTimeout(turnTimeout);
       setBusy(false);
       setActiveTurn(null);
       releaseController();

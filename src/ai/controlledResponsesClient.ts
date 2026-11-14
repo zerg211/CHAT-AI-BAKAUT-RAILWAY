@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { sameModel } from './modelIdentity.js';
 import { setTimeout as delay } from 'node:timers/promises';
 import { z } from 'zod';
 import { config } from '../config.js';
@@ -41,15 +42,10 @@ const responseSchema = z.object({ id: z.string().min(1), status: z.string(), mod
   input_transformations: z.array(objectSchema).optional() });
 const capabilities = { 'gpt-6-luna': { context: 1_050_000, maximumOutput: 128_000 } };
 const object = (value: unknown) => objectSchema.safeParse(value).data;
-const hash = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
+const hash = (value: unknown, canonical = true) => createHash('sha256').update(JSON.stringify(value,
+  canonical ? (_key, item) => item && typeof item === 'object' && !Array.isArray(item)
+    ? Object.fromEntries(Object.entries(item).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)) : item : undefined)).digest('hex');
 const clone = <T>(value: T): T => JSON.parse(JSON.stringify(value));
-function sameModel(actual: string | undefined, requested: string) {
-  if (actual === requested) return true;
-  if (!actual?.startsWith(requested + '-')) return false;
-  const date = actual.slice(requested.length + 1).split('-');
-  return date.map(part => part.length).join(',') === '4,2,2' &&
-    date.every(part => [...part].every(character => '0123456789'.includes(character)));
-}
 function freeze(value: unknown): void {
   if (value && typeof value === 'object') {
     Object.values(value).forEach(freeze);
@@ -58,7 +54,7 @@ function freeze(value: unknown): void {
 }
 function planHash(plan: ControlledRequest) {
   const { plan_sha256: _excluded, ...manifest } = plan.manifest;
-  return hash({ ...plan, manifest });
+  return hash({ ...plan, manifest }, plan.manifest.hash_format === 'canonical_json_v1');
 }
 function modelCapabilities(model: string) {
   if (model !== 'gpt-6-luna') throw new Error('Controlled response model has no verified context limits');
@@ -77,12 +73,14 @@ function textParts(text: string) {
 }
 function assertPlan(plan: ControlledRequest) {
   const limits = modelCapabilities(plan.model);
+  const canonical = plan.manifest.hash_format === 'canonical_json_v1';
   if (plan.kind !== 'controlled_response' || plan.request.model !== plan.model ||
+    (plan.manifest.hash_format !== undefined && !canonical) ||
     plan.request.truncation !== 'disabled' || plan.request.background !== true || plan.request.store !== true ||
     ['context_management', 'conversation', 'previous_response_id'].some(key => key in plan.request) ||
     plan.request.max_output_tokens !== limits.maximumOutput || !Number.isSafeInteger(plan.inputTokens) || plan.inputTokens < 0 ||
     plan.reserveTokens !== plan.inputTokens + limits.maximumOutput || plan.reserveTokens > limits.context ||
-    plan.manifest.request_sha256 !== hash(plan.request) || plan.manifest.prefetch_sha256 !== hash(plan.prefetch) ||
+    plan.manifest.request_sha256 !== hash(plan.request, canonical) || plan.manifest.prefetch_sha256 !== hash(plan.prefetch, canonical) ||
     plan.manifest.plan_sha256 !== planHash(plan)) throw new Error('Controlled response snapshot integrity failed');
 }
 function catalogTool() {
@@ -169,7 +167,7 @@ export class ControlledResponsesClient {
     diagnosticEvent('controlled.context.budget', { inputTokens: count.input_tokens, totalTokens: reserveTokens,
       maxOutputTokens: limits.maximumOutput, candidateCount: prefetch.items.length, complete: true });
     const plan: ControlledRequest = { kind: 'controlled_response', model: saved.model, request, prefetch: clone(prefetch),
-      inputTokens: count.input_tokens, reserveTokens, manifest: { ...context, request_sha256: hash(request), prefetch_sha256: hash(prefetch),
+      inputTokens: count.input_tokens, reserveTokens, manifest: { ...context, hash_format: 'canonical_json_v1', request_sha256: hash(request), prefetch_sha256: hash(prefetch),
         original_cards: prefetch.items.map(item => ({ product_id: item.product_id, sha256: hash(item.original_card) })),
         config_sha256: hash(saved), agent_id: this.agentId } };
     plan.manifest.plan_sha256 = planHash(plan);
@@ -220,7 +218,7 @@ export class ControlledResponsesClient {
           const parsed = extractAgentResult(items, responseId, plan.prefetch, true);
           if (!parsed.answer) throw new Error('Controlled response returned an empty answer');
           return { sessionId: `controlled:${responseId}`, turnId: responseId, model: response.model!, usage: response.usage, service_tier: response.service_tier ?? (typeof plan.request.service_tier === 'string' ? plan.request.service_tier : undefined), ...parsed,
-            contextReceipt: { request_sha256: hash(plan.request), source_revision: plan.manifest.source_revision,
+            contextReceipt: { request_sha256: String(plan.manifest.request_sha256), source_revision: plan.manifest.source_revision,
               product_ids: [...plan.manifest.product_ids], product_count: plan.manifest.product_ids.length,
               inputTokens: plan.inputTokens, reserveTokens: plan.reserveTokens,
               truncation: 'disabled', compaction: false, manifest_scope: 'initial_original_cards',

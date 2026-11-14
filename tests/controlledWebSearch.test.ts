@@ -17,6 +17,19 @@ function harness() {
 }
 
 describe('dormant controlled web search', () => {
+  it.each([
+    ['gpt-6-luna', 'gpt-6-luna-2026-11-01', true],
+    ['gpt-6-luna-2026-11-01', 'gpt-6-luna-2026-11-02', false],
+    ['gpt-6-luna', 'gpt-6-sol-2026-11-01', false]
+  ])('checks receipt model %s against %s consistently', async (requested, actual, valid) => {
+    const h = harness();
+    vi.mocked(h.deps.read).mockResolvedValue({ status: 'ok', responseId: 'resp_1', model: String(actual),
+      usage: null, toolFees: null, findings: 'Факты', sources: [] });
+    const result = runControlledWebSearch({ ...input, model: String(requested) }, h.deps);
+    if (valid) await expect(result).resolves.toMatchObject({ usedWebSearch: true });
+    else await expect(result).rejects.toThrow('model mismatch');
+    expect(h.deps.recordUsage).toHaveBeenCalledTimes(valid ? 1 : 0);
+  });
   it('reserves distinct research steps and resumes the second step without another submission', async () => {
     const first = harness();
     const second = harness();
@@ -82,10 +95,10 @@ describe('dormant controlled web search', () => {
   });
   it('keeps the real model and usage in its checkpoint if an unapproved snapshot appears', async () => {
     const h = harness();
-    vi.mocked(h.deps.read).mockResolvedValue({ status: 'ok', responseId: 'resp_1', model: 'model-2026-01-01',
+    vi.mocked(h.deps.read).mockResolvedValue({ status: 'ok', responseId: 'resp_1', model: 'other-model-2026-01-01',
       usage: { total_tokens: 12 }, toolFees: null, findings: '', sources: [] });
     await expect(runControlledWebSearch(input, h.deps)).rejects.toThrow('model mismatch');
-    expect(h.checkpoint()?.receipt).toMatchObject({ model: 'model-2026-01-01', usage: { total_tokens: 12 }, costStatus: 'unknown' });
+    expect(h.checkpoint()?.receipt).toMatchObject({ model: 'other-model-2026-01-01', usage: { total_tokens: 12 }, costStatus: 'unknown' });
     expect(h.deps.recordUsage).not.toHaveBeenCalled();
   });
 });

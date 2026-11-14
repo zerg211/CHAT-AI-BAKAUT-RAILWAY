@@ -21,7 +21,7 @@ const DEFAULT_RECOVERY_IDLE_TIMEOUT_MS = 180_000;
 const MAX_RECOVERY_TRANSPORT_ATTEMPTS = 2;
 const RECOVERY_TRANSPORT_RETRY_DELAY_MS = 250;
 const STREAM_TIMEOUT_MESSAGE = 'Ответ ассистента не завершился вовремя.';
-const RECOVERING_STATUS = 'Ответ оборвался, восстанавливаю...';
+const RECOVERING_STATUS = 'Продолжаю готовить ответ...';
 const FRIENDLY_FINAL_ERROR = 'Не удалось завершить ответ. Текст вашего вопроса остался в чате.';
 
 export class ChatMessageNotAcceptedError extends Error {

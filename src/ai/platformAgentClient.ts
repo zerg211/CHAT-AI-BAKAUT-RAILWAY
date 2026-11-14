@@ -336,7 +336,7 @@ function extractCatalogResult(items: unknown[], turnId: string, prefetch?: Exact
         items: prefetch.items.filter(item => referenced.includes(String(item.product_id))) };
     }
   }
-  if (!page && [declared?.selected, declared?.rejected, declared?.uncertain]
+  if (!page && [declared?.selected, declared?.rejected, declared?.uncertain, declared?.comparison_ids]
     .some((ids) => Array.isArray(ids) && ids.length)) {
     const products = new Map<string, JsonObject>((prefetch?.items ?? []).map(item => [String(item.product_id), item]));
     let revision: string | undefined = prefetch?.source_revision;
@@ -356,7 +356,7 @@ function extractCatalogResult(items: unknown[], turnId: string, prefetch?: Exact
         if (typeof product?.product_id === 'string') products.set(product.product_id, product);
       }
     }
-    const declaredIds = [declared?.selected, declared?.rejected, declared?.uncertain]
+    const declaredIds = [declared?.selected, declared?.rejected, declared?.uncertain, declared?.comparison_ids]
       .flatMap((ids) => Array.isArray(ids) ? ids : []);
     if (products.size && declaredIds.every((id) => typeof id === 'string' && products.has(id))) {
       const classified = new Set(declaredIds);
