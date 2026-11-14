@@ -1,12 +1,15 @@
 import { createHash } from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
+import type { PoolClient } from 'pg';
 import { z } from 'zod';
 import { ConversationRepository, LeadRepository } from '../db/repositories.js';
-import { safeError } from '../ai/responseUtils.js';
+import { pool } from '../db/pool.js';
+import { latestAvailabilityRequest, durableAvailabilityLead } from '../ai/platformAvailability.js';
 
 const leadSchema = z.object({
   sessionId: z.string().uuid(),
   clientLeadId: z.string().uuid(),
+  availabilityRequestId: z.string().uuid().optional(),
   name: z.preprocess(value => value === '' ? undefined : value, z.string().trim().min(1).max(120).optional()),
   preferredContact: z.enum(['message', 'call']).optional(),
   phone: z.string().trim().min(5).max(40).optional(),
@@ -55,7 +58,7 @@ export async function registerLeadRoutes(app: FastifyInstance) {
   }, async (request, reply) => {
     const parsed = leadSchema.safeParse(request.body ?? {});
     if (!parsed.success) return reply.code(400).send({ error: 'Invalid lead request' });
-    const input = parsed.data;
+    let input = parsed.data;
     reply.header('cache-control', 'no-store');
     reply.header('vary', 'x-bakaut-visitor-id');
     const capabilityHeader = request.headers['x-bakaut-visitor-id'];
@@ -69,13 +72,61 @@ export async function registerLeadRoutes(app: FastifyInstance) {
       return reply.code(404).send({ error: 'Session not found or inactive' });
     }
     let capturedLeadId: string | undefined;
+    let db: PoolClient | undefined;
+    let transactionOpen = false;
+    const rollback = async () => {
+      if (db && transactionOpen) {
+        await db.query('ROLLBACK');
+        transactionOpen = false;
+      }
+    };
     try {
-      const completion = await leads.createClientLeadWithOutbox({
+      let captureLeads = leads;
+      let captureConversations = conversations;
+      if (input.availabilityRequestId) {
+        db = await pool.connect();
+        await db.query('BEGIN');
+        transactionOpen = true;
+        const locked = await db.query(
+          `SELECT id FROM conversation_sessions
+           WHERE id=$1::uuid AND visitor_id=$2 AND status='active' FOR UPDATE`,
+          [input.sessionId, visitorCapability]
+        );
+        if (!locked.rows.length) {
+          await rollback();
+          return reply.code(404).send({ error: 'Session not found or inactive' });
+        }
+        captureLeads = new LeadRepository(db);
+        captureConversations = new ConversationRepository(db);
+        const pendingTurn = await captureConversations.getLatestUnansweredTurn(input.sessionId);
+        if (pendingTurn && ['received', 'need_extracted', 'planned', 'answering'].includes(pendingTurn.turn.status)) {
+          await rollback();
+          return reply.code(409).send({ error: 'availability_decision_pending', retryable: true });
+        }
+        // Separate statement after the lock: a waiting form must see the
+        // committed decline or scope change under READ COMMITTED.
+        const currentRequest = latestAvailabilityRequest(await captureConversations.listMessages(input.sessionId, null));
+        if (!currentRequest || currentRequest.id !== input.availabilityRequestId || currentRequest.id !== input.clientLeadId || currentRequest.state === 'declined') {
+          await rollback();
+          return reply.code(409).send({ error: 'availability_request_changed' });
+        }
+        input = { ...input, question: currentRequest.question, preferredContact: input.preferredContact ?? currentRequest.preferredContact };
+      }
+      let completion = input.availabilityRequestId
+        ? await captureLeads.findClientLeadWithOutbox(input.sessionId, input.clientLeadId) : null;
+      let alreadyQueued = Boolean(completion);
+      completion ??= await captureLeads.createClientLeadWithOutbox({
         ...input,
-        clientRequestHash: requestHash(input)
+        clientRequestHash: requestHash(input),
+        ...(input.availabilityRequestId ? { skipPendingDraft: true, purpose: 'availability' as const } : {})
       });
+      if (!completion && input.availabilityRequestId) {
+        completion = await captureLeads.findClientLeadWithOutbox(input.sessionId, input.clientLeadId);
+        alreadyQueued = Boolean(completion);
+      }
       if (!completion) {
-        const currentSession = await conversations.restoreSession(input.sessionId, visitorCapability);
+        const currentSession = await captureConversations.restoreSession(input.sessionId, visitorCapability);
+        await rollback();
         if (!currentSession) {
           return reply.code(404).send({ error: 'Session not found or inactive' });
         }
@@ -84,24 +135,34 @@ export async function registerLeadRoutes(app: FastifyInstance) {
       capturedLeadId = completion.lead.id;
       const outboxId = completion.outbox.id.trim() || undefined;
       const dispatchStatus = durableLeadOutboxStatus(completion.outbox);
-      if (!outboxId || !dispatchStatus || !pendingDraftWasPreserved(completion)) {
+      if (!outboxId || !dispatchStatus || !pendingDraftWasPreserved(completion) ||
+          (input.availabilityRequestId && !durableAvailabilityLead(completion))) {
         throw new Error(`lead_outbox_not_dispatchable:${completion.outbox.status}`);
+      }
+      if (db) {
+        await db.query('COMMIT');
+        transactionOpen = false;
       }
       return reply.send({
         ok: true,
         status: 'queued',
         lead: completion.lead,
         outboxId,
-        dispatchStatus
+        dispatchStatus,
+        ...(input.availabilityRequestId ? { availabilityReceipt: { requestId: input.availabilityRequestId,
+          outcome: alreadyQueued ? 'already_queued' : 'queued', warehouseChecked: false } } : {})
       });
-    } catch (error) {
-      request.log.warn({ error: safeError(error), leadId: capturedLeadId }, 'lead form atomic capture failed');
+    } catch {
+      await rollback().catch(() => undefined);
+      request.log.warn({ code: 'lead_outbox_enqueue_failed', leadId: capturedLeadId }, 'lead form atomic capture failed');
       return reply.code(503).send({
         ok: false,
         error: 'lead_outbox_enqueue_failed',
         retryable: true,
         ...(capturedLeadId ? { leadId: capturedLeadId } : {})
       });
+    } finally {
+      db?.release();
     }
   });
 }

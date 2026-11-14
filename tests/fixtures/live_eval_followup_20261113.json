@@ -1,0 +1,205 @@
+{
+  "scope": "isolated live followup; no tools; synthetic history/agent instructions; not production acceptance",
+  "total_http_attempts": 24,
+  "total_generations": 12,
+  "total_input_tokens": 180181,
+  "total_output_tokens": 10096,
+  "standard_total_cost_estimate_usd": 0.023066100000000003,
+  "total_with_10_percent_estimate_usd": 0.025372710000000003,
+  "held_reservation_usd": 0.9768,
+  "cases": [
+    {
+      "case_id": "dpu6555_narrow_trench",
+      "status": "completed",
+      "response_id": "resp_0ebc3d01afeead39016af70adae6c887d1af44a8693b9ed0a8",
+      "usage": {
+        "input_tokens": 40131,
+        "input_tokens_details": {
+          "cache_write_tokens": 0,
+          "cache_write_tokens_details": {
+            "ttl_12h_tokens": 0,
+            "ttl_30m_tokens": 0
+          },
+          "cached_tokens": 0
+        },
+        "output_tokens": 1208,
+        "output_tokens_details": {
+          "reasoning_tokens": 768
+        },
+        "total_tokens": 41339
+      },
+      "answers": [
+        {
+          "answer": "У показанных модификаций главное различие — рама и запуск:\n\n- **DPU 6555 H** — 487 кг; в карточке для этой версии не указана узкая защитная рама.\n- **DPU 6555 Hs** — 481 кг; узкая защитная рама для стеснённых условий, ручной запуск.\n\nПо ширине траншеи 700 мм ни одну из них нельзя уверенно подтвердить как подходящую: опорная плита шириной 550 мм, но в данных также указана ширина по раме 710 мм — это на 10 мм больше траншеи. Для Hs узкая рама предусмотрена, однако карточка не подтверждает, что её наружная ширина меньше 700 мм. Поэтому Hs выглядит предпочтительнее для тесного участка, но перед выбором нужно уточнить у продавца фактическую максимальную ширину именно этой комплектации. Если 700 мм — строгий предел, по имеющимся данным подходящая модель не подтверждена.",
+          "answer_contract": "consultation_receipt_v1",
+          "answer_review": {
+            "publication": "ready",
+            "rationale": "Сообщение даёт сравнение двух ранее показанных модификаций и прямо объясняет, почему совместимость с траншеей 700 мм нельзя подтвердить по имеющимся размерам.",
+            "verdict": "uncertain"
+          },
+          "availability": {
+            "action": "none",
+            "consentGranted": false,
+            "consentQuote": null,
+            "continueRequest": false,
+            "preferredContact": null,
+            "productIds": [],
+            "requestSummary": ""
+          },
+          "comparison_ids": [
+            "9e55eb4cb7233377fc66173c",
+            "c63797df792e8f63d601d99b"
+          ],
+          "recommendation_status": "not_confirmed",
+          "rejected": [],
+          "selected": [],
+          "selection_snapshots": [],
+          "uncertain": [
+            "9e55eb4cb7233377fc66173c",
+            "c63797df792e8f63d601d99b"
+          ],
+          "web_search_intent": null
+        }
+      ]
+    },
+    {
+      "case_id": "lossless_raw_fields",
+      "status": "completed",
+      "response_id": "resp_088d961c13fb2c36016af70aeb223887d1b3b8583ab4149748",
+      "usage": {
+        "input_tokens": 21018,
+        "input_tokens_details": {
+          "cache_write_tokens": 0,
+          "cache_write_tokens_details": {
+            "ttl_12h_tokens": 0,
+            "ttl_30m_tokens": 0
+          },
+          "cached_tokens": 0
+        },
+        "output_tokens": 908,
+        "output_tokens_details": {
+          "reasoning_tokens": 628
+        },
+        "total_tokens": 21926
+      },
+      "answers": [
+        {
+          "answer": "В переданных данных есть ссылки на руководство, но его текст не приведён, поэтому конкретное условие эксплуатации из самого руководства подтвердить не могу. В характеристиках карточек указано применение: уплотнение смешанных грунтов, асфальта и брусчатки; для тяжёлых работ. Также указан преодолеваемый уклон — 46,6%.\n\nНеобычный вложенный блок `synthetic_extra` содержит поле `условие` со значением «контроль сохранения». Это служебное поле переданных данных, а не характеристика или условие работы виброплиты.",
+          "answer_contract": "consultation_receipt_v1",
+          "answer_review": {
+            "publication": "ready",
+            "rationale": "Сообщение полезно и отделяет сведения карточки от отсутствующего текста руководства и служебного вложенного поля. Не утверждает, что руководство проверено.",
+            "verdict": "intermediate"
+          },
+          "availability": {
+            "action": "none",
+            "consentGranted": false,
+            "consentQuote": null,
+            "continueRequest": false,
+            "preferredContact": null,
+            "productIds": [],
+            "requestSummary": ""
+          },
+          "comparison_ids": [],
+          "recommendation_status": "not_applicable",
+          "rejected": [],
+          "selected": [],
+          "selection_snapshots": [],
+          "uncertain": [],
+          "web_search_intent": null
+        }
+      ]
+    },
+    {
+      "case_id": "unknown_capability",
+      "status": "completed",
+      "response_id": "resp_0cc765600bf9faf3016af70af76bb887d19147b025818e9366",
+      "usage": {
+        "input_tokens": 3290,
+        "input_tokens_details": {
+          "cache_write_tokens": 0,
+          "cache_write_tokens_details": {
+            "ttl_12h_tokens": 0,
+            "ttl_30m_tokens": 0
+          },
+          "cached_tokens": 0
+        },
+        "output_tokens": 458,
+        "output_tokens_details": {
+          "reasoning_tokens": 245
+        },
+        "total_tokens": 3748
+      },
+      "answers": [
+        {
+          "answer": "По предоставленным данным нельзя подтвердить, подойдёт ли оборудование: нужное условие в карточке не указано, а для второго товара не уточнено, какой именно факт подтверждён. Напишите, какое условие важно и о каком товаре идёт речь — тогда можно будет оценить соответствие по характеристикам.",
+          "answer_contract": "consultation_receipt_v1",
+          "answer_review": {
+            "publication": "ready",
+            "rationale": "Полезно и честно пояснено, почему пригодность нельзя подтвердить, и запрошены необходимые уточнения.",
+            "verdict": "intermediate"
+          },
+          "availability": {
+            "action": "none",
+            "consentGranted": false,
+            "consentQuote": null,
+            "continueRequest": false,
+            "preferredContact": null,
+            "productIds": [],
+            "requestSummary": ""
+          },
+          "comparison_ids": [],
+          "recommendation_status": "not_confirmed",
+          "rejected": [],
+          "selected": [],
+          "selection_snapshots": [],
+          "uncertain": [
+            "unknown",
+            "known"
+          ],
+          "web_search_intent": null
+        }
+      ]
+    },
+    {
+      "case_id": "multi_category",
+      "status": "completed",
+      "response_id": "resp_00112475865dac06016af70b016b8887d1b3e0c2d4442ba434",
+      "usage": {
+        "input_tokens": 3305,
+        "input_tokens_details": {
+          "cache_write_tokens": 0,
+          "cache_write_tokens_details": {
+            "ttl_12h_tokens": 0,
+            "ttl_30m_tokens": 0
+          },
+          "cached_tokens": 0
+        },
+        "output_tokens": 646,
+        "output_tokens_details": {
+          "reasoning_tokens": 402
+        },
+        "total_tokens": 3951
+      },
+      "answers": [
+        {
+          "answer": "Могу подобрать и бензиновый, и дизельный генератор, но в предоставленных данных нет карточек конкретных моделей, поэтому подтвердить подходящий вариант пока не могу. В целом бензиновые генераторы чаще выбирают для периодического использования, а дизельные — для длительной работы под существенной нагрузкой. Чтобы определить нужную мощность и тип, напишите, какие приборы или оборудование планируете подключать, нужна ли одна или три фазы и как долго генератор будет работать без перерыва. Ограничение цены для подбора не требуется.",
+          "answer_contract": "consultation_receipt_v1",
+          "answer_review": {
+            "publication": "ready",
+            "rationale": "Сообщение полезно как предварительная консультация: честно указывает, что конкретные модели не подтверждены, даёт общее различие типов и просит сведения, необходимые для подбора.",
+            "verdict": "intermediate"
+          },
+          "availability": null,
+          "comparison_ids": [],
+          "recommendation_status": "not_confirmed",
+          "rejected": [],
+          "selected": [],
+          "selection_snapshots": [],
+          "uncertain": [],
+          "web_search_intent": null
+        }
+      ]
+    }
+  ]
+}

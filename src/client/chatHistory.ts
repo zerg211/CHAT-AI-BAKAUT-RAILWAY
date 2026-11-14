@@ -221,29 +221,111 @@ function normalizePendingTurn(value: unknown): RestoredPendingTurn | null {
   };
 }
 
+function parseHistoryPage(value: unknown): PublicChatHistoryMessage[] {
+  if (!Array.isArray(value)) throw new Error('History page is invalid');
+  const ids = new Set<string>();
+  for (const item of value) {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) throw new Error('History message is invalid');
+    const message = item as Record<string, unknown>;
+    if (typeof message.id !== 'string' || !message.id.trim() || message.id.length > 200 || ids.has(message.id) ||
+        (message.role !== 'user' && message.role !== 'assistant') ||
+        typeof message.content !== 'string' || !message.content.trim() ||
+        (message.products !== undefined && !Array.isArray(message.products))) throw new Error('History message is invalid');
+    ids.add(message.id);
+  }
+  const messages = normalizePublicHistoryMessages(value);
+  if (messages.length !== value.length || messages.some((message, index) => {
+    const original = value[index] as Record<string, unknown>;
+    return Array.isArray(original.products) && (message.products?.length ?? 0) !== original.products.length;
+  })) throw new Error('History page contains invalid products');
+  return messages;
+}
+
 export async function loadChatHistoryState(
   apiBase: string,
   sessionId: string,
   visitorId: string,
   fetcher: typeof fetch = fetch
 ): Promise<LoadedChatHistory> {
-  const response = await fetcher(sessionMessagesUrl(apiBase, sessionId), {
-    headers: {
-      Accept: 'application/json',
-      'x-bakaut-visitor-id': visitorId
+  let before: string | undefined;
+  const seen = new Set<string>();
+  const messageIds = new Set<string>();
+  const pages: ReturnType<typeof normalizePublicHistoryMessages>[] = [];
+  let pendingTurn: unknown;
+  let leadOfferConsumed = false;
+  do {
+    const base = sessionMessagesUrl(apiBase, sessionId);
+    const response = await fetcher(before ? `${base}?before=${encodeURIComponent(before)}` : base, {
+      headers: { Accept: 'application/json', 'x-bakaut-visitor-id': visitorId }
+    });
+    if (response.status === 404) throw new ChatHistoryNotFoundError();
+    if (!response.ok) throw new Error(`History request failed: ${response.status}`);
+    const payload = await response.json() as { messages?: unknown; pendingTurn?: unknown;
+      leadOfferConsumed?: unknown; nextBefore?: unknown; historyComplete?: unknown };
+    if (!Array.isArray(payload.messages) || typeof payload.historyComplete !== 'boolean' ||
+        (payload.historyComplete ? payload.nextBefore !== undefined : typeof payload.nextBefore !== 'string')) {
+      throw new Error('History completeness is invalid');
     }
-  });
-  if (response.status === 404) throw new ChatHistoryNotFoundError();
-  if (!response.ok) throw new Error(`History request failed: ${response.status}`);
-  const payload = await response.json() as {
-    messages?: unknown;
-    pendingTurn?: unknown;
-    leadOfferConsumed?: unknown;
-  };
+    const page = parseHistoryPage(payload.messages);
+    if (!before) { pendingTurn = payload.pendingTurn; leadOfferConsumed = payload.leadOfferConsumed === true; }
+    for (const message of page) {
+      if (message.id && messageIds.has(message.id)) throw new Error('History pages contain duplicate messages');
+      if (message.id) messageIds.add(message.id);
+    }
+    pages.unshift(page);
+    if (payload.historyComplete) break;
+    if (typeof payload.nextBefore !== 'string' || !payload.nextBefore || seen.has(payload.nextBefore) ||
+        !page.length || page[0].id !== payload.nextBefore) throw new Error('History cursor is invalid or did not advance');
+    before = payload.nextBefore;
+    seen.add(before);
+  } while (true);
+  const messages = pages.flat();
+  const anchor = messages.at(-1)?.id;
+  if (seen.size && anchor) {
+    const refreshed: typeof messages[] = [];
+    const refreshCursors = new Set<string>();
+    let refreshBefore: string | undefined;
+    let foundAnchor = false;
+    do {
+      const base = sessionMessagesUrl(apiBase, sessionId);
+      const response = await fetcher(refreshBefore ? `${base}?before=${encodeURIComponent(refreshBefore)}` : base, {
+        headers: { Accept: 'application/json', 'x-bakaut-visitor-id': visitorId }
+      });
+      if (response.status === 404) throw new ChatHistoryNotFoundError();
+      if (!response.ok) throw new Error(`History refresh failed: ${response.status}`);
+      const payload = await response.json() as { messages?: unknown; pendingTurn?: unknown; leadOfferConsumed?: unknown;
+        nextBefore?: unknown; historyComplete?: unknown };
+      if (!Array.isArray(payload.messages) || typeof payload.historyComplete !== 'boolean' ||
+          (payload.historyComplete ? payload.nextBefore !== undefined : typeof payload.nextBefore !== 'string')) {
+        throw new Error('History completeness is invalid');
+      }
+      if (!refreshBefore) { pendingTurn = payload.pendingTurn; leadOfferConsumed = payload.leadOfferConsumed === true; }
+      const page = parseHistoryPage(payload.messages);
+      const anchorIndex = page.findIndex(message => message.id === anchor);
+      if (anchorIndex >= 0) {
+        messages[messages.length - 1] = page[anchorIndex];
+        refreshed.unshift(page.slice(anchorIndex + 1));
+        foundAnchor = true;
+        break;
+      }
+      refreshed.unshift(page);
+      if (payload.historyComplete) break;
+      if (typeof payload.nextBefore !== 'string' || !payload.nextBefore || refreshCursors.has(payload.nextBefore) ||
+          !page.length || page[0].id !== payload.nextBefore) throw new Error('History cursor is invalid or did not advance');
+      refreshBefore = payload.nextBefore;
+      refreshCursors.add(refreshBefore);
+    } while (true);
+    if (!foundAnchor) throw new Error('History changed before refresh completed');
+    for (const message of refreshed.flat()) {
+      if (!message.id || messageIds.has(message.id)) throw new Error('History refresh contains duplicate messages');
+      messageIds.add(message.id);
+      messages.push(message);
+    }
+  }
   return {
-    messages: normalizePublicHistoryMessages(payload.messages),
-    pendingTurn: normalizePendingTurn(payload.pendingTurn),
-    ...(payload.leadOfferConsumed === true ? { leadOfferConsumed: true as const } : {})
+    messages,
+    pendingTurn: normalizePendingTurn(pendingTurn),
+    ...(leadOfferConsumed ? { leadOfferConsumed: true as const } : {})
   };
 }
 
@@ -262,7 +344,14 @@ export async function restoreSavedChatSession(
   fetcher: typeof fetch = fetch
 ): Promise<SavedChatRestoration> {
   try {
-    const history = await loadChatHistoryState(apiBase, savedSessionId, visitorId, fetcher);
+    const guardedFetcher: typeof fetch = (...args) => {
+      if (storage && safeStorageGet(storage, 'bakaut_session_id') !== savedSessionId) throw new Error('Session changed during history restoration');
+      return fetcher(...args);
+    };
+    const history = await loadChatHistoryState(apiBase, savedSessionId, visitorId, guardedFetcher);
+    if (storage && safeStorageGet(storage, 'bakaut_session_id') !== savedSessionId) {
+      return { kind: 'superseded', sessionId: safeStorageGet(storage, 'bakaut_session_id') };
+    }
     const latestAssistantMessage = [...history.messages]
       .reverse()
       .find((message) => message.role === 'assistant');
@@ -274,6 +363,9 @@ export async function restoreSavedChatSession(
       pendingTurn: history.pendingTurn
     };
   } catch (error) {
+    if (storage && safeStorageGet(storage, 'bakaut_session_id') !== savedSessionId) {
+      return { kind: 'superseded', sessionId: safeStorageGet(storage, 'bakaut_session_id') };
+    }
     if (error instanceof ChatHistoryNotFoundError) {
       return staleRestorationResult(storage, savedSessionId);
     }

@@ -23,9 +23,9 @@ import {
   registerChatAbortController,
   streamChatMessage
 } from './chatStream';
-import { submitLead } from './leadSubmit';
+import { AvailabilityDecisionPendingError, submitLead } from './leadSubmit';
 import { adminReadinessLabel, adminRuntimeFlags, metadataRecord, shouldShowLeadPanel } from './widgetDiagnostics';
-import type { CardDisplayOptions, ChatResponsePayload, ConversationSession, ConversationSummary, ConversationTurn, Lead, Message, ProductCard } from '../shared/types';
+import type { AvailabilityReceipt, AvailabilityRequest, CardDisplayOptions, ChatResponsePayload, ConversationSession, ConversationSummary, ConversationTurn, Lead, Message, ProductCard } from '../shared/types';
 import './styles.css';
 
 type ChatMessage = {
@@ -37,6 +37,8 @@ type ChatMessage = {
   cards?: ProductCard[];
   cardDisplay?: CardDisplayOptions;
   leadRequested?: boolean;
+  availabilityRequest?: AvailabilityRequest;
+  availabilityReceipt?: AvailabilityReceipt;
   metadata?: ChatResponsePayload['metadata'];
   status?: 'sending' | 'done' | 'stopped' | 'error';
   progress?: string;
@@ -55,6 +57,8 @@ function restoredMessagesForUi(messages: RestoredChatMessage[]): ChatMessage[] {
     cards: message.products,
     cardDisplay: message.cardDisplay,
     leadRequested: message.leadRequested,
+    availabilityRequest: message.availabilityRequest,
+    availabilityReceipt: message.availabilityReceipt,
     status: 'done'
   }));
 }
@@ -67,6 +71,8 @@ type RecoveredStreamAnswer = {
   cards?: ProductCard[];
   cardDisplay?: CardDisplayOptions;
   leadRequested?: boolean;
+  availabilityRequest?: AvailabilityRequest;
+  availabilityReceipt?: AvailabilityReceipt;
 };
 
 /**
@@ -110,7 +116,9 @@ async function recoverCompletedAnswerAfterStreamFailure(input: {
         serverId: completed.id,
         cards: completed.products,
         cardDisplay: completed.cardDisplay,
-        leadRequested: completed.leadRequested
+        leadRequested: completed.leadRequested,
+        availabilityRequest: completed.availabilityRequest,
+        availabilityReceipt: completed.availabilityReceipt
       }
     };
   })().catch((): StreamFailureRecovery => ({ kind: 'none' }));
@@ -691,17 +699,40 @@ function ProductCardGroup({ cards, title }: { cards: ProductCard[]; title: strin
   );
 }
 
-function LeadPanel({ latestQuestion, autoOpenKey, disabled = false, onSessionUnavailable }: {
+function AvailabilityStatus({ receipt }: { receipt?: AvailabilityReceipt }) {
+  if (!receipt) return null;
+  const labels: Record<AvailabilityReceipt['outcome'], string | null> = {
+    offered: null,
+    contact_requested: null,
+    declined: null,
+    queued: 'Заявка сохранена · в очереди для специалиста. Наличие на складе не подтверждено.',
+    already_queued: 'Заявка уже сохранена · повтор не создан. Наличие на складе не подтверждено.',
+    failed: 'Заявка не сохранена · можно повторить отправку.',
+    consent_required: 'Заявка не создана · нужны контакт и согласие на связь.',
+    cancellation_not_confirmed: 'Заявка сохранена ранее · отмена не подтверждена.'
+  };
+  const label = labels[receipt.outcome];
+  if (!label) return null;
+  return <p className={`form-note ${receipt.outcome === 'failed' ? 'bad' : 'ok'}`}
+    role="status" data-availability-outcome={receipt.outcome}>{label}</p>;
+}
+
+function LeadPanel({ latestQuestion, autoOpenKey, availabilityRequest, onQueued, disabled = false, onSessionUnavailable }: {
   latestQuestion: string;
   autoOpenKey: number;
+  availabilityRequest?: AvailabilityRequest;
+  onQueued?: (receipt: AvailabilityReceipt) => void;
   disabled?: boolean;
   onSessionUnavailable: () => void;
 }) {
-  const [form, setForm] = useState<LeadForm>({ name: '', phone: '', email: '', question: latestQuestion });
+  const [form, setForm] = useState<LeadForm>({ name: '', phone: '', email: '', question: latestQuestion,
+    preferredContact: availabilityRequest?.preferredContact });
   const [status, setStatus] = useState<'idle' | 'sending' | 'sent' | 'error'>('idle');
+  const [submitErrorMessage, setSubmitErrorMessage] = useState('Не удалось отправить. Попробуйте еще раз.');
   const [expanded, setExpanded] = useState(false);
   const lastAutoQuestionRef = useRef(latestQuestion);
   const clientLeadIdRef = useRef<string | null>(null);
+  const submittingRef = useRef(false);
 
   useEffect(() => {
     setForm((current) => {
@@ -712,43 +743,54 @@ function LeadPanel({ latestQuestion, autoOpenKey, disabled = false, onSessionUna
   }, [latestQuestion]);
 
   useEffect(() => {
-    if (autoOpenKey > 0) setExpanded(true);
-  }, [autoOpenKey]);
+    if (availabilityRequest) setExpanded(['contact_requested', 'failed'].includes(availabilityRequest.state));
+    else if (autoOpenKey > 0) setExpanded(true);
+  }, [autoOpenKey, availabilityRequest?.id, availabilityRequest?.state]);
+
+  useEffect(() => {
+    const preferredContact = availabilityRequest?.preferredContact;
+    if (preferredContact) setForm(current => ({ ...current, preferredContact }));
+  }, [availabilityRequest?.preferredContact]);
 
   async function submit(event: FormEvent) {
     event.preventDefault();
-    if (disabled) return;
+    if (disabled || submittingRef.current || availabilityRequest?.state === 'queued') return;
+    submittingRef.current = true;
     setStatus('sending');
-    const clientLeadId = clientLeadIdRef.current ?? crypto.randomUUID();
+    const clientLeadId = availabilityRequest?.id ?? clientLeadIdRef.current ?? crypto.randomUUID();
     clientLeadIdRef.current = clientLeadId;
     try {
       const activeSessionId = await createSession(true);
       if (!activeSessionId) throw new Error('Не удалось создать сессию чата');
       const visitorId = safeStorageGet(safeBrowserStorage('localStorage'), 'bakaut_visitor_id');
       if (!visitorId) throw new Error('Не удалось подтвердить сессию чата');
-      await submitLead(apiBase, {
+      const submission = await submitLead(apiBase, {
         sessionId: activeSessionId,
         clientLeadId,
+        ...(availabilityRequest ? { availabilityRequestId: availabilityRequest.id } : {}),
         name: form.name,
         preferredContact: form.preferredContact || undefined,
         phone: form.phone || undefined,
         email: form.email || undefined,
-        question: form.question || latestQuestion || undefined
+        question: availabilityRequest?.question || form.question || latestQuestion || undefined
       }, { visitorId });
       clientLeadIdRef.current = null;
       setStatus('sent');
+      if (submission.availabilityReceipt) onQueued?.(submission.availabilityReceipt);
       setForm({ name: '', phone: '', email: '', question: '' });
     } catch (submitError) {
       if (submitError instanceof ChatMessageNotAcceptedError && submitError.statusCode === 404) onSessionUnavailable();
+      setSubmitErrorMessage(submitError instanceof AvailabilityDecisionPendingError
+        ? submitError.message : 'Не удалось отправить. Попробуйте еще раз.');
       setStatus('error');
-    }
+    } finally { submittingRef.current = false; }
   }
 
   return (
     <form className={`lead-panel ${expanded ? 'expanded' : 'collapsed'}`} onSubmit={submit}>
       <div className="lead-head">
         <div className="lead-title-row">
-          <h2>Передать специалисту</h2>
+          <h2>{availabilityRequest ? 'Уточнить наличие' : 'Передать специалисту'}</h2>
           {expanded ? (
             <button className="lead-collapse" type="button" aria-label="Свернуть форму заявки" onClick={() => setExpanded(false)}>
               Свернуть
@@ -757,7 +799,9 @@ function LeadPanel({ latestQuestion, autoOpenKey, disabled = false, onSessionUna
         </div>
         <p>Оставьте контакт, если нужно уточнить наличие, доставку или условия заказа.</p>
       </div>
-      {expanded ? (
+      {availabilityRequest?.state === 'queued' ? (
+        <p className="form-note ok">Заявка сохранена и поставлена в очередь для специалиста. Склад ещё не проверен.</p>
+      ) : expanded ? (
         <>
           <input
             aria-label="Имя"
@@ -781,7 +825,8 @@ function LeadPanel({ latestQuestion, autoOpenKey, disabled = false, onSessionUna
           <textarea
             aria-label="Вопрос"
             placeholder="Что уточнить"
-            value={form.question}
+            value={availabilityRequest?.question ?? form.question}
+            readOnly={Boolean(availabilityRequest)}
             onChange={(event) => setForm({ ...form, question: event.target.value })}
           />
           <select aria-label="Способ связи" value={form.preferredContact ?? ''}
@@ -799,8 +844,8 @@ function LeadPanel({ latestQuestion, autoOpenKey, disabled = false, onSessionUna
           Оставить контакт
         </button>
       )}
-      {status === 'sent' ? <p className="form-note ok">Заявка сохранена. Специалист свяжется с вами.</p> : null}
-      {status === 'error' ? <p className="form-note bad">Не удалось отправить. Попробуйте еще раз.</p> : null}
+      {!availabilityRequest && status === 'sent' ? <p className="form-note ok">Заявка сохранена и поставлена в очередь для специалиста.</p> : null}
+      {status === 'error' ? <p className="form-note bad">{submitErrorMessage}</p> : null}
     </form>
   );
 }
@@ -1217,6 +1262,7 @@ function App() {
   const restoringChat = chatHydrationState === 'restoring';
   const chatInteractionDisabled = sessionUnavailable || chatHydrationState !== 'ready';
   const latestQuestion = useMemo(() => [...messages].reverse().find((message) => message.role === 'user')?.content ?? '', [messages]);
+  const latestAssistant = useMemo(() => [...messages].reverse().find(message => message.role === 'assistant' && message.status === 'done'), [messages]);
   const isStart = messages.length <= 1;
   const quickPrompts = [
     'Подберите генератор для дачи',
@@ -1311,6 +1357,8 @@ function App() {
                   cards: payload.productCards,
                   cardDisplay: payload.cardDisplay ?? payload.metadata?.cardDisplay,
                   leadRequested: payload.leadRequested,
+                  availabilityRequest: payload.availabilityRequest,
+                  availabilityReceipt: payload.availabilityReceipt,
                   metadata: payload.metadata,
                   progress: undefined,
                   status: 'done'
@@ -1534,6 +1582,8 @@ function App() {
                cards: payload?.productCards?.length ? payload.productCards : message.cards,
                cardDisplay: payload?.cardDisplay ?? payload?.metadata?.cardDisplay ?? message.cardDisplay,
                leadRequested: payload?.leadRequested,
+               availabilityRequest: payload?.availabilityRequest,
+               availabilityReceipt: payload?.availabilityReceipt,
                metadata: payload?.metadata ?? message.metadata,
                progress: undefined,
                status: committedAnswer || message.content ? 'done' : 'error'
@@ -1597,6 +1647,8 @@ function App() {
                   cards: answer.cards ?? message.cards,
                   cardDisplay: answer.cardDisplay ?? message.cardDisplay,
                   leadRequested: answer.leadRequested,
+                  availabilityRequest: answer.availabilityRequest,
+                  availabilityReceipt: answer.availabilityReceipt,
                   progress: undefined,
                   status: 'done'
                 }
@@ -1651,6 +1703,8 @@ function App() {
                       cards: payload.productCards?.length ? payload.productCards : message.cards,
                       cardDisplay: payload.cardDisplay ?? payload.metadata?.cardDisplay ?? message.cardDisplay,
                       leadRequested: payload.leadRequested,
+                      availabilityRequest: payload.availabilityRequest,
+                      availabilityReceipt: payload.availabilityReceipt,
                       metadata: payload.metadata ?? message.metadata,
                       progress: undefined,
                       status: 'done'
@@ -1761,7 +1815,7 @@ function App() {
               <div className={`message ${message.role}`} key={message.id}>
                 <div className="message-meta">{message.role === 'user' ? 'Вы' : 'Консультант'}</div>
                 <div>{renderMarkdownText(message.content)}</div>
-                {message.cards ? <ProductCards cards={message.cards} /> : null}
+                {message.cards ? <ProductCards cards={message.cards} showUncertain /> : null}
               </div>
             ))}
           </details>
@@ -1780,6 +1834,7 @@ function App() {
                 </span>
               ) : null)}
             </div>
+            {message.role === 'assistant' ? <AvailabilityStatus receipt={message.availabilityReceipt} /> : null}
             {message.role === 'user' ? (
               <div className="message-actions">
                 <button type="button" onClick={() => editMessage(message.content)} disabled={busy || chatInteractionDisabled}>
@@ -1810,7 +1865,7 @@ function App() {
                 ) : null}
               </div>
             ) : null}
-            {message.cards?.length ? <ProductCards cards={message.cards} /> : null}
+            {message.cards?.length ? <ProductCards cards={message.cards} showUncertain /> : null}
           </div>
         ))}
         <div ref={endRef} />
@@ -1861,6 +1916,11 @@ function App() {
 
       {shouldShowLeadPanel(messages) ? (
         <LeadPanel
+          key={latestAssistant?.availabilityRequest?.id ?? sessionId ?? 'lead'}
+          availabilityRequest={latestAssistant?.availabilityRequest}
+          onQueued={receipt => setMessages(current => current.map(message => message.availabilityRequest?.id === receipt.requestId
+            ? { ...message, leadRequested: false, availabilityRequest: { ...message.availabilityRequest, state: 'queued' },
+              availabilityReceipt: receipt } : message))}
           latestQuestion={latestQuestion}
           autoOpenKey={leadAutoOpenKey}
           disabled={chatInteractionDisabled}

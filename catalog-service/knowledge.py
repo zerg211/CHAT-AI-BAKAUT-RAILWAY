@@ -1,5 +1,7 @@
 """Read-only retrieval handlers for the saved BAKAUT agent. No user interface."""
-import base64,hashlib,json,math,os,re,sqlite3,time,unicodedata
+import base64,hashlib,json,math,os,re,sqlite3,time,unicodedata,threading,sys
+from reviewed_field_aliases import resolve_reviewed_field
+from collections import OrderedDict, namedtuple
 from pathlib import Path
 
 ROOT=Path(__file__).resolve().parent
@@ -7,6 +9,99 @@ DB=Path(os.environ.get('BAKAUT_DB_PATH', str(ROOT/'knowledge.sqlite')))
 SUMMARY_COLUMNS='id,sku,title,category,url,price,powers,source,sha'
 REMOTE_EVIDENCE_RE=re.compile(r'дистанционн.{0,30}(?:управ|пульт)|(?:управ|пульт).{0,30}дистанционн|(?:\bик\b|инфракрасн).{0,30}(?:управ|пульт)|(?:управ|пульт).{0,30}(?:\bик\b|инфракрасн)|радиоуправ|радио[- ]?пульт|remote\s*control|(?:bluetooth.{0,20}(?:пульт|управ|радио)|(?:пульт|управ|радио).{0,20}bluetooth)|пульт.{0,15}\bду\b|\bду\b.{0,15}пульт',re.I)
 def norm(s):return unicodedata.normalize('NFKC',str(s)).casefold().replace('ё','е').strip()
+
+def _positive_number(text):
+    try:
+        value=float(text.strip().replace(',','.'))
+        return value if math.isfinite(value) and value>0 else None
+    except (TypeError,ValueError):return None
+
+def _explicit_power_pair(text):
+    parts=text.split('/')
+    if len(parts)!=2:return None
+    left=parts[0].strip();right=parts[1].strip()
+    if not left.endswith('квт') or not right.endswith(('ква','kva')):return None
+    kw=_positive_number(left[:-3]);kva=_positive_number(right[:-3])
+    return kw if kw is not None and kva is not None else None
+
+def normalized_powers(raw):
+    facts=json.loads(raw);result=[]
+    for fact in facts:
+        item=dict(fact)
+        if item.get('kw') is None and isinstance(item.get('raw'),str):
+            text=norm(item['raw']).replace('\u00a0',' ').strip()
+            if text.endswith('(prp)'):text=text[:-5].strip()
+            pieces=text.split(';')
+            value=None
+            if len(pieces)==1:
+                value=_explicit_power_pair(pieces[0])
+                if value is None and norm(item.get('field','')).endswith('квт') and text.endswith(')') and '(' in text:
+                    first,second=text[:-1].split('(',1)
+                    second=second.strip()
+                    if second.endswith(('ква','kva')) and _positive_number(second[:-3]) is not None:
+                        value=_positive_number(first)
+            elif len(pieces)==2 and pieces[1].strip().startswith('резерв '):
+                reserve=_explicit_power_pair(pieces[1].strip()[len('резерв '):])
+                if reserve is not None:value=_explicit_power_pair(pieces[0])
+            if value is not None:item.update(kw=value,derived_from='explicit_nominal_power_pair')
+        result.append(item)
+    return result
+
+_card_cache=OrderedDict()
+_card_cache_lock=threading.Lock()
+_card_flights=[threading.Lock() for _ in range(64)]
+_card_cache_max_bytes=4*1024*1024
+_card_cache_bytes=0
+_card_cache_misses=0
+_CardCacheInfo=namedtuple('CardCacheInfo','misses currsize bytes max_bytes')
+
+def _build_full_card(revision,product_id,title,sku,url,category,source,sha,price,raw,format_version):
+    card=json.loads(raw)
+    result={'status':'found','source_revision':revision,'product_id':product_id,'name':title,'sku':sku,
+            'url':url,'category':category,'source_file':source,'source_sha256':sha,'price_rub':price,
+            'price_source':'catalog' if price is not None else 'unknown','stock':'unknown',
+            'brand':card.get('бренд'),'attributes':card.get('характеристики',{}),
+            'description':card.get('описание',''),'documents':card.get('документы',[]),
+            'original_card':card,'completeness':'full'}
+    return json.dumps(result,ensure_ascii=False)
+
+def _serialized_full_card(*key):
+    global _card_cache_bytes,_card_cache_misses
+    with _card_flights[hash(key)%len(_card_flights)]:
+        with _card_cache_lock:
+            cached=_card_cache.get(key)
+            if cached is not None:
+                _card_cache.move_to_end(key)
+                return cached[0]
+            _card_cache_misses+=1
+        value=_build_full_card(*key)
+        size=sys.getsizeof(key)+sum(sys.getsizeof(part) for part in key)+sys.getsizeof(value)+1024
+        if size<=_card_cache_max_bytes:
+            with _card_cache_lock:
+                while _card_cache and _card_cache_bytes+size>_card_cache_max_bytes:
+                    _,(_,evicted_size)=_card_cache.popitem(last=False)
+                    _card_cache_bytes-=evicted_size
+                _card_cache[key]=(value,size)
+                _card_cache_bytes+=size
+        return value
+
+def _clear_card_cache():
+    global _card_cache_bytes,_card_cache_misses
+    with _card_cache_lock:
+        _card_cache.clear();_card_cache_bytes=0;_card_cache_misses=0
+
+def _card_cache_info():
+    with _card_cache_lock:return _CardCacheInfo(_card_cache_misses,len(_card_cache),_card_cache_bytes,_card_cache_max_bytes)
+
+_serialized_full_card.cache_clear=_clear_card_cache
+_serialized_full_card.cache_info=_card_cache_info
+
+def full_card(revision,row):
+    # Only immutable catalog facts are shared; callers get independent objects.
+    serialized=_serialized_full_card(revision,row['id'],row['title'],row['sku'],row['url'],row['category'],
+        row['source'],row['sha'],row['price'],row['raw'],1)
+    return json.loads(serialized)
+
 class Knowledge:
     def __init__(self,retrieval_backend='fts'):
         if retrieval_backend!='fts':raise ValueError('Unsupported retrieval backend')
@@ -28,7 +123,7 @@ class Knowledge:
             if len(snippets)>=2:break
         return {'attributes':facts,'description_excerpts':snippets}
     def compact(self,r,notes=None,evidence=None):
-        result={'product_id':r['id'],'name':r['title'],'sku':r['sku'],'category':r['category'],'price_rub':r['price'],'url':r['url'],'nominal_electrical_power':json.loads(r['powers']),'conditions':notes or []}
+        result={'product_id':r['id'],'name':r['title'],'sku':r['sku'],'category':r['category'],'price_rub':r['price'],'url':r['url'],'nominal_electrical_power':normalized_powers(r['powers']),'conditions':notes or []}
         if evidence is not None:result['source_evidence']=evidence
         return result
     def exact(self,identifier):
@@ -63,14 +158,22 @@ class Knowledge:
                          if contains_model(r['title'])]
         if len(matches)!=1:return {'status':'ambiguous' if matches else 'not_found','source_revision':self.revision,
                                    'candidates':[self.compact(r) for r in matches]}
-        r=matches[0];d=json.loads(r['raw'])
-        # Full original attributes are returned for the exact product. Images never inflate model context.
-        result={'status':'found','source_revision':self.revision,'product_id':r['id'],'name':r['title'],'sku':r['sku'],'url':r['url'],'category':r['category'],'source_file':r['source'],'source_sha256':r['sha'],'price_rub':r['price'],'price_source':'catalog' if r['price'] is not None else 'unknown','stock':'unknown'}
+        r=matches[0];full=full_card(self.revision,r);d=full['original_card']
+        result={key:full[key] for key in ('status','source_revision','product_id','name','sku','url','category',
+            'source_file','source_sha256','price_rub','price_source','stock')}
         if fields:
-            aliases={**result,'nominal_electrical_power':json.loads(r['powers']),'conditions':[],'attributes':d.get('характеристики',{}),'description':d.get('описание',''),'documents':d.get('документы',[]),'brand':d.get('бренд')}
-            result['fields']={k:aliases.get(k,d.get(k,(d.get('характеристики') or {}).get(k))) for k in fields}
+            aliases={**result,'nominal_electrical_power':normalized_powers(r['powers']),'conditions':[],'attributes':d.get('характеристики',{}),'description':d.get('описание',''),'documents':d.get('документы',[]),'brand':d.get('бренд')}
+            attributes=d.get('характеристики') or {}
+            values={};statuses={}
+            for key in fields:
+                source=aliases if key in aliases else d if key in d else attributes if key in attributes else None
+                value=source[key] if source is not None else resolve_reviewed_field(r['id'],r['sha'],d,key)
+                values[key]=value
+                statuses[key]='unknown_field' if source is None and value is None else 'missing_value' if value is None or value=='' else 'found'
+            result.update(fields=values,field_status=statuses,completeness='projection')
+            if 'unknown_field' in statuses.values():result['full_product']=full
         else:
-            result.update(brand=d.get('бренд'),attributes=d.get('характеристики',{}),description=d.get('описание',''),documents=d.get('документы',[]))
+            result=full
         return result
     def mentioned_products(self,message):
         """Return every card whose exact SKU or model token occurs in the message."""
@@ -99,7 +202,7 @@ class Knowledge:
                 'count':len(found),'items':found}
     def classify(self,r,lo,hi,budget):
         if budget is not None and r['price'] is not None and r['price']>budget:return 'excluded',[]
-        facts=json.loads(r['powers']);known=[f for f in facts if f['kw'] is not None and f['mode']!='per_phase']
+        facts=normalized_powers(r['powers']);known=[f for f in facts if f['kw'] is not None and f['mode']!='per_phase']
         if lo is not None or hi is not None:
             if not known:return 'unknown',['номинальная электрическая мощность не определена']
             inside=lambda f:(lo is None or f['kw']>=lo) and (hi is None or f['kw']<=hi)
@@ -155,12 +258,9 @@ class Knowledge:
                     if status=='excluded':excluded+=1
                     else:groups[status].append(self.compact(r,notes))
                 complete=True;universe=len(allrows)
-            elif category and re.search(r'дистанц|пульт|радиоуправ|инфракрас|bluetooth|remote',norm(query)):
-                # Feature questions scan every card in the chosen category for explicit source evidence.
-                for r in allrows:
-                    ev=self.source_evidence(r,query)
-                    if ev and (ev['attributes'] or ev['description_excerpts']):groups['matches'].append(self.compact(r,evidence=ev))
-                complete=False;universe=len(allrows);source_scan_complete=True;candidate_basis='full_category_keyword_scan'
+            elif category and query.strip():
+                groups['matches']=[self.compact(r) for r in allrows]
+                complete=True;universe=len(allrows);candidate_basis='full_category_unfiltered'
             else:
                 exact=self.exact(query) if query.strip() else []
                 # Keep the exact-match evidence separate from ranked results.
@@ -191,7 +291,7 @@ class Knowledge:
         applied={key:value for key,value in criteria.items() if key!='query' and value is not None}
         unsupported=[]
         if criteria['query'].strip():
-            if any(criteria[key] is not None for key in ('min_nominal_kw','max_nominal_kw','max_price_rub')):
+            if criteria['category'] or any(criteria[key] is not None for key in ('min_nominal_kw','max_nominal_kw','max_price_rub')):
                 unsupported.append('query')
             else:
                 applied['query']=criteria['query']

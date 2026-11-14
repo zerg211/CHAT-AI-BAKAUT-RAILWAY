@@ -1,0 +1,100 @@
+{
+  "source": "independent-live-eval-readable-results.json",
+  "source_sha256": "6a23ee2cc562f9665a69430ec5d90613804bb571a07c6f545521ecd551549cdd",
+  "scope": "isolated live no-tools; synthetic history and saved-agent instructions; NOT production acceptance",
+  "cases": [
+    {
+      "case_id": "dpu6555_narrow_trench",
+      "answer": {
+        "answer": "Между показанными модификациями главное отличие — в защитной раме и весе:\n\n- **DPU 6555 H**, артикул 5100009651: 487 кг; обычная рама.\n- **DPU 6555 Hs**, артикул 5100015773: 481 кг; узкая защитная рама для стеснённых условий.\n\nУ обеих дизельный двигатель Hatz, плита 900 × 550 мм, мощность 9,6 кВт и центробежная сила 65 кН. В карточках указана ширина по раме 710 мм; для вариантов с расширительными пластинами — 860 мм.\n\n**Для траншеи шириной 700 мм ни одну из этих двух модификаций нельзя уверенно рекомендовать:** плита шириной 550 мм поместится, но указанная ширина по раме 710 мм превышает ширину траншеи на 10 мм. У Hs рама узкая, однако в карточке нет отдельного значения, подтверждающего, что её фактическая ширина меньше 700 мм. Перед выбором стоит сверить габарит конкретной машины по раме с требуемым рабочим зазором.",
+        "answer_contract": "consultation_receipt_v1",
+        "answer_review": {
+          "rationale": "Завершённое сравнение двух ранее показанных модификаций с перечислением ключевых различий и оценкой ограничения по ширине траншеи. Не утверждает совместимость без подтверждённых габаритов.",
+          "verdict": "complete"
+        },
+        "availability": {
+          "action": "none",
+          "consentGranted": false,
+          "consentQuote": null,
+          "continueRequest": false,
+          "preferredContact": null,
+          "productIds": [],
+          "requestSummary": ""
+        },
+        "rejected": [],
+        "selected": [
+          "9e55eb4cb7233377fc66173c",
+          "c63797df792e8f63d601d99b"
+        ],
+        "selection_snapshots": [],
+        "uncertain": [],
+        "web_search_intent": null
+      }
+    },
+    {
+      "case_id": "lossless_raw_fields",
+      "answer": {
+        "answer": "В переданных данных есть ссылка на руководство по эксплуатации, но его содержание не приведено, поэтому условие работы из руководства определить нельзя. В необычном поле `synthetic_extra → вложенное_поле → условие` указано: «контроль сохранения».",
+        "answer_contract": "consultation_receipt_v1",
+        "answer_review": {
+          "rationale": "Названо значение необычного поля, но извлечь условие работы из руководства невозможно: передана только ссылка, а текст руководства недоступен.",
+          "verdict": "uncertain"
+        },
+        "availability": {
+          "action": "none",
+          "consentGranted": false,
+          "consentQuote": null,
+          "continueRequest": false,
+          "preferredContact": null,
+          "productIds": [],
+          "requestSummary": ""
+        },
+        "rejected": [],
+        "selected": [],
+        "selection_snapshots": [],
+        "uncertain": [],
+        "web_search_intent": null
+      }
+    },
+    {
+      "case_id": "multi_category",
+      "answer": {
+        "answer": "Могу рассмотреть оба варианта — бензиновые и дизельные генераторы. Но по предоставленным данным есть только названия категорий, без характеристик конкретных моделей, поэтому подтвердить подходящие товары пока нельзя. Чтобы подобрать генератор, уточните желаемую мощность и где планируете его использовать; ограничение по цене учитывать не буду.",
+        "answer_contract": "consultation_receipt_v1",
+        "answer_review": {
+          "rationale": "Это полезный предварительный ответ, но подбор не завершён: доступных характеристик моделей недостаточно, чтобы подтвердить их пригодность.",
+          "verdict": "intermediate"
+        },
+        "availability": null,
+        "rejected": [],
+        "selected": [],
+        "selection_snapshots": [],
+        "uncertain": [
+          "petrol",
+          "diesel"
+        ],
+        "web_search_intent": null
+      }
+    },
+    {
+      "case_id": "unknown_capability",
+      "answer": {
+        "answer": "По предоставленным данным подтвердить совместимость нельзя: не указано, что именно представляет собой оборудование и какое условие нужно проверить. Отсутствие характеристики в карточке само по себе не означает несовместимость. Пришлите название или артикул оборудования и конкретное условие — помогу оценить.",
+        "answer_contract": "consultation_receipt_v1",
+        "answer_review": {
+          "rationale": "Полезный предварительный ответ: объясняет, почему совместимость не подтверждена, и запрашивает недостающие сведения. Окончательно оценить оборудование невозможно.",
+          "verdict": "uncertain"
+        },
+        "availability": null,
+        "rejected": [],
+        "selected": [],
+        "selection_snapshots": [],
+        "uncertain": [
+          "unknown",
+          "known"
+        ],
+        "web_search_intent": null
+      }
+    }
+  ]
+}

@@ -219,11 +219,32 @@ describe('runtime harness contracts', () => {
       answer: 'Проверил карточку модели.',
       productCards: [{ id: 'p-1', name: 'Модель', specs: {}, reasons: [], caveats: [] }],
       cardDisplay: { initialVisibleCount: 1 },
-      leadRequested: false
+      leadRequested: false,
+      leadCreated: false
     });
     expect(response).not.toHaveProperty('metadata');
     expect(response).not.toHaveProperty('usedWebSearch');
     expect(response).not.toHaveProperty('needState');
+  });
+
+  it('preserves consultation text and exposes only the matching safe action receipt over SSE', () => {
+    const requestId = '33333333-3333-4333-8333-333333333333';
+    const payload = { answer: 'Модель A легче модели B.', needState: {}, usedWebSearch: false, productCards: [],
+      leadRequested: true, leadCreated: false,
+      availabilityRequest: { id: requestId, state: 'failed', question: 'Наличие модели A', productIds: [], phone: '+79990000000' },
+      availabilityReceipt: { requestId, outcome: 'failed', warehouseChecked: false, email: 'private@example.org' } };
+    const response = buildPublicCustomerResponse(payload as never);
+    expect(response.answer).toBe(payload.answer);
+    expect(response.availabilityReceipt).toEqual({ requestId, outcome: 'failed', warehouseChecked: false });
+    expect(response.availabilityRequest).toEqual({ id: requestId, state: 'failed', question: 'Наличие модели A', productIds: [] });
+    expect(JSON.stringify(response)).not.toContain('private@example.org');
+    expect(JSON.stringify(response)).not.toContain('79990000000');
+    expect(buildPublicCustomerResponse({ ...payload, availabilityReceipt: { ...payload.availabilityReceipt,
+      requestId: '44444444-4444-4444-8444-444444444444' } } as never)).not.toHaveProperty('availabilityReceipt');
+    expect(buildPublicCustomerResponse({ ...payload, availabilityReceipt: { ...payload.availabilityReceipt,
+      warehouseChecked: true } } as never)).not.toHaveProperty('availabilityReceipt');
+    expect(buildPublicCustomerResponse({ ...payload, availabilityReceipt: { ...payload.availabilityReceipt,
+      outcome: 'queued' } } as never)).not.toHaveProperty('availabilityReceipt');
   });
 
   it('sends verified on-request status with the product in the customer stream', () => {
@@ -243,8 +264,6 @@ describe('runtime harness contracts', () => {
     ]));
 
     for (const answerText of [
-      'Внешняя проверка не завершилась из-за тайм-аута.',
-      'The web search completed after a retry in the pipeline.',
       'Поисковый инструмент завершил повторный запрос в пайплайне.',
       'Исследовательский инструмент подтвердил характеристику.'
     ]) {
@@ -262,6 +281,8 @@ describe('runtime harness contracts', () => {
       'I checked the manufacturer manual: the oil grade is SAE 10W-40.',
       'В руководстве производителя указано масло SAE 10W-40, но редакция инструкции для этой модели не подтверждена.',
       'The search completed successfully.',
+      'Внешняя проверка не завершилась из-за тайм-аута.',
+      'The web search completed after a retry in the pipeline.',
       'Two research attempts were required.',
       'I searched online but found nothing.',
       'I checked the manufacturer website but could not complete the check.',

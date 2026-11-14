@@ -941,7 +941,7 @@ export class ConversationRepository {
          AND NOT EXISTS (
            SELECT 1 FROM conversation_turns t WHERE t.session_id = conversation_sessions.id
              AND t.status IN ('received', 'need_extracted', 'planned', 'answering')
-             AND t.deadline_at > now()
+             AND (t.deadline_at IS NULL OR t.deadline_at > now())
          )
        RETURNING id`,
       [maxInactiveMinutes]
@@ -1027,7 +1027,7 @@ export class ConversationRepository {
          WHERE turn.id = $3
            AND turn.execution_owner = $4::uuid
            AND turn.execution_lease_expires_at > now()
-           AND turn.deadline_at > now()
+           AND (turn.deadline_at IS NULL OR turn.deadline_at > now())
            AND turn.status IN ('received', 'need_extracted', 'planned', 'answering')
          FOR UPDATE OF turn
        ), updated_session AS (
@@ -1070,7 +1070,7 @@ export class ConversationRepository {
     content: string;
     metadata?: Record<string, unknown>;
     activeNeedsBefore?: unknown;
-    deadlineAt?: string;
+    deadlineAt?: string | null;
     maxInactiveMinutes?: number;
   }) {
     const maxInactiveMinutes = input.maxInactiveMinutes ?? 30;
@@ -1152,7 +1152,7 @@ export class ConversationRepository {
              'received',
              'user_message_saved',
              $5::jsonb,
-             coalesce($6::timestamptz, now() + interval '105 seconds')
+             CASE WHEN $11::boolean THEN NULL ELSE coalesce($6::timestamptz, now() + interval '105 seconds') END
            FROM expiry_barrier
            JOIN chosen_message ON true
            ON CONFLICT (session_id, client_message_id) DO UPDATE
@@ -1199,7 +1199,8 @@ export class ConversationRepository {
           input.content,
           jsonbParam(input.metadata ?? {}),
           input.visitorCapability,
-          maxInactiveMinutes
+          maxInactiveMinutes,
+          input.deadlineAt === null
         ]
       );
         const row = result.rows[0];
@@ -1273,7 +1274,7 @@ export class ConversationRepository {
          AND turn.id = $2
          AND turn.status IN ('received', 'need_extracted', 'planned', 'answering', 'failed')
          AND coalesce(turn.error_code, '') <> 'cancelled_by_user'
-         AND (turn.deadline_at > now() OR (turn.deadline_at + interval '30 seconds' > now() AND EXISTS (SELECT 1 FROM turn_checkpoints cp WHERE cp.session_id = turn.session_id AND cp.turn_id = turn.id AND cp.checkpoint = 'platform_agent_submission')))
+         AND ((turn.deadline_at IS NULL OR turn.deadline_at > now()) OR (turn.deadline_at + interval '30 seconds' > now() AND EXISTS (SELECT 1 FROM turn_checkpoints cp WHERE cp.session_id = turn.session_id AND cp.turn_id = turn.id AND cp.checkpoint = 'platform_agent_submission')))
          AND (
            turn.status <> 'failed'
            OR NOT EXISTS (
@@ -1348,7 +1349,7 @@ export class ConversationRepository {
          AND turn.id = $2
          AND turn.execution_owner = $3::uuid
          AND turn.execution_lease_expires_at > now()
-         AND (turn.deadline_at > now() OR (turn.deadline_at + interval '30 seconds' > now() AND EXISTS (SELECT 1 FROM turn_checkpoints cp WHERE cp.session_id = turn.session_id AND cp.turn_id = turn.id AND cp.checkpoint = 'platform_agent_submission')))
+         AND ((turn.deadline_at IS NULL OR turn.deadline_at > now()) OR (turn.deadline_at + interval '30 seconds' > now() AND EXISTS (SELECT 1 FROM turn_checkpoints cp WHERE cp.session_id = turn.session_id AND cp.turn_id = turn.id AND cp.checkpoint = 'platform_agent_submission')))
          AND turn.status IN ('received', 'need_extracted', 'planned', 'answering')
        RETURNING turn.*`,
       [input.sessionId, input.turnId, input.ownerId, leaseMs]
@@ -1427,7 +1428,7 @@ export class ConversationRepository {
                  WHERE answer_contracts.session_id = latest_turn.session_id
                    AND answer_contracts.turn_id = latest_turn.id
                    AND answer_contracts.status = 'final'
-                   AND latest_turn.deadline_at > now()
+                   AND (latest_turn.deadline_at IS NULL OR latest_turn.deadline_at > now())
               ) AS result_ready
        FROM latest_turn
        WHERE latest_turn.user_message_id IS NOT NULL
@@ -1441,7 +1442,7 @@ export class ConversationRepository {
     };
   }
 
-  async getHistorySnapshot(sessionId: string, limit = 80) {
+  async getHistorySnapshot(sessionId: string, limit = 80, before: string | null = null) {
     const result = await this.db.query(
       `WITH expired_turns AS (
          UPDATE conversation_turns
@@ -1478,21 +1479,24 @@ export class ConversationRepository {
                   WHERE answer_contracts.session_id = latest_turn.session_id
                     AND answer_contracts.turn_id = latest_turn.id
                     AND answer_contracts.status = 'final'
-                    AND latest_turn.deadline_at > now()
+                    AND (latest_turn.deadline_at IS NULL OR latest_turn.deadline_at > now())
                 ) AS result_ready
          FROM latest_turn
          WHERE latest_turn.user_message_id IS NOT NULL
            AND latest_turn.assistant_message_id IS NULL
+       ), history_cursor AS (
+         SELECT id, created_at FROM messages WHERE session_id=$1 AND id=$3::uuid AND role IN ('user','assistant')
        ), recent_messages AS (
          SELECT *
          FROM (
            SELECT *
            FROM messages
-           WHERE session_id = $1
-           ORDER BY created_at DESC
+           WHERE session_id = $1 AND role IN ('user','assistant')
+             AND ($3::uuid IS NULL OR (created_at,id) < (SELECT created_at,id FROM history_cursor))
+           ORDER BY created_at DESC, id DESC
            LIMIT $2
          ) AS recent
-         ORDER BY created_at ASC
+         ORDER BY created_at ASC, id ASC
        ), latest_lead_offer AS (
          SELECT message.created_at
          FROM messages AS message
@@ -1504,10 +1508,11 @@ export class ConversationRepository {
        )
        SELECT
          coalesce(
-           (SELECT jsonb_agg(to_jsonb(recent_messages) ORDER BY created_at) FROM recent_messages),
+           (SELECT jsonb_agg(to_jsonb(recent_messages) ORDER BY created_at,id) FROM recent_messages),
            '[]'::jsonb
          ) AS messages,
          (SELECT to_jsonb(pending_turn) FROM pending_turn) AS pending_turn,
+         ($3::uuid IS NULL OR EXISTS (SELECT 1 FROM history_cursor)) AS cursor_valid,
          EXISTS (
            SELECT 1
            FROM latest_lead_offer AS offer
@@ -1515,7 +1520,7 @@ export class ConversationRepository {
              ON lead.session_id = $1
             AND lead.created_at >= offer.created_at
          ) AS lead_offer_consumed`,
-      [sessionId, limit]
+      [sessionId, limit, before]
     );
     const row = result.rows[0] ?? {};
     const messageValues: unknown[] = Array.isArray(row.messages) ? row.messages : [];
@@ -1528,6 +1533,7 @@ export class ConversationRepository {
     const pendingRow = queryRowFromJson(row.pending_turn);
     return {
       messages,
+      cursorValid: before === null || row.cursor_valid === true,
       leadOfferConsumed: row.lead_offer_consumed === true,
       pendingTurn: pendingRow
         ? {
@@ -1583,7 +1589,7 @@ export class ConversationRepository {
            OR (
              turn.execution_owner = $12::uuid
              AND turn.execution_lease_expires_at > now()
-             AND turn.deadline_at > now()
+             AND (turn.deadline_at IS NULL OR turn.deadline_at > now())
              AND turn.status IN ('received', 'need_extracted', 'planned', 'answering')
            )
          )
@@ -1637,7 +1643,7 @@ export class ConversationRepository {
          WHERE turn.id = $2
            AND turn.execution_owner = $10::uuid
            AND turn.execution_lease_expires_at > now()
-           AND turn.deadline_at > now()
+           AND (turn.deadline_at IS NULL OR turn.deadline_at > now())
            AND turn.status IN ('received', 'need_extracted', 'planned', 'answering')
          FOR UPDATE OF turn
        ), persisted_event AS (
@@ -1726,7 +1732,7 @@ export class ConversationRepository {
          WHERE turn.id = $6
            AND turn.execution_owner = $7::uuid
            AND turn.execution_lease_expires_at > now()
-           AND turn.deadline_at > now()
+           AND (turn.deadline_at IS NULL OR turn.deadline_at > now())
            AND turn.status IN ('received', 'need_extracted', 'planned', 'answering')
          FOR UPDATE OF turn
        ), persisted_snapshot AS (
@@ -1782,7 +1788,7 @@ export class ConversationRepository {
     turnId: string;
     executionOwner: string;
     checkpoint: string;
-    status: string;
+    status: 'pending' | 'running' | 'succeeded' | 'failed' | 'skipped';
     artifactRef?: string | null;
     payload?: unknown;
     errorCode?: string | null;
@@ -1802,7 +1808,7 @@ export class ConversationRepository {
          WHERE turn.id = $2
            AND turn.execution_owner = $9::uuid
            AND turn.execution_lease_expires_at > now()
-           AND turn.deadline_at > now()
+           AND (turn.deadline_at IS NULL OR turn.deadline_at > now())
            AND turn.status IN ('received', 'need_extracted', 'planned', 'answering')
          FOR UPDATE OF turn
        ), persisted_checkpoint AS (
@@ -1871,7 +1877,7 @@ export class ConversationRepository {
          WHERE turn.id = $2
            AND turn.execution_owner = $9::uuid
            AND turn.execution_lease_expires_at > now()
-           AND turn.deadline_at > now()
+           AND (turn.deadline_at IS NULL OR turn.deadline_at > now())
            AND turn.status IN ('received', 'need_extracted', 'planned', 'answering')
          FOR UPDATE OF turn
        ), persisted_artifact AS (
@@ -1938,7 +1944,7 @@ export class ConversationRepository {
          WHERE turn.id = $2
            AND turn.execution_owner = $8::uuid
            AND turn.execution_lease_expires_at > now()
-           AND turn.deadline_at > now()
+           AND (turn.deadline_at IS NULL OR turn.deadline_at > now())
            AND turn.status IN ('received', 'need_extracted', 'planned', 'answering')
          FOR UPDATE OF turn
        ), persisted_contract AS (
@@ -2008,7 +2014,7 @@ export class ConversationRepository {
          WHERE turn.id = $2
            AND turn.execution_owner = $3::uuid
            AND turn.execution_lease_expires_at > now()
-           AND (turn.deadline_at > now() OR (turn.deadline_at + interval '30 seconds' > now() AND $5::jsonb->>'source' = 'platform_agent' AND EXISTS (SELECT 1 FROM turn_checkpoints cp WHERE cp.session_id = turn.session_id AND cp.turn_id = turn.id AND cp.checkpoint = 'platform_agent_submission')))
+           AND ((turn.deadline_at IS NULL OR turn.deadline_at > now()) OR (turn.deadline_at + interval '30 seconds' > now() AND $5::jsonb->>'source' = 'platform_agent' AND EXISTS (SELECT 1 FROM turn_checkpoints cp WHERE cp.session_id = turn.session_id AND cp.turn_id = turn.id AND cp.checkpoint = 'platform_agent_submission')))
            AND turn.status IN ('received', 'need_extracted', 'planned', 'answering')
            AND turn.assistant_message_id IS NULL
          FOR UPDATE OF turn
@@ -2063,7 +2069,7 @@ export class ConversationRepository {
            AND turn.id = $2
            AND turn.execution_owner = $3::uuid
            AND turn.execution_lease_expires_at > now()
-           AND (turn.deadline_at > now() OR (turn.deadline_at + interval '30 seconds' > now() AND $5::jsonb->>'source' = 'platform_agent' AND EXISTS (SELECT 1 FROM turn_checkpoints cp WHERE cp.session_id = turn.session_id AND cp.turn_id = turn.id AND cp.checkpoint = 'platform_agent_submission')))
+           AND ((turn.deadline_at IS NULL OR turn.deadline_at > now()) OR (turn.deadline_at + interval '30 seconds' > now() AND $5::jsonb->>'source' = 'platform_agent' AND EXISTS (SELECT 1 FROM turn_checkpoints cp WHERE cp.session_id = turn.session_id AND cp.turn_id = turn.id AND cp.checkpoint = 'platform_agent_submission')))
            AND turn.status IN ('received', 'need_extracted', 'planned', 'answering')
          RETURNING turn.*
        ), committed_checkpoint AS (
@@ -2146,7 +2152,7 @@ export class ConversationRepository {
          WHERE turn.id = $2
            AND turn.execution_owner = $3::uuid
            AND turn.execution_lease_expires_at > now()
-           AND turn.deadline_at > now()
+           AND (turn.deadline_at IS NULL OR turn.deadline_at > now())
            AND turn.status IN ('received', 'need_extracted', 'planned', 'answering')
          FOR UPDATE OF turn
        ),
@@ -4514,6 +4520,9 @@ export class LeadRepository {
     phone?: string;
     email?: string;
     question?: string;
+    skipPendingDraft?: boolean;
+    purpose?: 'availability';
+    source?: 'lead_form' | 'platform_chat';
   }) {
     const result = await this.db.query(
       `WITH active_session AS MATERIALIZED (
@@ -4536,6 +4545,7 @@ export class LeadRepository {
          JOIN active_session session ON session.id = draft.session_id
          WHERE draft.status = 'pending'
            AND draft.expires_at > now()
+           AND NOT $9::boolean
          ORDER BY draft.updated_at DESC, draft.created_at DESC
          LIMIT 1
          FOR UPDATE OF draft
@@ -4566,10 +4576,10 @@ export class LeadRepository {
            'lead_email',
            jsonb_strip_nulls(jsonb_build_object(
              'leadId', lead.id,
-             'purpose', draft.purpose,
-             'question', draft.buyer_question,
+             'purpose', coalesce($10::text, draft.purpose),
+             'question', coalesce(draft.buyer_question, lead.question),
              'preferredContact', coalesce($8::text, draft.preferred_contact),
-             'source', 'lead_form'
+             'source', $11::text
            )),
            'pending'
          FROM created_lead lead
@@ -4597,6 +4607,29 @@ export class LeadRepository {
            AND outbox.status IN ('pending', 'sending', 'sent', 'failed')
          RETURNING draft.*
        )
+       , marked_availability_request AS (
+         UPDATE messages message
+         SET metadata = jsonb_set(message.metadata, '{availabilityRequest,state}', '"queued"'::jsonb)
+             || '{"leadRequested":false,"leadCreated":true}'::jsonb
+             || jsonb_build_object('availabilityReceipt',jsonb_build_object(
+               'requestId',$2::text,'outcome','queued','warehouseChecked',false))
+         FROM created_lead lead, queued_outbox outbox
+         WHERE $10::text='availability' AND message.session_id=$1::uuid
+           AND message.metadata->'availabilityRequest'->>'id'=$2::text
+           AND outbox.lead_id=lead.id AND outbox.status IN ('pending','sending','sent','failed')
+         RETURNING message.id
+       ), marked_availability_contract AS (
+         UPDATE answer_contracts contract
+         SET response_payload = jsonb_set(contract.response_payload, '{availabilityRequest,state}', '"queued"'::jsonb)
+             || '{"leadRequested":false,"leadCreated":true}'::jsonb
+             || jsonb_build_object('availabilityReceipt',jsonb_build_object(
+               'requestId',$2::text,'outcome','queued','warehouseChecked',false))
+         FROM created_lead lead, queued_outbox outbox
+         WHERE $10::text='availability' AND contract.session_id=$1::uuid AND contract.status='final'
+           AND contract.response_payload->'availabilityRequest'->>'id'=$2::text
+           AND outbox.lead_id=lead.id AND outbox.status IN ('pending','sending','sent','failed')
+         RETURNING contract.id
+       )
        SELECT
          row_to_json(lead) AS lead_row,
          row_to_json(outbox) AS outbox_row,
@@ -4614,7 +4647,10 @@ export class LeadRepository {
         input.phone ?? null,
         input.email ?? null,
         input.question ?? null,
-        input.preferredContact ?? null
+        input.preferredContact ?? null,
+        input.skipPendingDraft ?? false,
+        input.purpose ?? null,
+        input.source ?? 'lead_form'
       ]
     );
     const row = result.rows[0];
@@ -4629,6 +4665,20 @@ export class LeadRepository {
       draft: draftRow ? mapLeadCaptureDraft(draftRow) : null,
       pendingDraftMatched: row.pending_draft_matched === true
     };
+  }
+
+  async findClientLeadWithOutbox(sessionId: string, clientLeadId: string): ReturnType<LeadRepository['createClientLeadWithOutbox']> {
+    const result = await this.db.query(
+      `SELECT row_to_json(lead) AS lead_row, row_to_json(outbox) AS outbox_row
+       FROM leads lead JOIN lead_outbox outbox ON outbox.lead_id=lead.id AND outbox.destination='lead_email'
+       WHERE lead.session_id=$1::uuid AND lead.client_lead_id=$2::uuid LIMIT 1`,
+      [sessionId, clientLeadId]
+    );
+    const row = result.rows[0];
+    if (!row) return null;
+    const leadRow = queryRowFromJson(row.lead_row); const outboxRow = queryRowFromJson(row.outbox_row);
+    if (!leadRow || !outboxRow) return null;
+    return { lead: mapLead(leadRow), outbox: mapLeadOutboxItem(outboxRow), draft: null, pendingDraftMatched: false };
   }
 
   async createLead(input: {

@@ -1,8 +1,6 @@
-import type { CardDisplayOptions, ProductCard } from './types.js';
+import type { AvailabilityReceipt, AvailabilityRequest, CardDisplayOptions, ProductCard } from './types.js';
 
-export const PUBLIC_HISTORY_MAX_CARDS = 4324;
 export const PUBLIC_HISTORY_MAX_RESPONSE_BYTES = 8_000_000;
-const MAX_MESSAGE_CONTENT = 100_000;
 const MAX_CARD_ID = 200;
 const MAX_CARD_NAME = 500;
 const MAX_CARD_LABEL = 200;
@@ -22,7 +20,43 @@ export interface PublicChatHistoryMessage {
   products?: ProductCard[];
   cardDisplay?: CardDisplayOptions;
   leadRequested?: boolean;
+  leadCreated?: boolean;
+  availabilityRequest?: AvailabilityRequest;
+  availabilityReceipt?: AvailabilityReceipt;
   createdAt?: string;
+}
+
+export function normalizeAvailabilityRequest(value: unknown): AvailabilityRequest | undefined {
+  const source = value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null;
+  if (!source || typeof source.id !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(source.id) ||
+      !['offered', 'contact_requested', 'queued', 'declined', 'failed'].includes(String(source.state)) ||
+      typeof source.question !== 'string' || !source.question.trim() || source.question.length > 3000 ||
+      !Array.isArray(source.productIds) ||
+      source.productIds.some(id => typeof id !== 'string' || !/^[0-9a-f]{24}$/.test(id)) ||
+      new Set(source.productIds).size !== source.productIds.length) return undefined;
+  return { id: source.id, state: source.state as AvailabilityRequest['state'], question: source.question,
+    productIds: source.productIds as string[],
+    ...(source.preferredContact === 'call' || source.preferredContact === 'message' ? { preferredContact: source.preferredContact } : {}) };
+}
+
+export function normalizeAvailabilityReceipt(value: unknown): AvailabilityReceipt | undefined {
+  const source = value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null;
+  if (!source || typeof source.requestId !== 'string' ||
+      !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(source.requestId) ||
+      !['offered', 'contact_requested', 'consent_required', 'declined', 'queued', 'already_queued', 'failed',
+        'cancellation_not_confirmed'].includes(String(source.outcome)) || source.warehouseChecked !== false) return undefined;
+  return { requestId: source.requestId, outcome: source.outcome as AvailabilityReceipt['outcome'], warehouseChecked: false };
+}
+
+export function availabilityReceiptMatchesRequest(receipt: AvailabilityReceipt, request?: AvailabilityRequest) {
+  if (!request || receipt.requestId !== request.id) return false;
+  switch (request.state) {
+    case 'offered': return receipt.outcome === 'offered';
+    case 'contact_requested': return receipt.outcome === 'contact_requested' || receipt.outcome === 'consent_required';
+    case 'declined': return receipt.outcome === 'declined';
+    case 'failed': return receipt.outcome === 'failed';
+    case 'queued': return ['queued', 'already_queued', 'cancellation_not_confirmed'].includes(receipt.outcome);
+  }
 }
 
 function record(value: unknown): Record<string, unknown> | null {
@@ -118,7 +152,6 @@ export function normalizePublicProductCards(value: unknown) {
   for (const candidate of value) {
     const card = normalizePublicProductCard(candidate);
     if (card) cards.push(card);
-    if (cards.length >= PUBLIC_HISTORY_MAX_CARDS) break;
   }
   return cards;
 }
@@ -130,7 +163,7 @@ export function normalizePublicCardDisplay(value: unknown): CardDisplayOptions |
   }
   const initialVisibleCount = Math.max(
     1,
-    Math.min(PUBLIC_HISTORY_MAX_CARDS, Math.floor(source.initialVisibleCount))
+    Math.floor(source.initialVisibleCount)
   );
   return { initialVisibleCount, ...(source.hasMore === true ? { hasMore: true } : {}) };
 }
@@ -138,8 +171,8 @@ export function normalizePublicCardDisplay(value: unknown): CardDisplayOptions |
 export function normalizePublicHistoryMessage(value: unknown): PublicChatHistoryMessage | null {
   const source = record(value);
   if (!source || (source.role !== 'user' && source.role !== 'assistant')) return null;
-  const content = boundedString(source.content, MAX_MESSAGE_CONTENT);
-  if (!content) return null;
+  const content = typeof source.content === 'string' ? source.content : '';
+  if (!content.trim()) return null;
 
   const result: PublicChatHistoryMessage = { role: source.role, content };
   const id = boundedString(source.id, MAX_CARD_ID);
@@ -153,6 +186,11 @@ export function normalizePublicHistoryMessage(value: unknown): PublicChatHistory
     if (products.length) result.products = products;
     if (cardDisplay) result.cardDisplay = cardDisplay;
     if (source.leadRequested === true) result.leadRequested = true;
+    if (source.leadCreated === true) result.leadCreated = true;
+    const availabilityRequest = normalizeAvailabilityRequest(source.availabilityRequest);
+    if (availabilityRequest) result.availabilityRequest = availabilityRequest;
+    const availabilityReceipt = normalizeAvailabilityReceipt(source.availabilityReceipt);
+    if (availabilityReceipt && availabilityReceiptMatchesRequest(availabilityReceipt, availabilityRequest)) result.availabilityReceipt = availabilityReceipt;
   }
   return result;
 }
@@ -163,7 +201,6 @@ export function normalizePublicHistoryMessages(value: unknown) {
   for (const candidate of value) {
     const message = normalizePublicHistoryMessage(candidate);
     if (message) messages.push(message);
-    if (messages.length >= 80) break;
   }
   return messages;
 }
@@ -183,7 +220,7 @@ export function limitPublicHistoryResponse(
     if (!message) continue;
     const separatorBytes = limited.length > 0 ? 1 : 0;
     const nextBytes = encodedBytes + separatorBytes + utf8ByteLength(JSON.stringify(message));
-    if (nextBytes > maxBytes) continue;
+    if (nextBytes > maxBytes) break;
     limited.unshift(message);
     encodedBytes = nextBytes;
   }

@@ -1062,8 +1062,8 @@ describe('LeadRepository partial contact drafts', () => {
     expect(sql).toContain('leads.client_request_hash = EXCLUDED.client_request_hash');
     expect(sql).toContain('FOR UPDATE OF draft');
     expect(sql).toContain('ORDER BY turn.created_at DESC');
-    expect(sql).toContain("'purpose', draft.purpose");
-    expect(sql).toContain("'question', draft.buyer_question");
+    expect(sql).toContain("'purpose', coalesce($10::text, draft.purpose)");
+    expect(sql).toContain("'question', coalesce(draft.buyer_question, lead.question)");
     expect(sql).toContain("'preferredContact', coalesce($8::text, draft.preferred_contact)");
     expect(sql).toContain('payload = lead_outbox.payload || EXCLUDED.payload');
     expect(sql).toContain("SET status = 'consumed'");
@@ -1141,6 +1141,27 @@ describe('LeadRepository partial contact drafts', () => {
       lead: { id: leadRow.id },
       outbox: { payload: { leadId: leadRow.id, source: 'lead_form' } }
     });
+  });
+
+  it('updates history and durable replay availability in the same capture without replacing consultation text', async () => {
+    const query = vi.fn().mockResolvedValue({ rowCount: 0, rows: [] });
+    const repository = new LeadRepository({ query } as never);
+    await repository.createClientLeadWithOutbox({ sessionId: draftRow.session_id,
+      clientLeadId: '44444444-4444-4444-8444-444444444444', clientRequestHash: 'availability-request',
+      email: 'buyer@example.org', question: 'Наличие модели A', skipPendingDraft: true, purpose: 'availability' });
+    expect(query).toHaveBeenCalledTimes(1);
+    const sql = String(query.mock.calls[0][0]);
+    expect(sql).toContain('UPDATE messages message');
+    const replayUpdate = sql.slice(sql.indexOf('marked_availability_contract AS ('), sql.indexOf('SELECT\n         row_to_json(lead)'));
+    expect(replayUpdate).toContain('UPDATE answer_contracts contract');
+    expect(replayUpdate).toContain("jsonb_set(contract.response_payload, '{availabilityRequest,state}', '\"queued\"'::jsonb)");
+    expect(replayUpdate).toContain("contract.session_id=$1::uuid AND contract.status='final'");
+    expect(replayUpdate).toContain("contract.response_payload->'availabilityRequest'->>'id'=$2::text");
+    expect(replayUpdate).toContain('outbox.lead_id=lead.id');
+    expect(replayUpdate).toContain("'availabilityReceipt'");
+    expect(replayUpdate).not.toContain('answer_text');
+    expect(replayUpdate).not.toContain('productCards');
+    expect(query.mock.calls[0][1].slice(8, 10)).toEqual([true, 'availability']);
   });
 
   it('returns null when the public form idempotency key is reused with another payload hash', async () => {
