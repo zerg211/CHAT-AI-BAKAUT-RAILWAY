@@ -14,7 +14,7 @@ import { webSearchContinuation, type SearchReceipt } from './controlledWebSearch
 
 type JsonObject = Record<string, unknown>;
 export class ControlledResponseFailure extends Error {
-  constructor(message: string, readonly response?: { id: string; model: string; usage?: unknown; service_tier?: unknown }) {
+  constructor(message: string, readonly response?: { id: string; model: string; usage?: unknown; service_tier?: unknown }, readonly terminal = false) {
     super(message);
     this.name = 'ControlledResponseFailure';
   }
@@ -187,7 +187,8 @@ export class ControlledResponsesClient {
     const response = responseSchema.parse(await this.request('/responses', signal, authenticated(plan.request), key));
     this.assertContext(response, plan.model);
     if (!response.id.startsWith('resp_') || !['queued', 'in_progress', 'completed'].includes(response.status)) {
-      throw new ControlledResponseFailure('Controlled response did not start successfully', { id: response.id, model: response.model ?? plan.model, usage: response.usage, service_tier: response.service_tier });
+      throw new ControlledResponseFailure('Controlled response did not start successfully', { id: response.id, model: response.model ?? plan.model, usage: response.usage, service_tier: response.service_tier },
+        response.id.startsWith('resp_') && ['failed', 'cancelled', 'incomplete'].includes(response.status));
     }
     return response.id;
   }
@@ -212,7 +213,7 @@ export class ControlledResponsesClient {
       if (response.id !== responseId) {
         throw new ControlledResponseFailure('Controlled response identity or model changed', { id: response.id, model: response.model ?? plan.model, usage: response.usage, service_tier: response.service_tier });
       }
-      if (['failed', 'cancelled', 'incomplete'].includes(response.status)) throw new ControlledResponseFailure('Controlled response did not complete', { id: responseId, model: response.model ?? plan.model, usage: response.usage, service_tier: response.service_tier });
+      if (['failed', 'cancelled', 'incomplete'].includes(response.status)) throw new ControlledResponseFailure('Controlled response did not complete', { id: responseId, model: response.model ?? plan.model, usage: response.usage, service_tier: response.service_tier }, true);
       if (response.status === 'completed') {
         try {
           if (!response.output) throw new Error('Controlled response output is missing');
@@ -237,7 +238,7 @@ export class ControlledResponsesClient {
               budget_scope: 'initial_input_plus_output', late_tool_outputs: response.output
                 .filter(item => item.type === 'mcp_call').map(item => ({ tool: String(item.name), sha256: hash(item.output) })) } };
         } catch {
-          throw new ControlledResponseFailure('Controlled response final output failed validation', { id: responseId, model: plan.model, usage: response.usage, service_tier: response.service_tier });
+          throw new ControlledResponseFailure('Controlled response final output failed validation', { id: responseId, model: plan.model, usage: response.usage, service_tier: response.service_tier }, true);
         }
       }
       if (!['queued', 'in_progress'].includes(response.status)) throw new Error('Controlled response status is invalid');

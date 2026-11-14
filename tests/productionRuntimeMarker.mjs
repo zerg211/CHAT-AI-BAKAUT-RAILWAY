@@ -4,7 +4,7 @@ export const expectedAiManagerContractVersion =
 
 export const expectedAiManagerRuntimeVersion =
   process.env.EXPECTED_AI_MANAGER_RUNTIME_VERSION ||
-  '2026-11-14.resumable-agent-research-v6';
+  '2026-11-14.resumable-agent-research-v7';
 
 export async function fetchProductionHealth(productionApiBase, timeoutMs = 30_000) {
   const controller = new AbortController();

@@ -1232,6 +1232,13 @@ describe('Controlled Responses original context', () => {
     expect(Object.isFrozen(plan.request)).toBe(true);
   });
 
+  it.each(['failed', 'cancelled', 'incomplete'])('marks a provider response with status %s terminal without a second submission', async status => {
+    const { client, transport } = harness({ completed: { status, output: [] } });
+    const plan = await client.prepare({ message: 'Запрос', history: [], prefetch: fullCards(1) });
+    await client.submit(plan, 'turn');
+    await expect(client.wait(plan, 'resp_controlled')).rejects.toMatchObject({ terminal: true, response: { id: 'resp_controlled' } });
+    expect(transport.mock.calls.filter(([url, init]) => new URL(url).pathname === '/v1/responses' && init?.method === 'POST')).toHaveLength(1);
+  });
   it('carries all 132 identity-keyed model decisions through a saved response into catalog groups', async () => {
     const prefetch = fullCards(133);
     const ids = prefetch.items.slice(0, 132).map(item => item.product_id);
