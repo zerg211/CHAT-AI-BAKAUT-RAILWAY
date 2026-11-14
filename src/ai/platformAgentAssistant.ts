@@ -601,7 +601,7 @@ export class PlatformAgentAssistant {
     }
     if (input.repair) {
       const review = (JSON.parse(result.answer) as { answer_review?: { publication?: string; verdict?: string } }).answer_review;
-      if (review?.publication === 'draft' || review?.verdict === 'intermediate') {
+      if (review?.publication === 'draft' || (review?.publication !== 'ready' && review?.verdict === 'intermediate')) {
         throw new CatalogAnswerRepairRequired({ ...input.repair, previousDraft: '', originalResponseId: result.turnId });
       }
       assertRepairCoverage(result.answer, input.repair);
