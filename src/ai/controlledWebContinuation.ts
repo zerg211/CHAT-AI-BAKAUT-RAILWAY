@@ -11,7 +11,7 @@ export type WebContinuationCheckpoint = { sessionId: string; turnId: string; sea
 
 /** The caller owns the turn lease and supplies the persisted search receipt. */
 export async function continueAfterWebSearch(input: { sessionId: string; turnId: string; ownerId: string; message: string;
-  history: Message[]; prefetch: ExactMentionPrefetch; receipt: SearchReceipt; priorReceipts?: SearchReceipt[]; step?: number; signal?: AbortSignal },
+  history: Message[]; prefetch: ExactMentionPrefetch; receipt: SearchReceipt; priorReceipts?: SearchReceipt[]; classificationIds?: string[]; step?: number; signal?: AbortSignal },
   deps: { client: Pick<ControlledResponsesClient, 'prepare' | 'submit' | 'wait'>; conversations: ConversationRepository },
   saved?: WebContinuationCheckpoint) {
   const context = currentOpenAIUsageContext();
@@ -23,7 +23,7 @@ export async function continueAfterWebSearch(input: { sessionId: string; turnId:
     state = structuredClone(saved);
   } else {
     const plan = await deps.client.prepare({ message: input.message, history: input.history, prefetch: input.prefetch,
-      webSearchReceipt: input.receipt, priorWebSearchReceipts: input.priorReceipts, signal: input.signal });
+      webSearchReceipt: input.receipt, priorWebSearchReceipts: input.priorReceipts, classificationIds: input.classificationIds, signal: input.signal });
     const reservationId = await assertOpenAIUsageBudget('platform_agent', plan.model, plan.reserveTokens, webStepKey('web_continuation', input.step));
     if (!reservationId) throw new Error('Web continuation reservation unavailable');
     state = { sessionId: input.sessionId, turnId: input.turnId, searchResponseId: input.receipt.responseId, attempted: false, responseId: null, reservationId, plan,

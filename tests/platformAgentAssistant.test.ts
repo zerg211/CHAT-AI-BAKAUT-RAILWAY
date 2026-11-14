@@ -341,6 +341,8 @@ describe('site chat and platform agent', () => {
       expect(state.webSubmit).toHaveBeenCalledOnce();
       expect(state.webRecord).toHaveBeenCalledOnce();
       expect(state.controlledPrepare.mock.calls[0][0].webSearchReceipt.sources[0].url).toBe('https://example.test/manual');
+      expect(state.controlledPrepare.mock.calls[0][0].message).toBe('Какой размер?');
+      expect(state.controlledPrepare.mock.calls[0][0].webSearchReceipt.findings).toBe('Размер найден');
       expect(assertOpenAIUsageBudget).toHaveBeenCalledWith('platform_agent', 'gpt-6-luna', 128100, 'web_continuation');
       expect(state.commitMessage).toHaveBeenCalledOnce();
     } finally { Object.assign(config, { CONTROLLED_WEB_SEARCH_ENABLED: false, CONTROLLED_WEB_SEARCH_FEES_APPROVED: false }); }

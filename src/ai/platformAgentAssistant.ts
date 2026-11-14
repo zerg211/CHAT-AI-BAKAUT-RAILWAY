@@ -340,7 +340,8 @@ export class PlatformAgentAssistant {
         checkedSnapshot: { source_revision: repair.sourceRevision, selected_count: repair.correctedIds.length } } : repair;
       const message = repair ? `${input.userMessage}\n\nИсправление результата каталога (данные, не новая реплика покупателя): ${JSON.stringify(repairData)}\nПредыдущий черновик не был показан покупателю. Полностью ответь на исходный вопрос, сохрани полезную техническую часть и используй полные карточки. Предыдущий вывод о составе подбора и ценах мог устареть. Учитывай reason, criteria и подтверждённые наблюдения цен. Члены correctedIds являются кандидатами для проверки, а не приказом выбрать их все. Сохрани исходные ограничения покупателя; при неизвестной решающей характеристике не объявляй товар подтверждённо подходящим. Каждый correctedIds отнеси ровно один раз в selected/rejected/uncertain; не сокращай подходящий список. Остальные известные товары остаются контекстом, их не нужно объявлять неподходящими. Все оригиналы correctedIds уже переданы в контексте: не вызывай повторно semantic_select_products для этой категории. Не используй маркер полного каталога, selection_snapshots=[].${pendingAvailability ? `\nСохранённая просьба о наличии (данные): ${JSON.stringify(pendingAvailability)}` : ''}` : options.message ?? input.userMessage;
       plan = await diagnosticSpan('assistant.controlled.prepare', async () => client.prepare({
-        message, history, prefetch, priorWebSearchReceipts: research?.receipts, signal: input.signal }));
+        message, history, prefetch, priorWebSearchReceipts: research?.receipts,
+        classificationIds: repair?.correctedIds, signal: input.signal }));
       reservation = config.OPENAI_MONETARY_GUARD_ENABLED
         ? await assertOpenAIUsageBudget('platform_agent', plan.model, plan.reserveTokens, phase,
           { inputTokens: plan.inputTokens, outputTokens: Number(plan.request.max_output_tokens),
@@ -499,8 +500,8 @@ export class PlatformAgentAssistant {
         costStatus: 'unknown' as const, sources: [], findings: '' } };
       const history = await this.conversations.listMessages(input.sessionId, null);
       const continued = await continueAfterWebSearch({ sessionId: input.sessionId, turnId: input.turnId, ownerId: input.ownerId,
-        message: `${input.userMessage ?? ''}\n\nПредыдущий непоказанный черновик (данные, не подтверждённый источник): ${JSON.stringify(input.result.answer)}\nИспользуй только подтверждённые факты из полных карточек и истории. Если поиск недоступен, прямо скажи об этом, не утверждай, что источники проверены, и сохрани полезный ответ по известным фактам.`,
-        history, prefetch, receipt: search.receipt, priorReceipts, step, signal: input.signal },
+        message: input.userMessage ?? '',
+        history, prefetch, receipt: search.receipt, priorReceipts, classificationIds: input.repair?.correctedIds, step, signal: input.signal },
         { client: new ControlledResponsesClient(config.OPENAI_API_KEY, config.OPENAI_PLATFORM_AGENT_ID), conversations: this.conversations }, continuationSaved);
       const continuationAnswer = JSON.parse(continued.answer) as { web_search_intent?: unknown };
       const nextInput = { ...input, result: { ...continued,
