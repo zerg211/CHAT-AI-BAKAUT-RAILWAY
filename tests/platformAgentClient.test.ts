@@ -1242,7 +1242,8 @@ describe('Controlled Responses original context', () => {
   it('carries all 132 identity-keyed model decisions through a saved response into catalog groups', async () => {
     const prefetch = fullCards(133);
     const ids = prefetch.items.slice(0, 132).map(item => item.product_id);
-    const decisions = Object.fromEntries(ids.map((id, i) => [id, i < 31 ? 'selected' : i < 130 ? 'rejected' : 'uncertain']));
+    const decisions = Object.fromEntries(ids.map((id, i) => [id, { product_name: prefetch.items[i].name,
+      basis: 'Решающие факты из полной карточки', decision: i < 31 ? 'selected' : i < 130 ? 'rejected' : 'uncertain' }]));
     const answer = { answer: 'Подбор по задаче', candidate_decisions: decisions, comparison_ids: [],
       recommendation_status: 'confirmed', selection_snapshots: [], availability: null };
     const { client, transport } = harness({ completed: { output: [{ type: 'message', role: 'assistant', phase: 'final_answer',
@@ -1252,6 +1253,7 @@ describe('Controlled Responses original context', () => {
     expect(schema.properties.candidate_decisions.required).toEqual(ids);
     expect(schema.properties.selected).toBeUndefined();
     expect(plan.manifest.classification_ids).toEqual(ids);
+    expect(plan.manifest.classification_format).toBe('identity_facts_v1');
     await client.submit(plan, 'review-turn');
     const saved = JSON.parse(JSON.stringify(plan));
     const result = await client.wait(saved, 'resp_controlled');
