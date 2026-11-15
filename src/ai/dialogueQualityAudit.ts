@@ -58,7 +58,7 @@ export function buildDialogueQualityAudit(rows:QualityAuditTurn[],input:{hours:n
   const measured=(values:Array<number|null>)=>{const present=values.filter((n):n is number=>n!==null && n>=0);
     return {sampleCount:present.length,turnDenominator:rows.length,total:present.length?present.reduce((sum,n)=>sum+n,0):null};};
   const answerTimes=rows.map(row=>finiteNumber(row.serverAnswerMs)).filter((n):n is number=>n!==null&&n>=0).sort((a,b)=>a-b);
-  const deliveryTimes=rows.map(row=>finiteNumber(row.firstUsefulContentMs)).filter((n):n is number=>n!==null&&n>=0&&n<=600_000).sort((a,b)=>a-b);
+  const deliveryTimes=rows.map(row=>finiteNumber(row.firstUsefulContentMs)).filter((n):n is number=>n!==null&&Number.isSafeInteger(n)&&n>=0).sort((a,b)=>a-b);
   const stopCodes=new Set(['continuation_requires_read_only','continuation_round_limit','continuation_budget_reserve',
     'answer_time_reserve','invalid_continuation','observation_failed','wall_time_budget_exceeded',
     'model_call_budget_exceeded','provider_call_budget_exceeded','tool_call_budget_exceeded','web_call_budget_exceeded',

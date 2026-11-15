@@ -22,6 +22,11 @@ describe('automatic execution audit review queue',()=>{
     expect(report.operations.firstUsefulContentMs).toMatchObject({sampleCount:2,turnDenominator:3,medianMs:3000,p95Ms:3000});
     expect(buildDialogueQualityAudit([row('none')],{hours:24,limit:500,now}).operations.firstUsefulContentMs.p95Ms).toBeNull();
   });
+  it('includes long delivery measurements and excludes invalid integer durations',()=>{
+    const values=[651282,0,-1,1.5,Number.NaN,Number.POSITIVE_INFINITY,Number.MAX_SAFE_INTEGER+1];
+    const report=buildDialogueQualityAudit(values.map((value,index)=>row(String(index),{firstUsefulContentMs:value})),{hours:24,limit:500,now});
+    expect(report.operations.firstUsefulContentMs).toMatchObject({sampleCount:2,turnDenominator:7,medianMs:651282,p95Ms:651282});
+  });
   it('groups repeat causes without hiding missing answers or judging silent failures as good',()=>{
     const report=buildDialogueQualityAudit([row('one',{hasAnswer:false,status:'failed',wallTimeMs:null,errorCode:'generation_failed'}),
       row('two',{reviewIssues:['missing_source:product-a','missing_source:product-b']}),

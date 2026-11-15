@@ -4,12 +4,14 @@ import { performance } from 'node:perf_hooks';
 
 export type DiagnosticEvent = Record<string, string | number | boolean | null>;
 type Sink = (event: DiagnosticEvent) => void;
-type Context = { identity: DiagnosticEvent; started: number; state: { sequence: number; dropped: number; active: number; critical: number; sinkFailures: number }; spanId?: string; sink?: Sink };
+type Context = { identity: DiagnosticEvent; started: number; state: { sequence: number; dropped: number; active: number; critical: number; sinkFailures: number; terminalResponses: Set<string> }; spanId?: string; sink?: Sink };
 const storage = new AsyncLocalStorage<Context>();
 let durableSink: Sink | undefined;
 const MAX_EVENTS = 20_000;
 const numeric = new Set(('rssBytes heapUsedBytes heapTotalBytes uptimeMs eventLoopLagP95Ms cpuUserMs cpuSystemMs durationMs offsetMs statusCode attempt pollCount pageNumber itemCount responseBytes headersMs bodyMs parseMs retryAfterSeconds rateLimitRemainingRequests rateLimitRemainingTokens rowCount totalCount idleCount waitingCount candidateCount updatedCount unknownCount failedCount queueAgeMs nextRetryMs remainingMs remainingTurnMs timeoutMs count sequence droppedEvents activeSpans firstUsefulContentMs inputTokens cachedInputTokens outputTokens reasoningTokens totalTokens maxOutputTokens outputTokenCap attemptCount elapsedMs queueDepth storageFailures sinkFailures requestedCount persistedCount missingCount legacyDroppedEvents timingActiveSpans emittedEvents spanNumber parentSpanNumber').split(' '));
+for (const field of ['observedAtMs', 'providerCompletedAtMs', 'cacheWriteInputTokens']) numeric.add(field);
 const booleans = new Set(('aborted checkpointFound submitted leaseAcquired deduplicated hasMore recovery backpressure persisted writableEnded destroyed errorCodeReported errorTypeReported usageKnown complete').split(' '));
+for (const field of ['terminal', 'firstObservedTerminal']) booleans.add(field);
 const uuids = new Set(('sessionId turnId executionId clientMessageId messageId clientRequestId jobId outboxId leadId causalEventId spanId parentSpanId').split(' '));
 const providerIds = new Set(('agentSessionId agentTurnId itemId callId providerRequestId').split(' '));
 const labels = new Set(('component stage operation method outcome knownOutcome abortSource basis jobType phase eventType kind type name reason').split(' '));
@@ -57,6 +59,7 @@ export function projectDiagnosticFields(input: Record<string, unknown>): Diagnos
   const output: DiagnosticEvent = {};
   for (const [key, value] of Object.entries(input)) {
     if (numeric.has(key) && typeof value === 'number' && Number.isFinite(value) && value >= 0) output[key] = value;
+    else if (key === 'providerCompletedAtMs' && value === null) output[key] = null;
     else if (booleans.has(key) && typeof value === 'boolean') output[key] = value;
     else if (uuids.has(key) && isUuid(value)) output[key] = value as string;
     else if (key === 'requestId' && (isUuid(value) || (asciiToken(value, 40) && value.startsWith('req-')))) output[key] = value as string;
@@ -70,6 +73,7 @@ export function projectDiagnosticFields(input: Record<string, unknown>): Diagnos
     else if (key === 'tool') output[key] = tools.has(String(value)) ? String(value) : 'unknown';
     else if (key === 'sqlState' && typeof value === 'string' && value.length === 5 && [...value].every(c => (c >= '0' && c <= '9') || (c >= 'A' && c <= 'Z'))) output[key] = value;
     else if (key === 'model' && asciiToken(value, 80) && ['gpt-','o1','o3','o4','chatgpt-'].some(p => value.startsWith(p))) output[key] = value;
+    else if (key === 'serviceTier' && ['auto','default','flex','priority','scale'].includes(String(value))) output[key] = String(value);
     else if (key === 'endpoint' && ['/agents/:agentId','/agents/sessions','/agents/sessions/:sessionId','/agents/sessions/:sessionId/events','/agents/sessions/:sessionId/turns','/agents/sessions/:sessionId/turns/:turnId','/agents/sessions/:sessionId/turns/:turnId/items','/responses','/responses/input_tokens','/responses/:responseId','/responses/:responseId/cancel','/search-full','/health','site.product','email.send'].includes(String(value))) output[key] = String(value);
     else if (key === 'route' && typeof value === 'string' && value.startsWith('/api/') && value.length < 150 && !value.includes('?') && [...value].every(c => asciiToken(c) || c === '/')) output[key] = value;
     else if (['sourceRevision','snapshotId'].includes(key) && typeof value === 'string' && (isUuid(value) || (value.length>=8 && value.length<=128 && [...value.toLowerCase()].every(c=>'0123456789abcdef'.includes(c))))) output[key]=value;
@@ -77,6 +81,33 @@ export function projectDiagnosticFields(input: Record<string, unknown>): Diagnos
     else if (key === 'stackFingerprint' && typeof value === 'string' && value.length === 16 && [...value].every(c => '0123456789abcdef'.includes(c))) output[key] = value;
   }
   return output;
+}
+
+/** A repeated usage snapshot, never an additional charge or a compute-duration measurement. */
+export function diagnosticProviderResponse(value: unknown, component: 'controlled' | 'web' | 'platform') {
+  try {
+    const record = (v: unknown): Record<string, unknown> => v && typeof v === 'object' && !Array.isArray(v) ? v as Record<string, unknown> : {};
+    const response = record(value);
+    const id = providerId(response.id);
+    if (!id) return;
+    const usage = record(response.usage);
+    const input = record(usage.input_tokens_details);
+    const output = record(usage.output_tokens_details);
+    const count = (v: unknown) => typeof v === 'number' && Number.isSafeInteger(v) && v >= 0 ? v : undefined;
+    const tokens = { inputTokens: count(usage.input_tokens), cachedInputTokens: count(input.cached_tokens),
+      cacheWriteInputTokens: count(input.cache_write_tokens), outputTokens: count(usage.output_tokens),
+      reasoningTokens: count(output.reasoning_tokens), totalTokens: count(usage.total_tokens) };
+    const terminal = ['completed','failed','cancelled','incomplete','expired'].includes(String(response.status));
+    const state = storage.getStore()?.state;
+    const firstObservedTerminal = terminal && state && state.terminalResponses.size < MAX_EVENTS ? !state.terminalResponses.has(id) : undefined;
+    if (firstObservedTerminal) state!.terminalResponses.add(id);
+    const completed = response.completed_at;
+    const providerCompletedAtMs = typeof completed === 'number' && Number.isFinite(completed) && completed >= 0 && completed <= 8_640_000_000_000
+      ? completed * 1000 : null;
+    diagnosticEvent('provider.response.observed', { component, agentTurnId: id, model: response.model, serviceTier: response.service_tier,
+      remoteStatus: response.status, observedAtMs: Date.now(), providerCompletedAtMs, terminal, firstObservedTerminal,
+      usageKnown: tokens.inputTokens !== undefined && tokens.outputTokens !== undefined, ...tokens, basis: 'usage_snapshot_not_delta' });
+  } catch { /* Observation cannot change provider processing. */ }
 }
 
 export function safeErrorFields(error: unknown): DiagnosticEvent {
@@ -141,7 +172,7 @@ export function diagnosticError(name: string, error: unknown, fields: Record<str
 export function runWithDiagnostics<T>(identity: Record<string, unknown>, operation: () => T, sink?: Sink): T {
   const parent = storage.getStore();
   return storage.run({identity:{...parent?.identity,executionId:randomUUID(),...projectDiagnosticFields(identity)},
-    started:performance.now(),state:{sequence:0,dropped:0,active:0,critical:0,sinkFailures:0},sink:sink ?? parent?.sink}, operation);
+    started:performance.now(),state:{sequence:0,dropped:0,active:0,critical:0,sinkFailures:0,terminalResponses:new Set()},sink:sink ?? parent?.sink}, operation);
 }
 export function bindDiagnosticIdentity(identity: Record<string, unknown>) {
   const context = storage.getStore();

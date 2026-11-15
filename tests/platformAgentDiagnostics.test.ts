@@ -5,6 +5,7 @@ import { PlatformAgentClient, PlatformAgentRequestError } from '../src/ai/platfo
 // Test the producer boundary independently from the journal's additional projection.
 const { events } = vi.hoisted(() => ({ events: [] as Array<{ name: string; fields: Record<string, unknown> }> }));
 vi.mock('../src/observability/diagnostics.js', () => ({
+  diagnosticProviderResponse: vi.fn(),
   diagnosticEvent: (name: string, fields: Record<string, unknown> = {}) => {
     events.push({ name, fields }); return `event_${events.length}`;
   },

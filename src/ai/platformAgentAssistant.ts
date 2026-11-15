@@ -23,6 +23,7 @@ import { ControlledWebSearchProvider } from './controlledWebSearchProvider.js';
 import { controlledWebSearchLedger } from './controlledWebSearchLedger.js';
 import { runControlledWebSearch, webStepKey, type SearchCheckpoint, type SearchReceipt } from './controlledWebSearch.js';
 import { continueAfterWebSearch, type WebContinuationCheckpoint } from './controlledWebContinuation.js';
+import { readCatalogReviewState, type CatalogReviewState } from './catalogReviewState.js';
 
 export function assertCompletedCustomerAnswer(review: unknown, answer: string, cards: ProductCard[]) {
   const parsed = z.object({ verdict: z.enum(['complete', 'intermediate', 'uncertain']),
@@ -280,6 +281,7 @@ export class PlatformAgentAssistant {
   private async controlledAnswer(input: AgentManagerGenerateInput, ownerId: string,
     needState: ChatResponsePayload['needState'], options: { history?: Message[]; prefetch?: ExactMentionPrefetch;
       message?: string; saved?: Record<string, unknown>; recovered?: boolean; repair?: CatalogAnswerRepair; reviewStep?: number;
+      catalogReview?: CatalogReviewState;
       research?: { step: number; receipts: SearchReceipt[] } }): Promise<ChatResponsePayload> {
     const client = new ControlledResponsesClient(config.OPENAI_API_KEY!, config.OPENAI_PLATFORM_AGENT_ID!);
     let repair = options.repair;
@@ -346,7 +348,8 @@ export class PlatformAgentAssistant {
       const message = repair ? `${input.userMessage}\n\nИсправление результата каталога (данные, не новая реплика покупателя): ${JSON.stringify(repairData)}\nПредыдущий черновик не был показан покупателю. Полностью ответь на исходный вопрос, сохрани полезную техническую часть и используй полные карточки. Предыдущий вывод о составе подбора и ценах мог устареть. Учитывай reason, criteria и подтверждённые наблюдения цен. Члены correctedIds являются кандидатами для проверки, а не приказом выбрать их все. Сохрани исходные ограничения покупателя; при неизвестной решающей характеристике не объявляй товар подтверждённо подходящим. Каждый correctedIds отнеси ровно один раз в selected/rejected/uncertain; не сокращай подходящий список. Остальные известные товары остаются контекстом, их не нужно объявлять неподходящими. Все оригиналы correctedIds уже переданы в контексте: не вызывай повторно semantic_select_products для этой категории. Не используй маркер полного каталога, selection_snapshots=[].${pendingAvailability ? `\nСохранённая просьба о наличии (данные): ${JSON.stringify(pendingAvailability)}` : ''}` : options.message ?? input.userMessage;
       plan = await diagnosticSpan('assistant.controlled.prepare', async () => client.prepare({
         message, history, prefetch, priorWebSearchReceipts: research?.receipts,
-        classificationIds: repair?.correctedIds, signal: input.signal }));
+        classificationIds: repair?.correctedIds, classificationScope: input.userMessage,
+        catalogReview: options.catalogReview, signal: input.signal }));
       reservation = config.OPENAI_MONETARY_GUARD_ENABLED
         ? await assertOpenAIUsageBudget('platform_agent', plan.model, plan.reserveTokens, phaseKey,
           { inputTokens: plan.inputTokens, outputTokens: Number(plan.request.max_output_tokens),
@@ -444,6 +447,7 @@ export class PlatformAgentAssistant {
           input.research?.step, input.research?.receipts);
       }
     }
+    await this.saveUsageAndCatalogReview(input);
     try { return await this.saveResult(input); }
     catch (error) {
       if (input.repairAttempted && !(error instanceof CatalogAnswerRepairRequired)) {
@@ -458,7 +462,7 @@ export class PlatformAgentAssistant {
           service_tier: input.result.service_tier } });
       return await this.controlledAnswer({ sessionId: input.sessionId, turnId: input.turnId,
         userMessage: input.userMessage ?? '', signal: input.signal, onDelta: input.onDelta }, input.ownerId,
-        input.needState, { repair: error.repair, recovered: input.recovered, research: input.research,
+        input.needState, { repair: error.repair, recovered: input.recovered, research: input.research, catalogReview: input.result.catalogReview,
           reviewStep: input.repairAttempted ? (input.reviewStep ?? 0) + 1 : 0 });
     }
   }
@@ -468,6 +472,7 @@ export class PlatformAgentAssistant {
     priorReceipts: SearchReceipt[] = []): Promise<ChatResponsePayload> {
     for (;;) {
       input.signal?.throwIfAborted();
+      await this.saveUsageAndCatalogReview(input);
       webStepKey('controlled_web_search', step);
       const enabled = Boolean(config.CONTROLLED_WEB_SEARCH_ENABLED && config.CONTROLLED_WEB_SEARCH_FEES_APPROVED);
       const mode = savedMode ?? (enabled ? 'search' : 'unavailable');
@@ -488,9 +493,6 @@ export class PlatformAgentAssistant {
           kind: 'controlled_web_stage', mode, intent: parsed, result: input.result, reservation: input.reservation,
           userMessage: input.userMessage ?? '', needState: input.needState, prior: input.prior,
           repair: input.repair, repairAttempted: input.repairAttempted, reviewStep: input.reviewStep, prefetch, step, priorReceipts } });
-      const originalUsage = { id: input.result.turnId, usage: input.result.usage, service_tier: input.result.service_tier };
-      bindOpenAIUsageReservation(originalUsage, input.reservation);
-      await recordOpenAIUsageOnce('platform_agent', input.result.model, originalUsage);
       const rows = await this.conversations.listTurnCheckpoints(input.sessionId, input.turnId);
       const searchSaved = rows.find(row => row.checkpoint === webStepKey('controlled_web_search', step))?.payload as SearchCheckpoint | undefined;
       const continuationSaved = rows.find(row => row.checkpoint === webStepKey('controlled_web_continuation', step))?.payload as WebContinuationCheckpoint | undefined;
@@ -507,7 +509,8 @@ export class PlatformAgentAssistant {
       const history = await this.conversations.listMessages(input.sessionId, null);
       const continued = await continueAfterWebSearch({ sessionId: input.sessionId, turnId: input.turnId, ownerId: input.ownerId,
         message: input.userMessage ?? '',
-        history, prefetch, receipt: search.receipt, priorReceipts, classificationIds: input.repair?.correctedIds, step, signal: input.signal },
+        history, prefetch, receipt: search.receipt, priorReceipts, classificationIds: input.repair?.correctedIds,
+        catalogReview: input.result.catalogReview, step, signal: input.signal },
         { client: new ControlledResponsesClient(config.OPENAI_API_KEY, config.OPENAI_PLATFORM_AGENT_ID), conversations: this.conversations }, continuationSaved);
       const continuationAnswer = JSON.parse(continued.answer) as { web_search_intent?: unknown };
       const nextInput = { ...input, result: { ...continued,
@@ -561,8 +564,19 @@ export class PlatformAgentAssistant {
       availabilityRequest, availabilityReceipt };
   }
 
+  private async saveUsageAndCatalogReview(input: Parameters<PlatformAgentAssistant['saveResult']>[0]) {
+    const usageRecord = { id: input.result.turnId, usage: input.result.usage, service_tier: input.result.service_tier };
+    bindOpenAIUsageReservation(usageRecord, input.reservation);
+    await recordOpenAIUsageOnce('platform_agent', input.result.model, usageRecord);
+    if (!input.result.catalogReview) return;
+    const state = readCatalogReviewState(input.result.catalogReview);
+    await this.conversations.upsertTurnCheckpoint({ sessionId: input.sessionId, turnId: input.turnId, executionOwner: input.ownerId,
+      checkpoint: `catalog_review:${input.result.turnId}`, status: 'succeeded',
+      payload: { kind: 'catalog_review_state', responseId: input.result.turnId, state } });
+  }
+
   private async saveResult(input: {
-    sessionId: string; turnId: string; ownerId: string; result: Awaited<ReturnType<PlatformAgentClient['waitForTurn']>> & { contextReceipt?: Record<string, unknown>; service_tier?: string };
+    sessionId: string; turnId: string; ownerId: string; result: Awaited<ReturnType<PlatformAgentClient['waitForTurn']>> & { contextReceipt?: Record<string, unknown>; service_tier?: string; catalogReview?: CatalogReviewState };
     reservation: string | null; prior: string[]; needState: ChatResponsePayload['needState']; recovered?: boolean; signal?: AbortSignal;
     onDelta?: (text: string) => void | Promise<void>;
     userMessage?: string;
@@ -572,9 +586,6 @@ export class PlatformAgentAssistant {
     research?: { step: number; receipts: SearchReceipt[] };
   }): Promise<ChatResponsePayload> {
     const { result } = input;
-    const usageRecord = { id: result.turnId, usage: result.usage, service_tier: result.service_tier };
-    bindOpenAIUsageReservation(usageRecord, input.reservation);
-    await recordOpenAIUsageOnce('platform_agent', result.model, usageRecord);
     for (const usage of result.webSearchUsages ?? []) {
       if (typeof usage.run_id !== 'string' || typeof usage.model !== 'string' ||
           typeof usage.input_tokens !== 'number' || typeof usage.output_tokens !== 'number') continue;
@@ -785,7 +796,7 @@ export class PlatformAgentAssistant {
       runtimeModeReason: result.contextReceipt ? 'complete_stateless_originals' : 'sole_runtime', productCards: cards,
       catalogCandidates: page && !fullSelection ? candidates : undefined, catalogRevision, priceAudit, cardDisplay, needStateSnapshot: input.needState,
       platformAgentUsage: result.usage, platformAgentTurnId: result.turnId, usedWebSearch: result.usedWebSearch, knownProducts,
-      modelInputReceipt: result.contextReceipt };
+      modelInputReceipt: result.contextReceipt, ...(result.catalogReview ? { catalogReviewState: result.catalogReview } : {}) };
     const responsePayload: ChatResponsePayload = { turnId: input.turnId, answer, needState: input.needState,
       productCards: cards, cardDisplay, usedWebSearch: result.usedWebSearch, metadata };
     const db = await pool.connect();

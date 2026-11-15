@@ -11,8 +11,81 @@ import { ControlledWebSearchProvider } from '../src/ai/controlledWebSearchProvid
 import { controlledWebSearchLedger } from '../src/ai/controlledWebSearchLedger.js';
 import { runControlledWebSearch } from '../src/ai/controlledWebSearch.js';
 import { continueAfterWebSearch } from '../src/ai/controlledWebContinuation.js';
+import { acceptCatalogReview, reviewContext, reviewSources } from '../src/ai/catalogReviewState.js';
+import type { WebContinuationCheckpoint } from '../src/ai/controlledWebContinuation.js';
+import { config } from '../src/config.js';
 
 describe('controlled search adapters, offline', () => {
+  it('restores the exact review base and rejects changed context before reading or resubmitting', async () => {
+    state.reserve.mockReset().mockResolvedValue('reservation');
+    state.record.mockReset().mockResolvedValue(undefined);
+    const prefetch = { source_revision: 'snapshot', completeness: 'full' as const, items: [{ product_id: 'a', name: 'A',
+      attributes: {}, description: 'Full description', documents: [], original_card: { variant: 'A' } }] };
+    const ctx = reviewContext(['a'], prefetch, 'Задача', []);
+    const base = acceptCatalogReview(JSON.stringify({ answer: 'Вывод', candidate_decisions: {
+      a: { product_name: 'A', basis: 'Исходный факт', decision: 'selected' }
+    } }), ctx, [], 'resp_initial').state;
+    const receipt = { responseId: 'source', status: 'ok' as const, model: 'model', usage: null, toolFees: null,
+      monetaryCost: null, costStatus: 'unknown' as const, findings: 'New facts', sources: [] };
+    const input = { sessionId: 'session', turnId: 'turn', ownerId: 'owner', message: 'Задача', history: [], prefetch,
+      receipt, classificationIds: ['a'], catalogReview: base };
+    let saved: WebContinuationCheckpoint | undefined;
+    const conversations = { upsertTurnCheckpoint: vi.fn(async (entry: any) => { saved = structuredClone(entry.payload); }) } as unknown as ConversationRepository;
+    const plan = { model: 'model', reserveTokens: 100, review: { context: ctx, sources: reviewSources([receipt]), base } };
+    const prepare = vi.fn().mockResolvedValue(plan);
+    const submit = vi.fn().mockResolvedValue('resp_review');
+    const wait = vi.fn().mockRejectedValueOnce(new Error('interrupted')).mockResolvedValue({ turnId: 'resp_review', model: 'model', catalogReview: base });
+    const client = { prepare, submit, wait } as unknown as ControlledResponsesClient;
+    await expect(continueAfterWebSearch(input, { client, conversations })).rejects.toThrow('interrupted');
+    expect(prepare.mock.calls[0][0]).toMatchObject({ catalogReview: base, classificationScope: 'Задача' });
+    expect(saved).toMatchObject({ attempted: true, responseId: 'resp_review', plan: { review: { base } } });
+    await expect(continueAfterWebSearch(input, { client, conversations }, saved)).resolves.toMatchObject({ catalogReview: base });
+    for (const changed of [{ ...input, message: 'Другие условия' },
+      { ...input, receipt: { ...receipt, findings: 'Replaced facts' } },
+      { ...input, prefetch: { ...prefetch, source_revision: 'other' } },
+      { ...input, catalogReview: undefined },
+      { ...input, catalogReview: { ...base, decisions: { ...base.decisions, a: { ...base.decisions.a, basis: 'Tampered' } } } }]) {
+      await expect(continueAfterWebSearch(changed, { client, conversations }, saved)).rejects.toThrow();
+    }
+    expect(prepare).toHaveBeenCalledOnce();
+    expect(submit).toHaveBeenCalledOnce();
+    expect(wait).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(['legacy', 'identity_updates_v2'])('never repeats an unknown continuation submission with %s', async format => {
+    state.reserve.mockReset().mockResolvedValue('reservation');
+    const monetary = config.OPENAI_MONETARY_GUARD_ENABLED;
+    config.OPENAI_MONETARY_GUARD_ENABLED = false;
+    let saved: WebContinuationCheckpoint | undefined;
+    const conversations = { upsertTurnCheckpoint: vi.fn(async (entry: any) => { saved = structuredClone(entry.payload); }) } as unknown as ConversationRepository;
+    const client = { prepare: vi.fn().mockResolvedValue({ model: 'model', reserveTokens: 10 }),
+      submit: vi.fn().mockRejectedValue(new Error('connection lost')), wait: vi.fn() } as unknown as ControlledResponsesClient;
+    const input = { sessionId: 'session', turnId: 'turn', ownerId: 'owner', message: 'Задача', history: [], prefetch: {} as never,
+      receipt: { responseId: 'source', status: 'ok' as const, model: 'model', usage: null, toolFees: null,
+        monetaryCost: null, costStatus: 'unknown' as const, findings: '', sources: [] } };
+    if (format === 'identity_updates_v2') {
+      const prefetch = { source_revision: 'revision', completeness: 'full' as const, items: [{ product_id: 'a', name: 'A',
+        attributes: {}, description: 'Original', documents: [], original_card: { variant: 'A' } }] };
+      const context = reviewContext(['a'], prefetch, input.message, []);
+      const base = acceptCatalogReview(JSON.stringify({ answer: 'Initial', candidate_decisions: {
+        a: { product_name: 'A', basis: 'Original', decision: 'selected' }
+      } }), context, [], 'resp_initial').state;
+      Object.assign(input, { prefetch, classificationIds: ['a'], catalogReview: base });
+      vi.mocked(client.prepare).mockResolvedValue({ model: 'model', reserveTokens: 10,
+        manifest: { classification_format: format }, review: { context, sources: reviewSources([input.receipt]), base } } as never);
+    }
+    try {
+      await expect(continueAfterWebSearch(input, { client, conversations })).rejects.toThrow('connection lost');
+      if (format === 'identity_updates_v2') expect(saved?.plan.manifest.classification_format).toBe(format);
+      await expect(continueAfterWebSearch(input, { client, conversations }, saved)).rejects.toThrow('outcome is unknown');
+      expect(client.submit).toHaveBeenCalledOnce();
+      expect(client.wait).not.toHaveBeenCalled();
+      saved!.responseId = 'resp_known';
+      vi.mocked(client.wait).mockResolvedValue({ turnId: 'resp_known', model: 'model' } as never);
+      await expect(continueAfterWebSearch(input, { client, conversations }, saved)).resolves.toMatchObject({ turnId: 'resp_known' });
+      expect(client.submit).toHaveBeenCalledOnce();
+    } finally { config.OPENAI_MONETARY_GUARD_ENABLED = monetary; }
+  });
   it('polls queued responses and resumes a timeout using only GET', async () => {
     let stage = 0;
     const transport = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {

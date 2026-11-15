@@ -1,6 +1,7 @@
 import { runWithDiagnostics, type DiagnosticEvent } from '../src/observability/diagnostics.js';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
+import { acceptCatalogReview, reviewContext } from '../src/ai/catalogReviewState.js';
 
 const state = vi.hoisted(() => ({
   price: vi.fn(), history: vi.fn(), run: vi.fn(), wait: vi.fn(), settle: vi.fn(), submit: vi.fn(), full: vi.fn(), prefetch: vi.fn(), known: vi.fn(), recheck: vi.fn(), checkpoints: vi.fn(), renew: vi.fn(), query: vi.fn(), transactionQuery: vi.fn(), release: vi.fn(),
@@ -392,8 +393,12 @@ describe('site chat and platform agent', () => {
     const answer = (query: string | null, selected: string[] = []) => JSON.stringify({ answer: query ? 'Черновик' : 'Предварительно подходит.',
       selected, rejected: [], uncertain: [], selection_snapshots: [], availability: null,
       web_search_intent: query ? { query, rationale: 'Проверка применимости' } : null });
+    const reviewContextForTurn = reviewContext([id], { source_revision: 'rev', completeness: 'full', items: [item] }, 'Подберите под задачу', []);
     const response = (turnId: string, query: string | null) => ({ sessionId: `controlled:${turnId}`, turnId,
-      model: 'gpt-6-luna', knownProducts, page: { source_revision: 'rev', items: [item] }, answer: answer(query, [id]) });
+      model: 'gpt-6-luna', knownProducts, page: { source_revision: 'rev', items: [item] }, answer: answer(query, [id]),
+      catalogReview: acceptCatalogReview(JSON.stringify({ answer: 'Вывод', candidate_decisions: {
+        [id]: { product_name: item.name, basis: `Оценка ${turnId}`, decision: 'selected' }
+      } }), reviewContextForTurn, [], turnId).state });
     state.run.mockResolvedValueOnce({ sessionId: 'agent-session', turnId: 'initial', model: 'gpt-6-luna-2026-11-01', answer: answer('Класс оборудования') });
     state.webSubmit.mockResolvedValueOnce('resp_source1').mockResolvedValueOnce('resp_source2');
     state.webRead.mockImplementation(async (responseId: string) => ({ status: 'ok', responseId, model: 'gpt-6-luna-2026-11-01',
@@ -429,7 +434,49 @@ describe('site chat and platform agent', () => {
       expect(state.controlledPrepare.mock.calls[2][0]).toMatchObject({ priorWebSearchReceipts: [{ responseId: 'resp_source1' }], webSearchReceipt: { responseId: 'resp_source2' } });
       expect(state.controlledWait.mock.calls.map(call => call[1])).toEqual(['resp_cont1', 'resp_repair', 'resp_repair',
         'resp_cont2', 'resp_cont2', 'resp_review1', 'resp_review2', 'resp_review2']);
+      for (const responseId of ['resp_cont1', 'resp_repair', 'resp_cont2', 'resp_review1', 'resp_review2']) {
+        expect(entries.get(`catalog_review:${responseId}`)).toMatchObject({ responseId,
+          state: { decisions: { [id]: { basis: `Оценка ${responseId}` } } } });
+      }
+      expect(state.controlledPrepare.mock.calls[1][0].catalogReview.decisions[id].response_id).toBe('resp_cont1');
+      expect(state.controlledPrepare.mock.calls[2][0].catalogReview.decisions[id].response_id).toBe('resp_repair');
+      expect(state.controlledPrepare.mock.calls[4][0].catalogReview.decisions[id].response_id).toBe('resp_review1');
+      expect(entries.get('controlled_web_stage').result.catalogReview.decisions[id].response_id).toBe('resp_repair');
+      expect(state.commitMessage.mock.calls[0][0].metadata.catalogReviewState.decisions[id].response_id).toBe('resp_review2');
       expect(state.commitMessage).toHaveBeenCalledOnce();
+    } finally {
+      vi.mocked(repo.upsertTurnCheckpoint).mockImplementation(async () => undefined as never);
+      Object.assign(config, { CONTROLLED_WEB_SEARCH_ENABLED: false, CONTROLLED_WEB_SEARCH_FEES_APPROVED: false });
+    }
+  });
+  it.each([false, true])('records actual usage before a failed decision checkpoint and prevents another paid step (search=%s)', async search => {
+    Object.assign(config, { CONTROLLED_WEB_SEARCH_ENABLED: true, CONTROLLED_WEB_SEARCH_FEES_APPROVED: true });
+    const id = '000000000000000000000001';
+    const item = { product_id: id, name: 'Model', attributes: {}, description: 'Original', documents: [], original_card: { id } };
+    const context = reviewContext([id], { source_revision: 'rev', completeness: 'full', items: [item] }, 'Задача', []);
+    const catalogReview = acceptCatalogReview(JSON.stringify({ candidate_decisions: {
+      [id]: { product_name: 'Model', basis: 'Исходные факты', decision: 'uncertain' }
+    }, answer: 'Нужен источник' }), context, [], 'resp_initial').state;
+    const usage = { input_tokens: 100, output_tokens: 20, total_tokens: 120 };
+    state.run.mockResolvedValueOnce({ sessionId: 'agent-session', turnId: 'resp_initial', model: 'gpt-6-luna', catalogReview, usage,
+      knownProducts: { source_revision: 'rev', product_ids: [id] }, page: { source_revision: 'rev', items: [item] },
+      answer: JSON.stringify({ answer: 'Нужен источник', selected: [], rejected: [], uncertain: [id],
+        web_search_intent: search ? { query: 'Точный вариант', rationale: 'Проверка применимости' } : null }) });
+    vi.mocked(repo.upsertTurnCheckpoint).mockImplementation(async entry => {
+      if (entry.checkpoint.startsWith('catalog_review:')) {
+        expect(recordOpenAIUsageOnce).toHaveBeenCalledWith('platform_agent', 'gpt-6-luna', expect.objectContaining({ id: 'resp_initial', usage }));
+        throw new Error('decision checkpoint unavailable');
+      }
+      return undefined as never;
+    });
+    try {
+      await expect(new PlatformAgentAssistant(repo).generateAnswer({ sessionId: 'chat', turnId: 'turn', userMessage: 'Задача' }))
+        .rejects.toThrow('decision checkpoint unavailable');
+      expect(state.webSubmit).not.toHaveBeenCalled();
+      expect(state.controlledSubmit).not.toHaveBeenCalled();
+      expect(state.commitMessage).not.toHaveBeenCalled();
+      expect(vi.mocked(recordOpenAIUsageOnce).mock.calls.filter(([stage, , response]) => stage === 'platform_agent' &&
+        (response as { id?: string }).id === 'resp_initial')).toHaveLength(1);
     } finally {
       vi.mocked(repo.upsertTurnCheckpoint).mockImplementation(async () => undefined as never);
       Object.assign(config, { CONTROLLED_WEB_SEARCH_ENABLED: false, CONTROLLED_WEB_SEARCH_FEES_APPROVED: false });
