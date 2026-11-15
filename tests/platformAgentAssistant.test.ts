@@ -449,7 +449,7 @@ describe('site chat and platform agent', () => {
       Object.assign(config, { CONTROLLED_WEB_SEARCH_ENABLED: false, CONTROLLED_WEB_SEARCH_FEES_APPROVED: false });
     }
   });
-  it('does not start another paid step when saving the current model decisions fails', async () => {
+  it.each([false, true])('records actual usage before a failed decision checkpoint and prevents another paid step (search=%s)', async search => {
     Object.assign(config, { CONTROLLED_WEB_SEARCH_ENABLED: true, CONTROLLED_WEB_SEARCH_FEES_APPROVED: true });
     const id = '000000000000000000000001';
     const item = { product_id: id, name: 'Model', attributes: {}, description: 'Original', documents: [], original_card: { id } };
@@ -457,12 +457,16 @@ describe('site chat and platform agent', () => {
     const catalogReview = acceptCatalogReview(JSON.stringify({ candidate_decisions: {
       [id]: { product_name: 'Model', basis: 'Исходные факты', decision: 'uncertain' }
     }, answer: 'Нужен источник' }), context, [], 'resp_initial').state;
-    state.run.mockResolvedValueOnce({ sessionId: 'agent-session', turnId: 'resp_initial', model: 'gpt-6-luna', catalogReview,
+    const usage = { input_tokens: 100, output_tokens: 20, total_tokens: 120 };
+    state.run.mockResolvedValueOnce({ sessionId: 'agent-session', turnId: 'resp_initial', model: 'gpt-6-luna', catalogReview, usage,
       knownProducts: { source_revision: 'rev', product_ids: [id] }, page: { source_revision: 'rev', items: [item] },
       answer: JSON.stringify({ answer: 'Нужен источник', selected: [], rejected: [], uncertain: [id],
-        web_search_intent: { query: 'Точный вариант', rationale: 'Проверка применимости' } }) });
+        web_search_intent: search ? { query: 'Точный вариант', rationale: 'Проверка применимости' } : null }) });
     vi.mocked(repo.upsertTurnCheckpoint).mockImplementation(async entry => {
-      if (entry.checkpoint.startsWith('catalog_review:')) throw new Error('decision checkpoint unavailable');
+      if (entry.checkpoint.startsWith('catalog_review:')) {
+        expect(recordOpenAIUsageOnce).toHaveBeenCalledWith('platform_agent', 'gpt-6-luna', expect.objectContaining({ id: 'resp_initial', usage }));
+        throw new Error('decision checkpoint unavailable');
+      }
       return undefined as never;
     });
     try {
@@ -471,6 +475,8 @@ describe('site chat and platform agent', () => {
       expect(state.webSubmit).not.toHaveBeenCalled();
       expect(state.controlledSubmit).not.toHaveBeenCalled();
       expect(state.commitMessage).not.toHaveBeenCalled();
+      expect(vi.mocked(recordOpenAIUsageOnce).mock.calls.filter(([stage, , response]) => stage === 'platform_agent' &&
+        (response as { id?: string }).id === 'resp_initial')).toHaveLength(1);
     } finally {
       vi.mocked(repo.upsertTurnCheckpoint).mockImplementation(async () => undefined as never);
       Object.assign(config, { CONTROLLED_WEB_SEARCH_ENABLED: false, CONTROLLED_WEB_SEARCH_FEES_APPROVED: false });

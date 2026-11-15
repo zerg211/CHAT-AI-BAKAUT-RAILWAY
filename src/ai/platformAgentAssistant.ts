@@ -447,7 +447,7 @@ export class PlatformAgentAssistant {
           input.research?.step, input.research?.receipts);
       }
     }
-    await this.saveCatalogReview(input);
+    await this.saveUsageAndCatalogReview(input);
     try { return await this.saveResult(input); }
     catch (error) {
       if (input.repairAttempted && !(error instanceof CatalogAnswerRepairRequired)) {
@@ -472,7 +472,7 @@ export class PlatformAgentAssistant {
     priorReceipts: SearchReceipt[] = []): Promise<ChatResponsePayload> {
     for (;;) {
       input.signal?.throwIfAborted();
-      await this.saveCatalogReview(input);
+      await this.saveUsageAndCatalogReview(input);
       webStepKey('controlled_web_search', step);
       const enabled = Boolean(config.CONTROLLED_WEB_SEARCH_ENABLED && config.CONTROLLED_WEB_SEARCH_FEES_APPROVED);
       const mode = savedMode ?? (enabled ? 'search' : 'unavailable');
@@ -493,9 +493,6 @@ export class PlatformAgentAssistant {
           kind: 'controlled_web_stage', mode, intent: parsed, result: input.result, reservation: input.reservation,
           userMessage: input.userMessage ?? '', needState: input.needState, prior: input.prior,
           repair: input.repair, repairAttempted: input.repairAttempted, reviewStep: input.reviewStep, prefetch, step, priorReceipts } });
-      const originalUsage = { id: input.result.turnId, usage: input.result.usage, service_tier: input.result.service_tier };
-      bindOpenAIUsageReservation(originalUsage, input.reservation);
-      await recordOpenAIUsageOnce('platform_agent', input.result.model, originalUsage);
       const rows = await this.conversations.listTurnCheckpoints(input.sessionId, input.turnId);
       const searchSaved = rows.find(row => row.checkpoint === webStepKey('controlled_web_search', step))?.payload as SearchCheckpoint | undefined;
       const continuationSaved = rows.find(row => row.checkpoint === webStepKey('controlled_web_continuation', step))?.payload as WebContinuationCheckpoint | undefined;
@@ -567,7 +564,10 @@ export class PlatformAgentAssistant {
       availabilityRequest, availabilityReceipt };
   }
 
-  private async saveCatalogReview(input: Parameters<PlatformAgentAssistant['saveResult']>[0]) {
+  private async saveUsageAndCatalogReview(input: Parameters<PlatformAgentAssistant['saveResult']>[0]) {
+    const usageRecord = { id: input.result.turnId, usage: input.result.usage, service_tier: input.result.service_tier };
+    bindOpenAIUsageReservation(usageRecord, input.reservation);
+    await recordOpenAIUsageOnce('platform_agent', input.result.model, usageRecord);
     if (!input.result.catalogReview) return;
     const state = readCatalogReviewState(input.result.catalogReview);
     await this.conversations.upsertTurnCheckpoint({ sessionId: input.sessionId, turnId: input.turnId, executionOwner: input.ownerId,
@@ -586,9 +586,6 @@ export class PlatformAgentAssistant {
     research?: { step: number; receipts: SearchReceipt[] };
   }): Promise<ChatResponsePayload> {
     const { result } = input;
-    const usageRecord = { id: result.turnId, usage: result.usage, service_tier: result.service_tier };
-    bindOpenAIUsageReservation(usageRecord, input.reservation);
-    await recordOpenAIUsageOnce('platform_agent', result.model, usageRecord);
     for (const usage of result.webSearchUsages ?? []) {
       if (typeof usage.run_id !== 'string' || typeof usage.model !== 'string' ||
           typeof usage.input_tokens !== 'number' || typeof usage.output_tokens !== 'number') continue;
