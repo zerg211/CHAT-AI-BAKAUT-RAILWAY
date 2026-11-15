@@ -1,5 +1,6 @@
 import { diagnosticSpan, diagnosticEvent, diagnosticError } from '../observability/diagnostics.js';
 import { fetch } from 'undici';
+import type { LeadProductReference } from '../ai/leadProductReferences.js';
 import { config } from '../config.js';
 import type { ConversationSession, Lead, Message } from '../shared/types.js';
 
@@ -28,6 +29,7 @@ interface EmailMessageContext {
 
 interface EmailHandoffContext {
   productIds?: string[];
+  productReferences?: LeadProductReference[];
   purpose?: string | null;
   buyerQuestion?: string | null;
   preferredContact?: 'message' | 'call' | null;
@@ -177,7 +179,11 @@ function leadText(
     contactPreference ? `Предпочтительный способ связи: ${contactPreference}` : null,
     handoff?.purpose ? `Цель обращения: ${compactText(handoff.purpose, 500)}` : null,
     handoff?.buyerQuestion ? `Исходный вопрос покупателя: ${handoff.buyerQuestion}` : null,
-    handoff?.productIds?.length ? `Товары заявки (ID каталога):\n${handoff.productIds.map(id => `- ${id}`).join('\n')}` : null,
+    handoff?.productIds?.length ? `Товары заявки (ID каталога):\n${handoff.productIds.map(id => {
+      if (!handoff.productReferences) return `- ${id}`;
+      const reference = handoff.productReferences.find(item => item.productId === id);
+      return `- ${id}\n  Название: ${reference?.status === 'saved_card' && reference.name ? reference.name : 'нет достоверного названия'}\n  Карточка: ${reference?.status === 'saved_card' && reference.sourceUrl ? reference.sourceUrl : 'нет достоверной ссылки'}`;
+    }).join('\n')}` : null,
     '',
     `SUMMARY: ${summary}`,
     '',
@@ -196,6 +202,7 @@ function leadText(
 
 export interface LeadEmailRequestSnapshot {
   productIds?: string[];
+  productReferences?: LeadProductReference[];
   version: 1;
   url: string;
   method: string;
@@ -264,7 +271,8 @@ export function prepareLeadEmailRequest(
   return {version: 1, url: config.EMAIL_HTTP_URL, method: config.EMAIL_HTTP_METHOD,
     body: JSON.stringify(body), idempotencyKey: `bakaut-lead-${lead.id}`,
     provider: isResendEndpoint(config.EMAIL_HTTP_URL) ? 'resend' : 'other',
-    ...(context.handoff?.productIds ? { productIds: [...context.handoff.productIds] } : {})};
+    ...(context.handoff?.productIds ? { productIds: [...context.handoff.productIds] } : {}),
+    ...(context.handoff?.productReferences ? { productReferences: structuredClone(context.handoff.productReferences) } : {})};
 }
 
 export async function sendPreparedLeadEmail(snapshot: LeadEmailRequestSnapshot): Promise<EmailResult> {

@@ -1,4 +1,5 @@
 import { diagnosticEvent, diagnosticSpan } from '../observability/diagnostics.js';
+import type { LeadProductReference } from '../ai/leadProductReferences.js';
 import { Query } from 'pg';
 import type { Pool, PoolClient, QueryResult, QueryResultRow } from 'pg';
 import { pool } from './pool.js';
@@ -4559,6 +4560,7 @@ export class LeadRepository {
     purpose?: 'availability';
     source?: 'lead_form' | 'platform_chat';
     productIds?: string[];
+    productReferences?: LeadProductReference[];
   }) {
     const result = await this.db.query(
       `WITH active_session AS MATERIALIZED (
@@ -4616,7 +4618,8 @@ export class LeadRepository {
              'question', coalesce(draft.buyer_question, lead.question),
              'preferredContact', coalesce($8::text, draft.preferred_contact),
              'source', $11::text,
-             'productIds', $12::jsonb
+             'productIds', $12::jsonb,
+             'productReferences', $13::jsonb
            )),
            'pending'
          FROM created_lead lead
@@ -4688,7 +4691,8 @@ export class LeadRepository {
         input.skipPendingDraft ?? false,
         input.purpose ?? null,
         input.source ?? 'lead_form',
-        input.productIds ? JSON.stringify(input.productIds) : null
+        input.productIds ? JSON.stringify(input.productIds) : null,
+        input.productReferences ? JSON.stringify(input.productReferences) : null
       ]
     );
     const row = result.rows[0];

@@ -20,16 +20,21 @@ describe('verified product identity from capture to email snapshot', () => {
   it('executes actual capture, repository mapping and outbox serialization with multiple IDs and generic summary', async () => {
     const productIds = ['a'.repeat(24), 'b'.repeat(24)];
     const sessionId = randomUUID(), turnId = randomUUID(), leadId = randomUUID(), outboxId = randomUUID();
+    const sourceMessageId = randomUUID();
+    const names = ['Виброплита 🛠 6555', 'Виброплита 🛠 5545'];
+    const urls = ['https://bakautprof.ru/catalog/vibroplity/saved-6555/', 'https://bakautprof.ru/catalog/vibroplity/saved-5545/'];
     let stored: { lead_row: Record<string, unknown>; outbox_row: Record<string, unknown> } | undefined;
     const query = vi.fn(async (sql: string, args: unknown[] = []) => {
       if (sql.startsWith('SAVEPOINT') || sql.startsWith('RELEASE SAVEPOINT')) return { rows: [], rowCount: 0 };
       if (sql.includes('FROM leads lead JOIN lead_outbox')) return { rows: stored ? [stored] : [], rowCount: stored ? 1 : 0 };
       if (sql.includes('INSERT INTO lead_outbox')) {
         expect(sql).toContain("'productIds', $12::jsonb"); expect(JSON.parse(String(args[11]))).toEqual(productIds);
+        expect(sql).toContain("'productReferences', $13::jsonb");
         stored = { lead_row: { id: leadId, session_id: args[0], client_lead_id: args[1], client_request_hash: args[2],
           name: args[3], phone: args[4], email: args[5], question: args[6], status: 'pending_email', created_at: new Date() },
           outbox_row: { id: outboxId, lead_id: leadId, session_id: sessionId, turn_id: turnId, destination: 'lead_email',
-            payload: { leadId, question: args[6], preferredContact: args[7], purpose: args[9], source: args[10], productIds: JSON.parse(String(args[11])) },
+            payload: { leadId, question: args[6], preferredContact: args[7], purpose: args[9], source: args[10], productIds: JSON.parse(String(args[11])),
+              productReferences: JSON.parse(String(args[12])) },
             status: 'pending', attempt_count: 1, created_at: new Date(), updated_at: new Date() } };
         return { rows: [stored], rowCount: 1 };
       }
@@ -40,7 +45,11 @@ describe('verified product identity from capture to email snapshot', () => {
       throw new Error(`Unexpected SQL-mock statement: ${sql.slice(0, 60)}`);
     });
     const result = await applyPlatformAvailability({ db: { query } as never, sessionId, turnId,
-      userMessage: 'Напишите мне на buyer@example.org', knownProductIds: productIds, priorMessages: [],
+      userMessage: 'Напишите мне на buyer@example.org', knownProductIds: productIds,
+      priorMessages: [{ id: sourceMessageId, sessionId, role: 'assistant', content: 'Две модели', createdAt: new Date().toISOString(),
+        metadata: { runtimeMode: 'openai_responses_saved_agent', catalogRevision: 'saved-v1',
+          knownProducts: { source_revision: 'saved-v1', product_ids: productIds },
+          productCards: productIds.map((id, index) => ({ id, name: names[index], sourceUrl: urls[index] })) } }],
       decision: { action: 'capture', continueRequest: false, consentGranted: true, consentQuote: 'Напишите мне',
         requestSummary: 'Check availability of these two models', productIds, preferredContact: 'message' } });
     expect(result.availabilityReceipt?.outcome).toBe('queued');
@@ -53,11 +62,14 @@ describe('verified product identity from capture to email snapshot', () => {
     expect(await processLeadOutboxItem({ item: { ...completion.outbox, status: 'sending', leaseToken: 'offline-lease' }, leads: leads as never,
       conversations: { getSession: async () => ({ id: sessionId, conversationNumber: 1, title: 'Offline fixture' }), listMessages: async () => [] } as never }))
       .toEqual({ ok: true });
-    const snapshot = stored!.outbox_row.request_snapshot as { productIds: string[]; body: string };
+    const snapshot = stored!.outbox_row.request_snapshot as { productIds: string[]; body: string; productReferences: unknown };
     expect(snapshot.productIds).toEqual(productIds);
+    expect(snapshot.productReferences).toEqual(productIds.map((productId, index) => ({ productId, status: 'saved_card',
+      name: names[index], sourceUrl: urls[index], sourceMessageId, catalogRevision: 'saved-v1' })));
     const wire = JSON.parse(snapshot.body);
     expect(wire.text).toContain('Исходный вопрос покупателя: Check availability of these two models');
-    expect(wire.text).toContain(`Товары заявки (ID каталога):\n- ${productIds[0]}\n- ${productIds[1]}`);
+    expect(wire.text).toContain(`- ${productIds[0]}\n  Название: ${names[0]}\n  Карточка: ${urls[0]}`);
+    expect(wire.text).toContain(`- ${productIds[1]}\n  Название: ${names[1]}\n  Карточка: ${urls[1]}`);
     expect(Object.keys(wire).sort()).toEqual(['from', 'subject', 'text', 'to']);
     expect(io.wire).toHaveBeenCalledTimes(1); expect(io.wire.mock.calls[0][1].body).toBe(snapshot.body);
     expect(io.blocked).not.toHaveBeenCalled();

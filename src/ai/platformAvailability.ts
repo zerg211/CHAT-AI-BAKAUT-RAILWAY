@@ -7,6 +7,7 @@ import { normalizeAvailabilityRequest } from '../shared/publicChatHistory.js';
 import { extractContact } from './contactExtraction.js';
 import { AgentAnswerRejectedError } from './agentAnswerRejected.js';
 import { availabilityTextLimit, availabilityTextWithinLimit } from '../shared/availabilityText.js';
+import { buildLeadProductReferences } from './leadProductReferences.js';
 
 const productIdPattern = /^[0-9a-f]{24}$/;
 
@@ -124,7 +125,8 @@ export async function applyPlatformAvailability(input: PlatformAvailabilityInput
     let alreadyQueued = Boolean(completion);
     if (!completion) {
       const payload = { sessionId: input.sessionId, clientLeadId: request.id, ...contact,
-        question: request.question, preferredContact: request.preferredContact, productIds: request.productIds };
+        question: request.question, preferredContact: request.preferredContact, productIds: request.productIds,
+        productReferences: buildLeadProductReferences({ messages: sessionMessages, requestId: request.id, productIds: request.productIds }) };
       completion = await leads.createClientLeadWithOutbox({ ...payload, clientRequestHash: availabilityLeadHash(payload),
         skipPendingDraft: true, purpose: 'availability', source: 'platform_chat' });
       if (!completion) {

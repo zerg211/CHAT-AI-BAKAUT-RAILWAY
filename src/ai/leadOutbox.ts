@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { diagnosticSpan, diagnosticEvent, diagnosticError, runWithDiagnostics, safeErrorFields } from '../observability/diagnostics.js';
 import { ConversationRepository, LeadRepository, type LeadOutboxItem } from '../db/repositories.js';
 import { prepareLeadEmailRequest, sendPreparedLeadEmail } from '../email/httpEmail.js';
+import { normalizeLeadProductReferences, type LeadProductReference } from './leadProductReferences.js';
 
 function nextAttemptAt(attemptCount: number) {
   const delayMinutes = Math.min(60, Math.max(1, 2 ** Math.max(0, attemptCount - 1)));
@@ -13,6 +14,7 @@ function emailHandoffContext(payload: Record<string, unknown>): {
   purpose: string | null;
   buyerQuestion: string | null;
   productIds?: string[];
+  productReferences?: LeadProductReference[];
 } | null {
   const productIds = payload.productIds;
   if (productIds !== undefined && (!Array.isArray(productIds) || new Set(productIds).size !== productIds.length ||
@@ -26,7 +28,10 @@ function emailHandoffContext(payload: Record<string, unknown>): {
   const buyerQuestion = typeof payload.question === 'string' && payload.question.trim()
     ? payload.question.trim()
     : null;
-  return { preferredContact, purpose, buyerQuestion, ...(productIds !== undefined ? { productIds: productIds as string[] } : {}) };
+  return { preferredContact, purpose, buyerQuestion, ...(productIds !== undefined ? { productIds: productIds as string[] } : {}),
+    ...(payload.productReferences !== undefined ? {
+      productReferences: normalizeLeadProductReferences(payload.productReferences, (productIds as string[] | undefined) ?? [])
+    } : {}) };
 }
 
 export async function processLeadOutboxItem(input: {

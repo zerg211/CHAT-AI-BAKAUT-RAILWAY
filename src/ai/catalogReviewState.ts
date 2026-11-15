@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { z } from 'zod';
 import type { ExactMentionPrefetch } from './fullCatalogClient.js';
 import type { Message } from '../shared/types.js';
-import type { SearchReceipt } from './controlledWebSearch.js';
+import type { ResearchReceipt } from './controlledWebSearch.js';
 import { outputFormat } from './platformAgentContract.js';
 import { normalizeCatalogReview } from './catalogReviewOutput.js';
 
@@ -39,7 +39,7 @@ export function reviewContext(ids: string[], prefetch: ExactMentionPrefetch, mes
     candidates: Object.fromEntries(ids.map(id => [id, { name: String(cards.get(id)!.name), card_digest: reviewDigest(cards.get(id)) }])) };
 }
 
-export function reviewSources(receipts: SearchReceipt[]): CatalogReviewSources {
+export function reviewSources(receipts: ResearchReceipt[]): CatalogReviewSources {
   if (new Set(receipts.map(receipt => receipt.responseId)).size !== receipts.length) throw new Error('Duplicate review source identity');
   return receipts.map(receipt => ({ response_id: receipt.responseId, digest: reviewDigest(receipt) }));
 }
