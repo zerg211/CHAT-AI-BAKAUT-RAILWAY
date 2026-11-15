@@ -7,7 +7,7 @@
     "dev": "concurrently -n api,web -c blue,green \"npm run dev:server\" \"npm run dev:web\"",
     "dev:server": "npm run migrate && tsx watch src/server.ts",
     "dev:web": "vite --host 0.0.0.0",
-    "build": "vite build && tsc -p tsconfig.server.json",
+    "build": "npm run build:ui-sdk-button && vite build && tsc -p tsconfig.server.json",
     "start": "node dist/server/server.js",
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.server.json",
     "test": "vitest run",
@@ -29,12 +29,15 @@
     "test:acceptance:host": "tsx evals/acceptance/app.ts",
     "test:acceptance:backend": "node evals/acceptance/backend.cjs",
     "test:acceptance:live": "node evals/acceptance/runner.cjs --run",
-    "test:acceptance:release": "node evals/acceptance/runner.cjs --release"
+    "test:acceptance:release": "node evals/acceptance/runner.cjs --release",
+    "build:ui-sdk-button": "esbuild src/client/ui-sdk-button.ts --bundle --format=iife --platform=browser --target=es2020 --minify --outfile=src/client/public/assets/ui-sdk-button.js"
   },
   "dependencies": {
     "@fastify/cors": "^11.1.0",
     "@fastify/rate-limit": "^10.3.0",
     "@fastify/static": "^10.1.2",
+    "@ui-sdk/core": "0.1.0-beta.3",
+    "@ui-sdk/web": "0.1.0-beta.3",
     "cheerio": "^1.1.2",
     "csv-parse": "^7.0.3",
     "dotenv": "^17.2.3",
@@ -55,6 +58,7 @@
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^5.1.1",
     "concurrently": "^9.2.4",
+    "esbuild": "0.28.1",
     "jsdom": "^29.1.1",
     "playwright": "^1.57.0",
     "tsx": "^4.23.0",

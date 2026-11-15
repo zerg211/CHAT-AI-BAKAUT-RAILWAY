@@ -64,7 +64,7 @@ describe('app', () => {
     expect(response.body).toContain('Подбор • сравнение • вопросы');
     expect(response.body).toContain('right:32px');
     expect(response.body).toContain('width:320px;height:128px');
-    expect(response.body).toContain('width:min(205px,calc(100vw - 24px))');
+    expect(response.body).toContain('width:min(224px,calc(100vw - 24px))');
     expect(response.body).toContain('bottom:calc(80px + env(safe-area-inset-bottom,0px))');
     expect(response.body).toContain('trimTrailingSlashes(data.chatSrc');
     expect(response.body).toContain('while (text.endsWith');
