@@ -17,6 +17,15 @@ describe('lead outbox worker', () => {
     prepareLeadEmailRequest.mockReturnValue(snapshot);
   });
 
+  it.each([null, ['not-a-catalog-id'], ['a'.repeat(24), 'a'.repeat(24)]])('quarantines a malformed new product scope before preparation: %j', async productIds => {
+    const markLeadOutboxFailed = vi.fn(async () => ({ id: 'outbox' }));
+    const result = await processLeadOutboxItem({ conversations: {} as never, leads: { markLeadOutboxFailed } as never,
+      item: { id: 'outbox', leadId: 'lead', sessionId: 'session', turnId: null, status: 'sending', attemptCount: 1,
+        leaseToken: 'owner', payload: { productIds } } as never });
+    expect(result).toMatchObject({ ok: false, dead: true, error: 'reconciliation_required:invalid_product_scope' });
+    expect(prepareLeadEmailRequest).not.toHaveBeenCalled(); expect(sendLeadEmail).not.toHaveBeenCalled();
+  });
+
   it('preserves pending draft context from a public form through email delivery', async () => {
     sendLeadEmail.mockResolvedValue({ ok: true });
     const conversations = {

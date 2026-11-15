@@ -5,6 +5,7 @@ import { z } from 'zod';
 import { ConversationRepository, LeadRepository } from '../db/repositories.js';
 import { pool } from '../db/pool.js';
 import { latestAvailabilityRequest, durableAvailabilityLead } from '../ai/platformAvailability.js';
+import { availabilityTextLimit } from '../shared/availabilityText.js';
 
 const leadSchema = z.object({
   sessionId: z.string().uuid(),
@@ -14,18 +15,19 @@ const leadSchema = z.object({
   preferredContact: z.enum(['message', 'call']).optional(),
   phone: z.string().trim().min(5).max(40).optional(),
   email: z.string().trim().max(254).email().optional(),
-  question: z.string().trim().min(1).max(3000).optional()
+  question: z.string().trim().min(1).max(availabilityTextLimit).optional()
 }).refine((value) => value.phone || value.email, {
   message: 'phone or email is required'
 }).strict();
 
-function requestHash(input: z.infer<typeof leadSchema>) {
+function requestHash(input: z.infer<typeof leadSchema>, productIds?: string[]) {
   return createHash('sha256').update(JSON.stringify({
     name: input.name,
     preferredContact: input.preferredContact ?? null,
     phone: input.phone ?? null,
     email: input.email ?? null,
-    question: input.question ?? null
+    question: input.question ?? null,
+    ...(productIds?.length ? { productIds } : {})
   })).digest('hex');
 }
 
@@ -59,6 +61,7 @@ export async function registerLeadRoutes(app: FastifyInstance) {
     const parsed = leadSchema.safeParse(request.body ?? {});
     if (!parsed.success) return reply.code(400).send({ error: 'Invalid lead request' });
     let input = parsed.data;
+    let productIds: string[] | undefined;
     reply.header('cache-control', 'no-store');
     reply.header('vary', 'x-bakaut-visitor-id');
     const capabilityHeader = request.headers['x-bakaut-visitor-id'];
@@ -111,13 +114,15 @@ export async function registerLeadRoutes(app: FastifyInstance) {
           return reply.code(409).send({ error: 'availability_request_changed' });
         }
         input = { ...input, question: currentRequest.question, preferredContact: input.preferredContact ?? currentRequest.preferredContact };
+        productIds = [...currentRequest.productIds];
       }
       let completion = input.availabilityRequestId
         ? await captureLeads.findClientLeadWithOutbox(input.sessionId, input.clientLeadId) : null;
       let alreadyQueued = Boolean(completion);
       completion ??= await captureLeads.createClientLeadWithOutbox({
         ...input,
-        clientRequestHash: requestHash(input),
+        clientRequestHash: requestHash(input, productIds),
+        ...(productIds ? { productIds } : {}),
         ...(input.availabilityRequestId ? { skipPendingDraft: true, purpose: 'availability' as const } : {})
       });
       if (!completion && input.availabilityRequestId) {

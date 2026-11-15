@@ -12,7 +12,11 @@ function emailHandoffContext(payload: Record<string, unknown>): {
   preferredContact: 'message' | 'call' | null;
   purpose: string | null;
   buyerQuestion: string | null;
-} {
+  productIds?: string[];
+} | null {
+  const productIds = payload.productIds;
+  if (productIds !== undefined && (!Array.isArray(productIds) || new Set(productIds).size !== productIds.length ||
+      productIds.some(id => typeof id !== 'string' || id.length !== 24 || [...id].some(char => !'0123456789abcdef'.includes(char))))) return null;
   const preferredContact = payload.preferredContact === 'message' || payload.preferredContact === 'call'
     ? payload.preferredContact
     : null;
@@ -22,7 +26,7 @@ function emailHandoffContext(payload: Record<string, unknown>): {
   const buyerQuestion = typeof payload.question === 'string' && payload.question.trim()
     ? payload.question.trim()
     : null;
-  return { preferredContact, purpose, buyerQuestion };
+  return { preferredContact, purpose, buyerQuestion, ...(productIds !== undefined ? { productIds: productIds as string[] } : {}) };
 }
 
 export async function processLeadOutboxItem(input: {
@@ -55,6 +59,8 @@ export async function processLeadOutboxItem(input: {
   }
   let snapshot = input.item.requestSnapshot;
   if (!snapshot) {
+  const handoff = emailHandoffContext(input.item.payload);
+  if (!handoff) return fail('reconciliation_required:invalid_product_scope', true);
   const lead = await input.leads.getLead(input.item.leadId);
   const session = await input.conversations.getSession(input.item.sessionId);
   if (!lead || !session) {
@@ -65,7 +71,7 @@ export async function processLeadOutboxItem(input: {
   const prepared = prepareLeadEmailRequest(lead, {
     session,
     messages,
-    handoff: emailHandoffContext(input.item.payload)
+    handoff
   });
   if (!('version' in prepared)) return fail(prepared.error ?? 'email_preparation_failed', true);
   snapshot = prepared;

@@ -350,7 +350,7 @@ describe('platform availability local actions', () => {
   });
   const input = () => ({ db: { query: vi.fn(async () => ({ rows: [] })) } as unknown as import('pg').PoolClient,
     sessionId, turnId, userMessage: 'Есть ли DPU 6555?', decision,
-    priorMessages: [] });
+    priorMessages: [], knownProductIds: [productId] });
   it('offers a voluntary collapsed form without creating a lead', async () => {
     const result = await applyPlatformAvailability(input());
     expect(result).toMatchObject({ leadRequested: false, leadCreated: false,
@@ -515,6 +515,54 @@ describe('availability request binding in the form', () => {
     transactionQuery = vi.fn(async (sql: string) => ({ rows: sql.includes('FOR UPDATE') ? [{ id: sessionId }] : [] }));
     release = vi.fn();
     vi.spyOn(pool, 'connect').mockResolvedValue({ query: transactionQuery, release } as never);
+  });
+  it('roundtrips a3000-code-point scope and meaningful tail into the authenticated form capture', async () => {
+    const tail = ' DO NOT CALL; EMAIL ONLY';
+    const question = 'A'.repeat(3000 - 600 - Array.from(tail).length) + '🛠'.repeat(600) + tail;
+    const offered = await applyPlatformAvailability({ db: { query: transactionQuery } as never, sessionId, turnId: clientLeadId,
+      userMessage: 'Уточните', priorMessages: [], knownProductIds: [productId],
+      decision: { ...decision, requestSummary: question, preferredContact: 'message' } });
+    const stored = JSON.parse(JSON.stringify(offered.metadata));
+    const restored = normalizePublicHistoryMessages([{ role: 'assistant', content: 'Можно уточнить наличие.',
+      availabilityRequest: stored.availabilityRequest, availabilityReceipt: stored.availabilityReceipt }])[0];
+    expect(restored.availabilityRequest?.question).toBe(question);
+    repoMocks.listMessages.mockResolvedValue([{ ...priorMessages[0], metadata: { availabilityRequest: restored.availabilityRequest } }]);
+    const app = await buildTestApp();
+    try {
+      const response = await app.inject({ method: 'POST', url: '/api/leads', headers: capabilityHeaders,
+        payload: { ...validLeadPayload(), availabilityRequestId: clientLeadId, question } });
+      expect(response.statusCode).toBe(200);
+      expect(response.json().availabilityReceipt?.outcome).toBe('queued');
+      expect(repoMocks.createClientLeadWithOutbox).toHaveBeenCalledWith(expect.objectContaining({
+        question, preferredContact: 'message', clientLeadId }));
+      expect(repoMocks.createClientLeadWithOutbox.mock.calls[0][0].question.endsWith(tail)).toBe(true);
+    } finally { await app.close(); }
+  });
+  it('takes multiple product IDs only from the server scope for form capture', async () => {
+    const productIds = [productId, 'b'.repeat(24)];
+    repoMocks.listMessages.mockResolvedValue([{ ...priorMessages[0], metadata: {
+      availabilityRequest: { ...scope, question: 'Check availability of these two models', productIds } } }]);
+    const app = await buildTestApp();
+    try {
+      const response = await app.inject({ method: 'POST', url: '/api/leads', headers: capabilityHeaders,
+        payload: { ...validLeadPayload(), availabilityRequestId: clientLeadId, question: 'Untrusted free text' } });
+      expect(response.statusCode).toBe(200);
+      expect(repoMocks.createClientLeadWithOutbox).toHaveBeenCalledWith(expect.objectContaining({
+        productIds, question: 'Check availability of these two models', purpose: 'availability' }));
+    } finally { await app.close(); }
+  });
+  it('rejects client product-ID injection and malformed stored scopes without creating a lead', async () => {
+    const app = await buildTestApp();
+    try {
+      const injected = await app.inject({ method: 'POST', url: '/api/leads', headers: capabilityHeaders,
+        payload: { ...validLeadPayload(), availabilityRequestId: clientLeadId, productIds: ['b'.repeat(24)] } });
+      expect(injected.statusCode).toBe(400);
+      repoMocks.listMessages.mockResolvedValue([{ ...priorMessages[0], metadata: {
+        availabilityRequest: { ...scope, productIds: ['not-a-catalog-id'] } } }]);
+      const invalid = await app.inject({ method: 'POST', url: '/api/leads', headers: capabilityHeaders,
+        payload: { ...validLeadPayload(), availabilityRequestId: clientLeadId } });
+      expect(invalid.statusCode).toBe(409); expect(repoMocks.createClientLeadWithOutbox).not.toHaveBeenCalled();
+    } finally { await app.close(); }
   });
   it('uses server-stored scope and the same request ID for the form', async () => {
     const app = await buildTestApp();

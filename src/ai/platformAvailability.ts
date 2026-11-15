@@ -5,24 +5,35 @@ import { LeadRepository } from '../db/repositories.js';
 import type { AvailabilityReceipt, AvailabilityRequest, Message } from '../shared/types.js';
 import { normalizeAvailabilityRequest } from '../shared/publicChatHistory.js';
 import { extractContact } from './contactExtraction.js';
+import { AgentAnswerRejectedError } from './agentAnswerRejected.js';
+import { availabilityTextLimit, availabilityTextWithinLimit } from '../shared/availabilityText.js';
+
+const productIdPattern = /^[0-9a-f]{24}$/;
 
 export const availabilityOutputSchema = {
   type: ['object', 'null'], additionalProperties: false,
   properties: {
     action: { type: 'string', enum: ['none', 'offer', 'request_contact', 'capture', 'decline'] },
     continueRequest: { type: 'boolean' }, consentGranted: { type: 'boolean' },
-    consentQuote: { type: ['string', 'null'] }, requestSummary: { type: 'string' },
-    productIds: { type: 'array', items: { type: 'string' } },
+    consentQuote: { type: ['string', 'null'], maxLength: availabilityTextLimit }, requestSummary: { type: 'string', maxLength: availabilityTextLimit },
+    productIds: { type: 'array', items: { type: 'string', pattern: productIdPattern.source } },
     preferredContact: { type: ['string', 'null'], enum: ['message', 'call', null] }
   }, required: ['action', 'continueRequest', 'consentGranted', 'consentQuote', 'requestSummary', 'productIds', 'preferredContact']
 } as const;
 
 const decisionSchema = z.object({
   action: z.enum(['none', 'offer', 'request_contact', 'capture', 'decline']),
-  continueRequest: z.boolean(), consentGranted: z.boolean(), consentQuote: z.string().max(3000).nullable(),
-  requestSummary: z.string().max(3000), productIds: z.array(z.string().regex(/^[0-9a-f]{24}$/)),
+  continueRequest: z.boolean(), consentGranted: z.boolean(), consentQuote: z.string().max(availabilityTextLimit).nullable(),
+  requestSummary: z.string().max(availabilityTextLimit), productIds: z.array(z.string().regex(productIdPattern)),
   preferredContact: z.enum(['message', 'call']).nullable()
 }).strict();
+
+export class AvailabilityDecisionRejectedError extends AgentAnswerRejectedError {
+  constructor(readonly reason: 'invalid_shape' | 'empty_scope' | 'unknown_product' | 'invalid_request_id' | 'scope_too_long') {
+    super(`Availability decision rejected: ${reason}`);
+    this.name = 'AvailabilityDecisionRejectedError';
+  }
+}
 
 export function latestAvailabilityRequest(messages: readonly Pick<Message, 'role' | 'metadata'>[]): AvailabilityRequest | undefined {
   for (let i = messages.length - 1; i >= 0; i--) {
@@ -33,11 +44,12 @@ export function latestAvailabilityRequest(messages: readonly Pick<Message, 'role
 }
 
 export function availabilityLeadHash(input: {
-  name?: string; phone?: string; email?: string; preferredContact?: 'message' | 'call'; question?: string;
+  name?: string; phone?: string; email?: string; preferredContact?: 'message' | 'call'; question?: string; productIds?: string[];
 }) {
   return createHash('sha256').update(JSON.stringify({ name: input.name,
     preferredContact: input.preferredContact ?? null, phone: input.phone ?? null,
-    email: input.email ?? null, question: input.question ?? null })).digest('hex');
+    email: input.email ?? null, question: input.question ?? null,
+    ...(input.productIds?.length ? { productIds: input.productIds } : {}) })).digest('hex');
 }
 
 export function durableAvailabilityLead(completion: Awaited<ReturnType<LeadRepository['createClientLeadWithOutbox']>>) {
@@ -53,7 +65,9 @@ function safeScope(summary: string, userMessages: string[]) {
   }
   text = text.replace(/\+?\d[\d\s().-]{7,}\d/g,
     candidate => extractContact(candidate).phone ? '[контакт скрыт]' : candidate);
-  return text.replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi, '[контакт скрыт]').trim().slice(0, 3000);
+  text = text.replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi, '[контакт скрыт]').trim();
+  if (!availabilityTextWithinLimit(text)) throw new AvailabilityDecisionRejectedError('scope_too_long');
+  return text;
 }
 
 export interface PlatformAvailabilityInput {
@@ -65,22 +79,26 @@ export async function applyPlatformAvailability(input: PlatformAvailabilityInput
   leadRequested: boolean; leadCreated: boolean;
   availabilityRequest?: AvailabilityRequest; availabilityReceipt?: AvailabilityReceipt; metadata: Record<string, unknown>;
 }> {
-  const parsed = decisionSchema.safeParse(input.decision);
   const inactive = { leadRequested: false, leadCreated: false, metadata: {} };
-  if (!parsed.success || parsed.data.action === 'none') return inactive;
+  if (input.decision == null) return inactive;
+  const parsed = decisionSchema.safeParse(input.decision);
+  if (!parsed.success) throw new AvailabilityDecisionRejectedError('invalid_shape');
+  if (parsed.data.action === 'none') return inactive;
   const decision = parsed.data;
   const sessionMessages = input.priorMessages.filter(message => message.sessionId === input.sessionId);
   const previous = latestAvailabilityRequest(sessionMessages);
   const continuing = decision.continueRequest && previous;
   const question = continuing ? previous.question : safeScope(decision.requestSummary,
     [...sessionMessages.filter(message => message.role === 'user').map(message => message.content), input.userMessage]);
-  if (!question) return inactive;
+  if (!question) throw new AvailabilityDecisionRejectedError('empty_scope');
   const productIds = continuing ? previous.productIds : [...new Set(decision.productIds)];
-  if (!continuing && input.knownProductIds && productIds.some(id => !input.knownProductIds!.includes(id))) return inactive;
+  if (!continuing && productIds.some(id => !input.knownProductIds?.includes(id))) {
+    throw new AvailabilityDecisionRejectedError('unknown_product');
+  }
   let request: AvailabilityRequest = continuing ? { ...previous } : {
     id: input.turnId, state: 'offered', question, productIds
   };
-  if (!z.string().uuid().safeParse(request.id).success) return inactive;
+  if (!z.string().uuid().safeParse(request.id).success) throw new AvailabilityDecisionRejectedError('invalid_request_id');
   if (decision.preferredContact) request.preferredContact = decision.preferredContact;
   const result = (outcome: AvailabilityReceipt['outcome'], state: AvailabilityRequest['state'], leadRequested = false, leadCreated = false) => {
     request = { ...request, state };
@@ -106,7 +124,7 @@ export async function applyPlatformAvailability(input: PlatformAvailabilityInput
     let alreadyQueued = Boolean(completion);
     if (!completion) {
       const payload = { sessionId: input.sessionId, clientLeadId: request.id, ...contact,
-        question: request.question, preferredContact: request.preferredContact };
+        question: request.question, preferredContact: request.preferredContact, productIds: request.productIds };
       completion = await leads.createClientLeadWithOutbox({ ...payload, clientRequestHash: availabilityLeadHash(payload),
         skipPendingDraft: true, purpose: 'availability', source: 'platform_chat' });
       if (!completion) {

@@ -1,4 +1,5 @@
 import type { AvailabilityReceipt, AvailabilityRequest, CardDisplayOptions, ProductCard } from './types.js';
+import { availabilityTextWithinLimit } from './availabilityText.js';
 
 export const PUBLIC_HISTORY_MAX_RESPONSE_BYTES = 8_000_000;
 const MAX_CARD_ID = 200;
@@ -30,7 +31,7 @@ export function normalizeAvailabilityRequest(value: unknown): AvailabilityReques
   const source = value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null;
   if (!source || typeof source.id !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(source.id) ||
       !['offered', 'contact_requested', 'queued', 'declined', 'failed'].includes(String(source.state)) ||
-      typeof source.question !== 'string' || !source.question.trim() || source.question.length > 3000 ||
+      typeof source.question !== 'string' || !source.question.trim() || !availabilityTextWithinLimit(source.question) ||
       !Array.isArray(source.productIds) ||
       source.productIds.some(id => typeof id !== 'string' || !/^[0-9a-f]{24}$/.test(id)) ||
       new Set(source.productIds).size !== source.productIds.length) return undefined;

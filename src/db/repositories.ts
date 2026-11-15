@@ -4558,6 +4558,7 @@ export class LeadRepository {
     skipPendingDraft?: boolean;
     purpose?: 'availability';
     source?: 'lead_form' | 'platform_chat';
+    productIds?: string[];
   }) {
     const result = await this.db.query(
       `WITH active_session AS MATERIALIZED (
@@ -4614,7 +4615,8 @@ export class LeadRepository {
              'purpose', coalesce($10::text, draft.purpose),
              'question', coalesce(draft.buyer_question, lead.question),
              'preferredContact', coalesce($8::text, draft.preferred_contact),
-             'source', $11::text
+             'source', $11::text,
+             'productIds', $12::jsonb
            )),
            'pending'
          FROM created_lead lead
@@ -4685,7 +4687,8 @@ export class LeadRepository {
         input.preferredContact ?? null,
         input.skipPendingDraft ?? false,
         input.purpose ?? null,
-        input.source ?? 'lead_form'
+        input.source ?? 'lead_form',
+        input.productIds ? JSON.stringify(input.productIds) : null
       ]
     );
     const row = result.rows[0];
