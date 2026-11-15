@@ -111,15 +111,26 @@ describe('sendLeadEmail', () => {
     const question = style === 'ascii' ? 'Context '.repeat(140) + tail
       : 'A'.repeat(1800) + '🛠'.repeat(600) + '\nDO NOT CALL; EMAIL ONLY; ' + tail;
     const historyCanary = 'PRIVATE_UNRELATED_HISTORY_CANARY';
+    const productIds = ['a'.repeat(24), 'b'.repeat(24)];
+    const productReferences: import('../src/ai/leadProductReferences.js').LeadProductReference[] = [
+      { productId: productIds[0], status: 'saved_card', name: 'Историческая модель 🛠', sourceUrl: 'https://bakautprof.ru/catalog/vibroplity/saved/',
+        sourceMessageId: '00000000-0000-4000-8000-000000000017', catalogRevision: 'saved-v1' },
+      { productId: productIds[1], status: 'unavailable', reason: 'missing_card' }
+    ];
     const { prepareLeadEmailRequest } = await import('../src/email/httpEmail.js');
     const snapshot = prepareLeadEmailRequest(lead({ question }), { session: session(),
       messages: [...messages(), { ...messages()[0], content: 'Old context '.repeat(100) + historyCanary }],
-      handoff: { buyerQuestion: question, preferredContact: 'message', purpose: 'Уточнение задачи' } });
+      handoff: { buyerQuestion: question, preferredContact: 'message', purpose: 'Уточнение задачи', productIds, productReferences } });
     expect('version' in snapshot).toBe(true); if (!('version' in snapshot)) throw new Error('Missing local snapshot');
     const wire = JSON.parse(snapshot.body);
     expect(wire.text).toContain(`Исходный вопрос покупателя: ${question}`);
     expect(wire.text).toContain(tail); expect(wire.text).not.toContain(historyCanary);
     expect(wire.text).toContain('SUMMARY:'); expect(wire.text).toContain('Предпочтительный способ связи: написать');
+    expect(wire.text).toContain(`- ${productIds[0]}\n  Название: Историческая модель 🛠\n  Карточка: https://bakautprof.ru/catalog/vibroplity/saved/`);
+    expect(wire.text).toContain(`- ${productIds[1]}\n  Название: нет достоверного названия\n  Карточка: нет достоверной ссылки`);
+    expect(snapshot.productReferences).toEqual(productReferences);
+    productReferences[0] = { productId: productIds[0], status: 'unavailable', reason: 'missing_card' };
+    expect(snapshot.productReferences?.[0]).toMatchObject({ status: 'saved_card', name: 'Историческая модель 🛠' });
     if (snapshot.provider === 'resend') expect(Object.keys(wire).sort()).toEqual(['from', 'subject', 'text', 'to']);
     expect(blocked).not.toHaveBeenCalled();
   });
@@ -139,6 +150,9 @@ describe('sendLeadEmail', () => {
     const { processLeadOutboxItem } = await import('../src/ai/leadOutbox.js');
     const question = 'A'.repeat(1800) + '🛠'.repeat(600) + '\nCRITICAL: NOT FOR INDOOR USE; EXHAUST MUST STAY OUTSIDE; EMAIL ONLY';
     const productIds = ['a'.repeat(24), 'b'.repeat(24)];
+    const productReferences = productIds.map((productId, index) => ({ productId, status: 'saved_card', name: `Историческая модель 🛠 ${index}`,
+      sourceUrl: index === 0 ? 'https://bakautprof.ru/catalog/vibroplity/saved/' : 'javascript:unsafe',
+      sourceMessageId: '00000000-0000-4000-8000-000000000017', catalogRevision: 'saved-v1' }));
     let saved: import('../src/email/httpEmail.js').LeadEmailRequestSnapshot | undefined;
     const conversations = { getSession: vi.fn(async () => session()), listMessages: vi.fn(async () => messages()) };
     const leads = {
@@ -149,7 +163,7 @@ describe('sendLeadEmail', () => {
       markLeadOutboxFailed: vi.fn(async () => ({ id: 'outbox' })), markLeadOutboxSent: vi.fn(async () => ({ id: 'outbox' }))
     };
     const item = { id: 'outbox', leadId: 'lead-1', sessionId: 'session-1', turnId: 'turn-1', destination: 'lead_email',
-      payload: { question, productIds, purpose: 'availability', preferredContact: 'message' }, status: 'sending', attemptCount: 1, leaseToken: 'lease-1',
+      payload: { question, productIds, productReferences, purpose: 'availability', preferredContact: 'message' }, status: 'sending', attemptCount: 1, leaseToken: 'lease-1',
       createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
     const run = (current: unknown) => processLeadOutboxItem({ item: current as never, conversations: conversations as never, leads: leads as never });
     expect(await run(item)).toMatchObject({ ok: false, committed: true });
@@ -157,14 +171,18 @@ describe('sendLeadEmail', () => {
     const original = structuredClone(saved!);
     expect(original.productIds).toEqual(productIds);
     expect(JSON.parse(original.body).text).toContain(`Исходный вопрос покупателя: ${question}`);
-    expect(JSON.parse(original.body).text).toContain(`Товары заявки (ID каталога):\n- ${productIds[0]}\n- ${productIds[1]}`);
+    expect(original.productReferences).toEqual(productReferences.map((reference, index) => ({ ...reference, sourceUrl: index === 0 ? reference.sourceUrl : null })));
+    expect(JSON.parse(original.body).text).toContain(`- ${productIds[0]}\n  Название: Историческая модель 🛠 0\n  Карточка: https://bakautprof.ru/catalog/vibroplity/saved/`);
+    expect(JSON.parse(original.body).text).toContain(`- ${productIds[1]}\n  Название: Историческая модель 🛠 1\n  Карточка: нет достоверной ссылки`);
+    expect(original.body).not.toContain('javascript:');
     expect(Object.keys(JSON.parse(original.body)).sort()).toEqual(['from', 'subject', 'text', 'to']);
     expect(leads.prepareLeadOutboxDispatch.mock.invocationCallOrder[0]).toBeLessThan(fetchMock.mock.invocationCallOrder[0]);
     const { config } = await import('../src/config.js'); config.EMAIL_FROM = 'changed@example.org';
     leads.getLead.mockResolvedValue(lead({ question: 'Changed lead must not rebuild the snapshot' }));
     conversations.listMessages.mockResolvedValue([{ ...messages()[0], content: 'Changed history' }]);
     expect(await run({ ...item, attemptCount: 2, firstAttemptAt: new Date().toISOString(), leaseToken: 'lease-2',
-      requestSnapshot: structuredClone(original), payload: { question: 'Changed payload', productIds: ['not-a-catalog-id'] } })).toEqual({ ok: true });
+      requestSnapshot: structuredClone(original), payload: { question: 'Changed payload', productIds: ['not-a-catalog-id'],
+        productReferences: [{ ...productReferences[0], name: 'NEW catalog name' }] } })).toEqual({ ok: true });
     expect(saved).toEqual(original);
     expect(leads.getLead).toHaveBeenCalledTimes(1); expect(conversations.listMessages).toHaveBeenCalledTimes(1);
     expect(fetchMock).toHaveBeenCalledTimes(2);

@@ -1,4 +1,5 @@
 import { availabilityOutputSchema } from './platformAvailability.js';
+import { primaryDocumentIntentJsonSchema } from './primaryDocumentEvidence.js';
 
 export const outputFormat = { type: 'json_schema', schema: {
   type: 'object', additionalProperties: false,
@@ -12,7 +13,7 @@ export const outputFormat = { type: 'json_schema', schema: {
       rationale: { type: 'string' }
     }, required: ['verdict', 'publication', 'rationale'] },
     web_search_intent: { anyOf: [{ type: 'null' }, { type: 'object', additionalProperties: false,
-      properties: { query: { type: 'string' }, rationale: { type: 'string' } }, required: ['query', 'rationale'] }] },
+      properties: { query: { type: 'string' }, rationale: { type: 'string' } }, required: ['query', 'rationale'] }, primaryDocumentIntentJsonSchema] },
     selected: { type: 'array', items: { type: 'string' }, description: 'product_id товаров, подходящих по подтверждённым характеристикам.' },
     comparison_ids: { type: 'array', items: { type: 'string' }, description: 'product_id товаров, о которых идёт сравнение; само сравнение не подтверждает пригодность.' },
     recommendation_status: { type: 'string', enum: ['confirmed', 'not_confirmed', 'not_applicable'], description: 'Подтверждена ли пригодность каждого товара из selected требованиям покупателя.' },
@@ -56,7 +57,7 @@ const practicalAssessmentPolicy = `
 Предварительная оценка применимости и документальное подтверждение — разные вещи. Товар может выглядеть перспективным по обоснованному выводу, оставаясь uncertain с recommendation_status=not_confirmed, если решающее требование ещё не подтверждено. Эти поля описывают подтверждённость и не запрещают прогноз в тексте. В answer_review проверь: ответил ли ты на заданную работу и нагрузку, объяснил ли основания, назвал ли условия, которые действительно меняют вывод. Если вместо этого остались только сравнение моделей, отсутствие гарантии и предложение проверить самому, доработай ответ или продолжи поиск. Не выдумывай положительный прогноз ради этой проверки: отрицательный вывод и конкретная решающая неизвестная также допустимы.`;
 
 export function webIntentInstruction(enabled: boolean) { return enabled
-  ? '\nЕсли решающего факта нет в каталоге, верни web_search_intent с коротким query и rationale: сервер выполнит поиск. Иначе верни null. Не вызывай web_search_facts самостоятельно.'
+  ? '\nЕсли решающего факта нет в каталоге, верни web_search_intent с коротким query и rationale: сервер выполнит поиск. Для чтения выбранного первичного PDF верни в этом же поле {kind:"primary_document",url,page_indexes,rationale}: укажи точный URL и физические номера страниц с нуля. Сервер передаст весь исходный PDF; page_indexes задают фокус чтения, а не вырезку документа. Результат untrusted_primary_document_data сообщает доступность и границы локальной проверки; сам документ приходит отдельным файлом. При недоступности можно выбрать другой документ или источник. Иначе верни null. Не вызывай web_search_facts самостоятельно.'
   : '\nПоиск в сети недоступен. Верни web_search_intent=null и не утверждай, что поиск выполнен.'; }
 
 const pricePolicy = `

@@ -21,9 +21,32 @@ import { TurnExecutionInProgressError, type AgentManagerGenerateInput, type Agen
 import { guardCustomerOutput } from './agentManagerOutputGuard.js';
 import { ControlledWebSearchProvider } from './controlledWebSearchProvider.js';
 import { controlledWebSearchLedger } from './controlledWebSearchLedger.js';
-import { runControlledWebSearch, webStepKey, type SearchCheckpoint, type SearchReceipt } from './controlledWebSearch.js';
+import { runControlledWebSearch, webStepKey, type SearchCheckpoint, type SearchReceipt, type ResearchReceipt } from './controlledWebSearch.js';
 import { continueAfterWebSearch, type WebContinuationCheckpoint } from './controlledWebContinuation.js';
-import { readCatalogReviewState, type CatalogReviewState } from './catalogReviewState.js';
+import { readCatalogReviewState, reviewDigest, type CatalogReviewState } from './catalogReviewState.js';
+import { primaryDocumentIntentSchema, readPrimaryDocument, unavailablePrimaryDocument,
+  validatePrimaryDocumentReceipt, primaryDocumentBudget } from './primaryDocumentEvidence.js';
+
+const researchIntentSchema = z.union([
+  z.object({ query: z.string().trim().min(1).max(500), rationale: z.string().trim().min(1) }).strict(),
+  primaryDocumentIntentSchema
+]);
+const primaryDocumentCheckpointSchema = z.object({ kind: z.literal('controlled_primary_document'), version: z.literal(1),
+  sessionId: z.string().min(1), turnId: z.string().min(1), step: z.number().int().nonnegative().safe(),
+  intent: primaryDocumentIntentSchema, contextDigest: z.string().min(1), receipt: z.unknown() }).strict();
+
+function readResearchReceipts(value: unknown): ResearchReceipt[] {
+  const receipts = z.array(z.unknown()).parse(value);
+  if (receipts.some(receipt => receipt && typeof receipt === 'object' && 'kind' in receipt)) primaryDocumentBudget(receipts);
+  return receipts.map(receipt => {
+    if (receipt && typeof receipt === 'object' && 'kind' in receipt) return validatePrimaryDocumentReceipt(receipt);
+    return z.custom<SearchReceipt>().parse(receipt);
+  });
+}
+
+function usedSearch(receipts: ResearchReceipt[]) {
+  return receipts.some(receipt => !('kind' in receipt) && receipt.status === 'ok');
+}
 
 export function assertCompletedCustomerAnswer(review: unknown, answer: string, cards: ProductCard[]) {
   const parsed = z.object({ verdict: z.enum(['complete', 'intermediate', 'uncertain']),
@@ -282,7 +305,7 @@ export class PlatformAgentAssistant {
     needState: ChatResponsePayload['needState'], options: { history?: Message[]; prefetch?: ExactMentionPrefetch;
       message?: string; saved?: Record<string, unknown>; recovered?: boolean; repair?: CatalogAnswerRepair; reviewStep?: number;
       catalogReview?: CatalogReviewState;
-      research?: { step: number; receipts: SearchReceipt[] } }): Promise<ChatResponsePayload> {
+      research?: { step: number; receipts: ResearchReceipt[] } }): Promise<ChatResponsePayload> {
     const client = new ControlledResponsesClient(config.OPENAI_API_KEY!, config.OPENAI_PLATFORM_AGENT_ID!);
     let repair = options.repair;
     const phase = options.repair?.reason === 'category_price_review' || options.saved?.phase === 'catalog_price_recompose'
@@ -307,7 +330,7 @@ export class PlatformAgentAssistant {
           typeof saved.attempted !== 'boolean') throw new Error('Controlled checkpoint is invalid');
       plan = saved.plan as ControlledRequest;
       if (saved.research !== undefined) research = z.object({ step: z.number().int().nonnegative().safe(),
-        receipts: z.array(z.custom<SearchReceipt>()) }).parse(saved.research);
+        receipts: z.unknown().transform(readResearchReceipts) }).parse(saved.research);
       if (saved.phase === 'catalog_recompose' || saved.phase === 'catalog_price_recompose') repair = readCatalogRepair(saved.repair);
       if (repair && (plan.prefetch.source_revision !== repair.sourceRevision ||
         repair.correctedIds.some(id => !plan.prefetch.items.some(item => item.product_id === id)))) {
@@ -433,7 +456,7 @@ export class PlatformAgentAssistant {
       throw error;
     }
     return await this.saveResultOrRepair({ sessionId: input.sessionId, turnId: input.turnId!, ownerId,
-      result: { ...result, usedWebSearch: Boolean(result.usedWebSearch || research?.receipts.some(receipt => receipt.status === 'ok')) },
+      result: { ...result, usedWebSearch: Boolean(result.usedWebSearch || research && usedSearch(research.receipts)) },
       reservation, prior: [], needState, userMessage: input.userMessage, recovered,
       onDelta: input.onDelta, signal: finalSignal, repairAttempted: Boolean(repair), reviewStep, repair, research });
   }
@@ -468,16 +491,19 @@ export class PlatformAgentAssistant {
   }
 
   private async searchBeforeSave(input: Parameters<PlatformAgentAssistant['saveResult']>[0], intent: unknown,
-    savedPrefetch?: ExactMentionPrefetch, savedMode?: 'search' | 'unavailable', step = 0,
-    priorReceipts: SearchReceipt[] = []): Promise<ChatResponsePayload> {
+    savedPrefetch?: ExactMentionPrefetch, savedMode?: 'search' | 'unavailable' | 'primary_document', step = 0,
+    priorReceipts: ResearchReceipt[] = []): Promise<ChatResponsePayload> {
     for (;;) {
       input.signal?.throwIfAborted();
       await this.saveUsageAndCatalogReview(input);
       webStepKey('controlled_web_search', step);
       const enabled = Boolean(config.CONTROLLED_WEB_SEARCH_ENABLED && config.CONTROLLED_WEB_SEARCH_FEES_APPROVED);
-      const mode = savedMode ?? (enabled ? 'search' : 'unavailable');
+      const parsed = researchIntentSchema.parse(intent);
+      const isDocument = 'kind' in parsed;
+      const documentBudget = isDocument ? primaryDocumentBudget(priorReceipts) : undefined;
+      const mode = savedMode ?? (isDocument ? 'primary_document' : enabled ? 'search' : 'unavailable');
       if (!config.OPENAI_API_KEY || !config.OPENAI_PLATFORM_AGENT_ID || (mode === 'search' && !enabled)) throw new Error('Controlled web search is disabled');
-      const parsed = z.object({ query: z.string().trim().min(1).max(500), rationale: z.string().trim().min(1) }).strict().parse(intent);
+      if ((mode === 'primary_document') !== isDocument) throw new Error('Controlled research intent mode changed');
       if (mode === 'search' && !sameModel(input.result.model, 'gpt-6-luna')) throw new Error('Controlled web search model is not approved');
       const known = input.result.knownProducts;
       if (!known && Array.isArray(input.result.page?.items) && input.result.page.items.length) {
@@ -496,30 +522,69 @@ export class PlatformAgentAssistant {
       const rows = await this.conversations.listTurnCheckpoints(input.sessionId, input.turnId);
       const searchSaved = rows.find(row => row.checkpoint === webStepKey('controlled_web_search', step))?.payload as SearchCheckpoint | undefined;
       const continuationSaved = rows.find(row => row.checkpoint === webStepKey('controlled_web_continuation', step))?.payload as WebContinuationCheckpoint | undefined;
-      const search = mode === 'search' ? await (async () => {
+      const history = await this.conversations.listMessages(input.sessionId, null);
+      let receipt: ResearchReceipt;
+      let documentSaved = false;
+      if ('kind' in parsed) {
+        const responseId = `primary_doc_${reviewDigest({ sessionId: input.sessionId, turnId: input.turnId, step, intent: parsed })}`;
+        const discoveryResponseIds = priorReceipts.filter(previous => !('kind' in previous) &&
+          previous.sources.some(source => source.url === parsed.url)).map(previous => previous.responseId);
+        const documentInput = { responseId, intent: parsed, intentResponseId: input.result.turnId, discoveryResponseIds };
+        const contextDigest = reviewDigest({ version: 1, sessionId: input.sessionId, turnId: input.turnId, step,
+          message: input.userMessage ?? '', history, prefetch, priorReceipts, classificationIds: input.repair?.correctedIds,
+          catalogReview: input.result.catalogReview, intentResponseId: input.result.turnId });
+        const savedDocument = rows.find(row => row.checkpoint === webStepKey('controlled_primary_document', step))?.payload;
+        if (!savedDocument && continuationSaved) throw new Error('Saved primary document receipt is missing');
+        if (savedDocument) {
+          const checkpoint = primaryDocumentCheckpointSchema.parse(savedDocument);
+          if (checkpoint.sessionId !== input.sessionId || checkpoint.turnId !== input.turnId || checkpoint.step !== step ||
+              checkpoint.contextDigest !== contextDigest || reviewDigest(checkpoint.intent) !== reviewDigest(parsed)) {
+            throw new Error('Saved primary document context changed');
+          }
+          primaryDocumentBudget([...priorReceipts, checkpoint.receipt]);
+          receipt = validatePrimaryDocumentReceipt(checkpoint.receipt);
+          documentSaved = true;
+        } else {
+          receipt = validatePrimaryDocumentReceipt(enabled
+            ? documentBudget && documentBudget.remainingFiles > 0 && documentBudget.remainingBytes > 0
+              ? await readPrimaryDocument({ ...documentInput, signal: input.signal }, { maxBytes: Math.min(8 * 1024 * 1024, documentBudget.remainingBytes) })
+              : unavailablePrimaryDocument(documentInput, 'aggregate_limit')
+            : unavailablePrimaryDocument(documentInput, 'Primary document acquisition is disabled'));
+        }
+        primaryDocumentBudget([...priorReceipts, receipt]);
+        if (receipt.responseId !== responseId || reviewDigest(receipt.intent) !== reviewDigest(parsed) ||
+            receipt.source.intent_response_id !== documentInput.intentResponseId ||
+            reviewDigest(receipt.source.discovery_response_ids) !== reviewDigest(discoveryResponseIds)) {
+          throw new Error('Primary document receipt ownership changed');
+        }
+        if (!documentSaved) await this.conversations.upsertTurnCheckpoint({ sessionId: input.sessionId, turnId: input.turnId,
+          executionOwner: input.ownerId, checkpoint: webStepKey('controlled_primary_document', step), status: 'succeeded',
+          payload: { kind: 'controlled_primary_document', version: 1, sessionId: input.sessionId, turnId: input.turnId,
+            step, intent: parsed, contextDigest, receipt } });
+      } else if (mode === 'search') {
         const provider = new ControlledWebSearchProvider(config.OPENAI_API_KEY!, input.result.model, 128_000);
         const ledger = controlledWebSearchLedger({ sessionId: input.sessionId, turnId: input.turnId,
           ownerId: input.ownerId, conversations: this.conversations });
-        return runControlledWebSearch({ sessionId: input.sessionId, turnId: input.turnId,
+        const search = await runControlledWebSearch({ sessionId: input.sessionId, turnId: input.turnId,
           query: parsed.query, model: input.result.model, reserveTokens: 128_512, step, signal: input.signal },
           { ...ledger, submit: provider.submit, read: provider.read }, searchSaved);
-      })() : { usedWebSearch: false, receipt: { status: 'unavailable' as const, responseId: 'local-web-unavailable',
+        receipt = search.receipt;
+      } else receipt = { status: 'unavailable', responseId: 'local-web-unavailable',
         model: input.result.model || 'unknown', usage: null, toolFees: null, monetaryCost: null,
-        costStatus: 'unknown' as const, sources: [], findings: '' } };
-      const history = await this.conversations.listMessages(input.sessionId, null);
+        costStatus: 'unknown', sources: [], findings: '' };
       const continued = await continueAfterWebSearch({ sessionId: input.sessionId, turnId: input.turnId, ownerId: input.ownerId,
         message: input.userMessage ?? '',
-        history, prefetch, receipt: search.receipt, priorReceipts, classificationIds: input.repair?.correctedIds,
+        history, prefetch, receipt, priorReceipts, classificationIds: input.repair?.correctedIds,
         catalogReview: input.result.catalogReview, step, signal: input.signal },
         { client: new ControlledResponsesClient(config.OPENAI_API_KEY, config.OPENAI_PLATFORM_AGENT_ID), conversations: this.conversations }, continuationSaved);
       const continuationAnswer = JSON.parse(continued.answer) as { web_search_intent?: unknown };
       const nextInput = { ...input, result: { ...continued,
-        usedWebSearch: search.usedWebSearch || priorReceipts.some(receipt => receipt.status === 'ok') },
-        reservation: null, recovered: Boolean(searchSaved || continuationSaved) || input.recovered,
-        research: { step: step + 1, receipts: [...priorReceipts, search.receipt] } };
+        usedWebSearch: Boolean(input.result.usedWebSearch || continued.usedWebSearch || usedSearch([...priorReceipts, receipt])) },
+        reservation: null, recovered: Boolean(searchSaved || continuationSaved || documentSaved) || input.recovered,
+        research: { step: step + 1, receipts: [...priorReceipts, receipt] } };
       if (continuationAnswer.web_search_intent == null) return this.saveResultOrRepair(nextInput);
       if (mode === 'unavailable') throw new Error('Agent requested a disabled search after receiving its unavailable status');
-      priorReceipts = [...priorReceipts, search.receipt];
+      priorReceipts = [...priorReceipts, receipt];
       input = nextInput;
       intent = continuationAnswer.web_search_intent;
       savedPrefetch = undefined;
@@ -532,7 +597,7 @@ export class PlatformAgentAssistant {
     signal?: AbortSignal, onDelta?: (text: string) => void | Promise<void>) {
     if (payload.kind !== 'controlled_web_stage' || !payload.result || typeof payload.result !== 'object' ||
         !payload.needState || typeof payload.needState !== 'object' || !Array.isArray(payload.prior) ||
-        (payload.mode !== 'search' && payload.mode !== 'unavailable') ||
+        (payload.mode !== 'search' && payload.mode !== 'unavailable' && payload.mode !== 'primary_document') ||
         typeof payload.userMessage !== 'string' || !payload.prefetch || typeof payload.prefetch !== 'object' ||
         !Array.isArray((payload.prefetch as Record<string, unknown>).items)) throw new Error('Controlled web stage checkpoint invalid');
     return this.searchBeforeSave({ sessionId, turnId, ownerId,
@@ -544,7 +609,7 @@ export class PlatformAgentAssistant {
       reviewStep: z.number().int().nonnegative().safe().parse(payload.reviewStep ?? 0), recovered: true, signal, onDelta }, payload.intent,
       payload.prefetch as ExactMentionPrefetch, payload.mode,
       payload.step === undefined ? 0 : z.number().int().nonnegative().safe().parse(payload.step),
-      payload.priorReceipts === undefined ? [] : z.array(z.custom<SearchReceipt>()).parse(payload.priorReceipts));
+      payload.priorReceipts === undefined ? [] : readResearchReceipts(payload.priorReceipts));
   }
 
   private async completed(sessionId: string, turnId: string): Promise<ChatResponsePayload | null> {
@@ -583,7 +648,7 @@ export class PlatformAgentAssistant {
     repairAttempted?: boolean;
     reviewStep?: number;
     repair?: CatalogAnswerRepair;
-    research?: { step: number; receipts: SearchReceipt[] };
+    research?: { step: number; receipts: ResearchReceipt[] };
   }): Promise<ChatResponsePayload> {
     const { result } = input;
     for (const usage of result.webSearchUsages ?? []) {

@@ -6,6 +6,7 @@ import { ConversationRepository, LeadRepository } from '../db/repositories.js';
 import { pool } from '../db/pool.js';
 import { latestAvailabilityRequest, durableAvailabilityLead } from '../ai/platformAvailability.js';
 import { availabilityTextLimit } from '../shared/availabilityText.js';
+import { buildLeadProductReferences, type LeadProductReference } from '../ai/leadProductReferences.js';
 
 const leadSchema = z.object({
   sessionId: z.string().uuid(),
@@ -62,6 +63,7 @@ export async function registerLeadRoutes(app: FastifyInstance) {
     if (!parsed.success) return reply.code(400).send({ error: 'Invalid lead request' });
     let input = parsed.data;
     let productIds: string[] | undefined;
+    let productReferences: LeadProductReference[] | undefined;
     reply.header('cache-control', 'no-store');
     reply.header('vary', 'x-bakaut-visitor-id');
     const capabilityHeader = request.headers['x-bakaut-visitor-id'];
@@ -108,13 +110,15 @@ export async function registerLeadRoutes(app: FastifyInstance) {
         }
         // Separate statement after the lock: a waiting form must see the
         // committed decline or scope change under READ COMMITTED.
-        const currentRequest = latestAvailabilityRequest(await captureConversations.listMessages(input.sessionId, null));
+        const messages = await captureConversations.listMessages(input.sessionId, null);
+        const currentRequest = latestAvailabilityRequest(messages);
         if (!currentRequest || currentRequest.id !== input.availabilityRequestId || currentRequest.id !== input.clientLeadId || currentRequest.state === 'declined') {
           await rollback();
           return reply.code(409).send({ error: 'availability_request_changed' });
         }
         input = { ...input, question: currentRequest.question, preferredContact: input.preferredContact ?? currentRequest.preferredContact };
         productIds = [...currentRequest.productIds];
+        productReferences = buildLeadProductReferences({ messages, requestId: currentRequest.id, productIds });
       }
       let completion = input.availabilityRequestId
         ? await captureLeads.findClientLeadWithOutbox(input.sessionId, input.clientLeadId) : null;
@@ -123,6 +127,7 @@ export async function registerLeadRoutes(app: FastifyInstance) {
         ...input,
         clientRequestHash: requestHash(input, productIds),
         ...(productIds ? { productIds } : {}),
+        ...(productReferences ? { productReferences } : {}),
         ...(input.availabilityRequestId ? { skipPendingDraft: true, purpose: 'availability' as const } : {})
       });
       if (!completion && input.availabilityRequestId) {

@@ -540,15 +540,26 @@ describe('availability request binding in the form', () => {
   });
   it('takes multiple product IDs only from the server scope for form capture', async () => {
     const productIds = [productId, 'b'.repeat(24)];
-    repoMocks.listMessages.mockResolvedValue([{ ...priorMessages[0], metadata: {
-      availabilityRequest: { ...scope, question: 'Check availability of these two models', productIds } } }]);
+    const sourceId = '00000000-0000-4000-8000-000000000017';
+    const source = { ...priorMessages[0], id: sourceId, createdAt: '2026-11-12T11:59:00Z', metadata: {
+      runtimeMode: 'openai_responses_saved_agent', catalogRevision: 'saved-v1',
+      knownProducts: { source_revision: 'saved-v1', product_ids: productIds },
+      productCards: [{ id: productIds[0], name: 'Историческая модель 🛠', sourceUrl: 'https://bakautprof.ru/catalog/vibroplity/saved/' }] } };
+    repoMocks.listMessages.mockResolvedValue([source, { ...priorMessages[0], metadata: {
+      availabilityRequest: { ...scope, question: 'Check availability of these two models', productIds } } },
+      { ...source, id: '00000000-0000-4000-8000-000000000018', createdAt: '2026-11-12T12:01:00Z',
+        metadata: { ...source.metadata, productCards: [{ id: productIds[0], name: 'Changed after offer', sourceUrl: 'https://bakautprof.ru/catalog/new/' }] } }]);
     const app = await buildTestApp();
     try {
       const response = await app.inject({ method: 'POST', url: '/api/leads', headers: capabilityHeaders,
         payload: { ...validLeadPayload(), availabilityRequestId: clientLeadId, question: 'Untrusted free text' } });
       expect(response.statusCode).toBe(200);
       expect(repoMocks.createClientLeadWithOutbox).toHaveBeenCalledWith(expect.objectContaining({
-        productIds, question: 'Check availability of these two models', purpose: 'availability' }));
+        productIds, question: 'Check availability of these two models', purpose: 'availability', productReferences: [
+          { productId: productIds[0], status: 'saved_card', name: 'Историческая модель 🛠', sourceUrl: 'https://bakautprof.ru/catalog/vibroplity/saved/',
+            sourceMessageId: sourceId, catalogRevision: 'saved-v1' },
+          { productId: productIds[1], status: 'unavailable', reason: 'missing_card' }
+        ] }));
     } finally { await app.close(); }
   });
   it('rejects client product-ID injection and malformed stored scopes without creating a lead', async () => {
@@ -557,6 +568,10 @@ describe('availability request binding in the form', () => {
       const injected = await app.inject({ method: 'POST', url: '/api/leads', headers: capabilityHeaders,
         payload: { ...validLeadPayload(), availabilityRequestId: clientLeadId, productIds: ['b'.repeat(24)] } });
       expect(injected.statusCode).toBe(400);
+      const injectedReference = await app.inject({ method: 'POST', url: '/api/leads', headers: capabilityHeaders,
+        payload: { ...validLeadPayload(), availabilityRequestId: clientLeadId,
+          productReferences: [{ productId, name: 'Client invention', sourceUrl: 'https://evil.example/' }] } });
+      expect(injectedReference.statusCode).toBe(400);
       repoMocks.listMessages.mockResolvedValue([{ ...priorMessages[0], metadata: {
         availabilityRequest: { ...scope, productIds: ['not-a-catalog-id'] } } }]);
       const invalid = await app.inject({ method: 'POST', url: '/api/leads', headers: capabilityHeaders,
