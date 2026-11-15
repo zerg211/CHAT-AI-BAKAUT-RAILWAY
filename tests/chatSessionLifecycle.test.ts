@@ -117,7 +117,10 @@ describe('session-scoped chat route capability', () => {
     expect((await app.inject({...request,headers:{'x-bakaut-visitor-id':visitorId}})).statusCode).toBe(200);
     expect(conversations.recordAnswerDelivery).toHaveBeenCalledWith(expect.objectContaining({sessionId,messageId,firstUsefulContentMs:1200}));
     conversations.recordAnswerDelivery.mockClear();
-    const invalid=await app.inject({...request,headers:{'x-bakaut-visitor-id':visitorId},payload:{firstUsefulContentMs:600001}});
+    expect((await app.inject({...request,headers:{'x-bakaut-visitor-id':visitorId},payload:{firstUsefulContentMs:651282}})).statusCode).toBe(200);
+    expect(conversations.recordAnswerDelivery).toHaveBeenCalledWith(expect.objectContaining({firstUsefulContentMs:651282}));
+    conversations.recordAnswerDelivery.mockClear();
+    const invalid=await app.inject({...request,headers:{'x-bakaut-visitor-id':visitorId},payload:{firstUsefulContentMs:Number.MAX_SAFE_INTEGER+1}});
     expect(invalid.statusCode).toBeGreaterThanOrEqual(400);
     expect(conversations.recordAnswerDelivery).not.toHaveBeenCalled();
   });

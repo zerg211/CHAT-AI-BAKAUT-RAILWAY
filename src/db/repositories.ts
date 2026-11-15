@@ -1,4 +1,4 @@
-import { diagnosticEvent } from '../observability/diagnostics.js';
+import { diagnosticEvent, diagnosticSpan } from '../observability/diagnostics.js';
 import { Query } from 'pg';
 import type { Pool, PoolClient, QueryResult, QueryResultRow } from 'pg';
 import { pool } from './pool.js';
@@ -1824,8 +1824,12 @@ export class ConversationRepository {
     errorCode?: string | null;
     errorMessage?: string | null;
   }) {
-    const result = await this.db.query(
-      `WITH active_session AS MATERIALIZED (
+    const kind = input.checkpoint.split(':')[0];
+    const stage = ['platform_agent_submission','platform_agent_usage','controlled_web_stage','controlled_web_search',
+      'controlled_web_continuation','catalog_review'].includes(kind) ? kind : 'other';
+    return diagnosticSpan('checkpoint.write', async () => {
+      const result = await this.db.query(
+        `WITH active_session AS MATERIALIZED (
          SELECT session.id
          FROM conversation_sessions AS session
          WHERE session.id = $1
@@ -1855,20 +1859,21 @@ export class ConversationRepository {
          RETURNING *
        )
        SELECT persisted_checkpoint.* FROM persisted_checkpoint`,
-      [
-        input.sessionId,
-        input.turnId,
-        input.checkpoint,
-        input.status,
-        input.artifactRef ?? null,
-        jsonbParam(input.payload ?? {}),
-        input.errorCode ?? null,
-        input.errorMessage ?? null,
-        input.executionOwner
-      ]
-    );
-    if (!result.rowCount) throw new TurnMutationFenceError(input.sessionId, input.turnId);
-    return result.rows[0];
+        [
+          input.sessionId,
+          input.turnId,
+          input.checkpoint,
+          input.status,
+          input.artifactRef ?? null,
+          jsonbParam(input.payload ?? {}),
+          input.errorCode ?? null,
+          input.errorMessage ?? null,
+          input.executionOwner
+        ]
+      );
+      if (!result.rowCount) throw new TurnMutationFenceError(input.sessionId, input.turnId);
+      return result.rows[0];
+    }, { sessionId: input.sessionId, turnId: input.turnId, stage });
   }
 
   async listTurnCheckpoints(sessionId: string, turnId: string) {

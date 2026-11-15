@@ -1255,6 +1255,12 @@ function App() {
   const endRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+  const deliveryMetricsRef = useRef(new Set<ReturnType<typeof createAnswerDeliveryMetric>>());
+  function clearDeliveryMetrics() {
+    for (const metric of deliveryMetricsRef.current) metric.dispose();
+    deliveryMetricsRef.current.clear();
+  }
+  useEffect(() => () => clearDeliveryMetrics(), []);
   const initialSessionIdRef = useRef(safeStorageGet(safeBrowserStorage('sessionStorage'), 'bakaut_session_id'));
   const [chatHydrationState, setChatHydrationState] = useState(() => initialChatHydrationState(initialSessionIdRef.current));
   const [chatRestoreAttempt, setChatRestoreAttempt] = useState(0);
@@ -1416,6 +1422,7 @@ function App() {
 
   function startNewChatAfterRestoreFailure() {
     if (busy) return;
+    clearDeliveryMetrics();
     const initialSessionId = sessionId ?? safeStorageGet(safeBrowserStorage('sessionStorage'), 'bakaut_session_id') ?? initialSessionIdRef.current;
     if (initialSessionId) abandonSavedChat(safeBrowserStorage('sessionStorage'), initialSessionId);
     initialSessionIdRef.current = null;
@@ -1442,6 +1449,7 @@ function App() {
         if (!response.ok && response.status !== 404) throw new Error('close failed');
       }
       if (previous) abandonSavedChat(safeBrowserStorage('sessionStorage'), previous);
+      clearDeliveryMetrics();
       initialSessionIdRef.current = null;
       setSessionId(null);
       setArchivedChats([]);
@@ -1517,6 +1525,7 @@ function App() {
     if (!text.trim() || busy || chatInteractionDisabled) return;
     setActiveTurn(null);
     const deliveryMetric = createAnswerDeliveryMetric();
+    deliveryMetricsRef.current.add(deliveryMetric);
     const userText = text.trim();
     if (options.clearInput !== false) setInput('');
     setError('');
@@ -1568,7 +1577,8 @@ function App() {
         ? payload.answer
         : '';
       deliveryMetric.observe(committedAnswer);
-      void deliveryMetric.report(apiBase, activeSessionId, payload?.assistantMessageId, visitorId);
+      void deliveryMetric.report(apiBase, activeSessionId, payload?.assistantMessageId, visitorId)
+        .finally(() => deliveryMetricsRef.current.delete(deliveryMetric));
       setMessages((current) => current.map((message) => (
         message.id === assistantId
           ? {
@@ -1587,6 +1597,8 @@ function App() {
            : message
        )));
     } catch (submitError) {
+      deliveryMetric.dispose();
+      deliveryMetricsRef.current.delete(deliveryMetric);
       if (submitError instanceof ChatMessageNotAcceptedError) {
         setMessages((current) => current.filter((message) => message.id !== userId && message.id !== assistantId));
         setInput(userText);

@@ -81,6 +81,55 @@ async function contactValue(value: string) {
 }
 
 describe('rendered widget session boundary', () => {
+  function deliveryFixture(initialVisibility: DocumentVisibilityState = 'visible') {
+    let visibility = initialVisibility; let clock = 1000; let nextId = 0;
+    const frames = new Map<number, FrameRequestCallback>();
+    vi.spyOn(document, 'visibilityState', 'get').mockImplementation(() => visibility);
+    vi.spyOn(performance, 'now').mockImplementation(() => clock);
+    vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => { frames.set(++nextId, callback); return nextId; });
+    vi.stubGlobal('cancelAnimationFrame', (id: number) => frames.delete(id));
+    fetcher.mockImplementation(async (url: string, options?: RequestInit) => {
+      if (url.endsWith('/messages') && options?.method === 'POST') {
+        return new Response('event: done\ndata: {"answer":"Готовый ответ","assistantMessageId":"saved-answer"}\n\n');
+      }
+      return new Response(null, { status: 200 });
+    });
+    return {
+      frames,
+      visible(value: DocumentVisibilityState) { visibility = value; document.dispatchEvent(new Event('visibilitychange')); },
+      clock(value: number) { clock = value; },
+      frame() { const [id, callback] = frames.entries().next().value!; frames.delete(id); callback(clock); },
+      posts: () => fetcher.mock.calls.filter(([url]) => url.endsWith('/delivery'))
+    };
+  }
+
+  it('reports the finished visible answer after hiding between frames without new stream events', async () => {
+    const metric = deliveryFixture();
+    await draft('Ответьте');
+    await act(async () => document.querySelector('form.composer')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })));
+    expect(document.body.textContent).toContain('Готовый ответ');
+    metric.frame(); metric.visible('hidden'); expect(metric.frames.size).toBe(0); expect(metric.posts()).toHaveLength(0);
+    metric.clock(2500); metric.visible('visible'); expect(metric.frames.size).toBe(1);
+    await act(async () => { metric.frame(); metric.frame(); });
+    expect(metric.posts()).toHaveLength(1);
+    expect(JSON.parse(String(metric.posts()[0][1]?.body))).toEqual({ firstUsefulContentMs: 1500 });
+    metric.visible('hidden'); metric.visible('visible');
+    expect(metric.frames.size).toBe(0); expect(metric.posts()).toHaveLength(1);
+  });
+
+  it.each(['unmount', 'new-chat'] as const)('disposes a finished hidden answer on %s', async mode => {
+    const metric = deliveryFixture('hidden');
+    await draft('Ответьте');
+    await act(async () => document.querySelector('form.composer')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })));
+    expect(document.body.textContent).toContain('Готовый ответ'); expect(metric.frames.size).toBe(0);
+    await act(async () => {
+      if (mode === 'unmount') root.unmount();
+      else (document.querySelector('.new-chat-button') as HTMLButtonElement).click();
+    });
+    metric.visible('visible');
+    expect(metric.frames.size).toBe(0); expect(metric.posts()).toHaveLength(0);
+  });
+
   it.each(['fresh', 'replay'] as const)('shows mixed cards in separate groups for a %s answer', async (mode) => {
     const cards = [
       { id: 'confirmed', name: 'Подтверждённый', price: 100, specs: {}, reasons: [], caveats: [] },

@@ -8,6 +8,7 @@ import { readFileSync } from 'node:fs';
 import { collectKnownProducts, modelProductContext, knownProductContext, knownProductHistory, knownProductHistoryNotice } from '../src/ai/platformProductContext.js';
 import { ControlledResponsesClient, ControlledResponseFailure } from '../src/ai/controlledResponsesClient.js';
 import type { Message } from '../src/shared/types.js';
+import { reviewDigest } from '../src/ai/catalogReviewState.js';
 
 vi.mock('../src/config.js', () => ({ config: { BAKAUT_MCP_TOKEN: 'mock-catalog-token', BAKAUT_CATALOG_URL: 'https://catalog-search-production.up.railway.app' } }));
 
@@ -1288,6 +1289,81 @@ describe('Controlled Responses original context', () => {
     expect(result.page?.items).toHaveLength(132);
     expect(result.knownProducts?.product_ids).toHaveLength(133);
     expect(transport.mock.calls.filter(([url, init]) => new URL(url).pathname === '/v1/responses' && init?.method === 'POST')).toHaveLength(1);
+  });
+  it('reads a frozen v1 plan after JSONB reordering and upgrades its state only on the next prepared plan', async () => {
+    const fixture = JSON.parse(readFileSync(new URL('./fixtures/catalog-review-v1-plan.json', import.meta.url), 'utf8'));
+    const content = { type: 'output_text', text: JSON.stringify(fixture.answer) };
+    const { client, transport } = harness({ completed: { output: [{ type: 'message', role: 'assistant', phase: 'final_answer', content: [content] }] } });
+    const plan = JSON.parse(JSON.stringify(fixture.plan, (_key, value) => value && typeof value === 'object' && !Array.isArray(value)
+      ? Object.fromEntries(Object.entries(value).reverse()) : value));
+    expect(plan.manifest.classification_format).toBe('identity_updates_v1');
+    const first = await client.wait(plan, 'resp_controlled');
+    const recovered = await client.wait(plan, 'resp_controlled');
+    expect(recovered.catalogReview).toEqual(first.catalogReview);
+    expect(JSON.parse(recovered.answer).selected).toEqual([plan.review.context.candidate_ids[0], plan.review.context.candidate_ids[2]]);
+    const webSearchReceipt = { responseId: 'resp_old_source', status: 'ok' as const, model: 'gpt-6-luna', usage: null,
+      toolFees: null, monetaryCost: null, costStatus: 'unknown' as const, findings: 'Saved source', sources: [] };
+    const next = await client.prepare({ message: 'Question', history: [], prefetch: plan.prefetch,
+      classificationIds: plan.review.context.candidate_ids, catalogReview: recovered.catalogReview, webSearchReceipt });
+    expect(next.manifest.classification_format).toBe('identity_updates_v2');
+    expect(next.review?.base?.digest).toBe(recovered.catalogReview!.digest);
+    content.text = JSON.stringify({ ...fixture.answer, source_review: [{ response_id: 'resp_old_source', assessment: 'Unexpected new shape' }] });
+    await expect(client.wait(plan, 'resp_controlled')).rejects.toThrow();
+    expect(transport.mock.calls.filter(([url, init]) => new URL(url).pathname === '/v1/responses' && init?.method === 'POST')).toHaveLength(0);
+  });
+
+  it.each([undefined, 'identity_updates_v3'])('rejects unsupported saved update version %s before transport', async version => {
+    const { plan } = JSON.parse(readFileSync(new URL('./fixtures/catalog-review-v1-plan.json', import.meta.url), 'utf8'));
+    plan.manifest.classification_format = version;
+    const { plan_sha256: _hash, ...manifest } = plan.manifest;
+    plan.manifest.plan_sha256 = reviewDigest({ ...plan, manifest });
+    const { client, transport } = harness();
+    await expect(client.wait(plan, 'resp_controlled')).rejects.toThrow('integrity');
+    expect(transport).not.toHaveBeenCalled();
+  });
+  it('rejects an update plan with a missing base before transport', async () => {
+    const { plan } = JSON.parse(readFileSync(new URL('./fixtures/catalog-review-v1-plan.json', import.meta.url), 'utf8'));
+    delete plan.review.base;
+    const { plan_sha256: _hash, ...manifest } = plan.manifest;
+    plan.manifest.plan_sha256 = reviewDigest({ ...plan, manifest });
+    const { client, transport } = harness();
+    await expect(client.wait(plan, 'resp_controlled')).rejects.toThrow('integrity');
+    expect(transport).not.toHaveBeenCalled();
+  });
+  it('recovers a saved update response with every original and all prior decisions, without another submission', async () => {
+    const prefetch = fullCards(3);
+    const ids = prefetch.items.map(item => item.product_id);
+    const content = { type: 'output_text', text: JSON.stringify({ answer: 'Первичная оценка',
+      candidate_decisions: Object.fromEntries(ids.map((id, i) => [id, { product_name: prefetch.items[i].name,
+        basis: `Original ${i}`, decision: i === 0 ? 'selected' : 'rejected' }])),
+      comparison_ids: [], recommendation_status: 'confirmed', selection_snapshots: [], availability: null }) };
+    const { client, transport } = harness({ completed: { output: [{ type: 'message', role: 'assistant', phase: 'final_answer', content: [content] }] } });
+    const args = { message: 'Подбор', history: [], prefetch, classificationIds: ids };
+    const initial = await client.wait(await client.prepare(args), 'resp_controlled');
+    expect(Object.keys(initial.catalogReview!.decisions)).toEqual(ids);
+    const receipt = { responseId: 'resp_source', status: 'ok' as const, model: 'gpt-6-luna', usage: null,
+      toolFees: null, monetaryCost: null, costStatus: 'unknown' as const, findings: 'Дополнительные факты', sources: [] };
+    const plan = await client.prepare({ ...args, catalogReview: initial.catalogReview, webSearchReceipt: receipt });
+    expect(plan.manifest.classification_format).toBe('identity_updates_v2');
+    expect((plan.request.text as any).format.schema.properties.candidate_updates.items.properties.product_id.enum).toEqual(ids);
+    expect(plan.prefetch.items).toEqual(prefetch.items);
+    expect(JSON.stringify(plan.request.input)).toContain(initial.catalogReview!.digest);
+    expect(JSON.stringify(plan.request.input)).toContain('resp_source');
+    content.text = JSON.stringify({ base_digest: initial.catalogReview!.digest, source_review: [{ response_id: 'resp_source', assessment: 'Применим к Model 2' }],
+      candidate_updates: [{ product_id: ids[2], product_name: 'Model 2', basis: 'Документ точного исполнения', decision: 'selected' }],
+      answer: 'Подбор обновлён', comparison_ids: [], recommendation_status: 'confirmed', selection_snapshots: [], availability: null });
+    await client.submit(plan, 'update');
+    const saved = JSON.parse(JSON.stringify(plan, (_key, value) => value && typeof value === 'object' && !Array.isArray(value)
+      ? Object.fromEntries(Object.entries(value).reverse()) : value));
+    const revised = await client.wait(saved, 'resp_controlled');
+    const recovered = await client.wait(saved, 'resp_controlled');
+    expect(recovered.catalogReview).toEqual(revised.catalogReview);
+    expect(JSON.parse(recovered.answer).selected).toEqual([ids[0], ids[2]]);
+    expect(recovered.catalogReview!.decisions[ids[1]]).toEqual(initial.catalogReview!.decisions[ids[1]]);
+    expect(transport.mock.calls.filter(([url, init]) => new URL(url).pathname === '/v1/responses' && init?.method === 'POST')).toHaveLength(1);
+    const fresh = await client.prepare({ ...args, message: 'Другие условия', catalogReview: recovered.catalogReview, webSearchReceipt: receipt });
+    expect(fresh.manifest.classification_format).toBe('identity_facts_v1');
+    expect(fresh.review?.base).toBeUndefined();
   });
   it('retains the completed discovery stage and full candidate identities after external research', async () => {
     const { client } = harness();

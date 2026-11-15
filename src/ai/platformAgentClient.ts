@@ -1,5 +1,5 @@
 import { setTimeout as delay } from 'node:timers/promises';
-import { diagnosticAbortSource, diagnosticError, diagnosticEvent, diagnosticSpan } from '../observability/diagnostics.js';
+import { diagnosticAbortSource, diagnosticError, diagnosticEvent, diagnosticSpan, diagnosticProviderResponse } from '../observability/diagnostics.js';
 import { ALL_CATALOG_MATCHES, selectsAllCatalogMatches } from './catalogDecision.js';
 import { readFullKnownProducts, type ExactMentionPrefetch } from './fullCatalogClient.js';
 import { assertCandidateDiscoveryCoverage, collectKnownProducts, contextFromPrefetch, modelProductContext } from './platformProductContext.js';
@@ -400,11 +400,18 @@ export class PlatformAgentClient {
     }
     const method = body === undefined ? 'GET' : 'POST';
     const endpoint = endpointTemplate(path);
+    const submittedEvents = object(body)?.events;
+    const submission = method === 'POST' && (endpoint === '/agents/sessions' ||
+      (endpoint === '/agents/sessions/:sessionId/events' && Array.isArray(submittedEvents) && submittedEvents.some(event => object(event)?.type === 'agent.session.input.message')));
+    const segments = path.split('?')[0].split('/');
+    const fields = { method, endpoint, component: 'platform', operation: method === 'GET' ? 'read' : submission ? 'submit' : 'cancel',
+      agentSessionId: path.startsWith('/agents/') ? providerId(segments[3]) : undefined,
+      agentTurnId: providerId(path.startsWith('/responses/') ? segments[2] : segments[5]) };
     return diagnosticSpan('provider.http', async () => {
       const started = performance.now();
-      const segments = path.split('?')[0].split('/');
-      const metrics: Record<string, unknown> = { method, endpoint, headersMs: 0, bodyMs: 0, parseMs: 0,
-        agentSessionId: providerId(segments[3]), agentTurnId: providerId(segments[5]) };
+      const metrics: Record<string, unknown> = { headersMs: 0, bodyMs: 0, parseMs: 0,
+        ...fields };
+      if (submission) diagnosticEvent('provider.submit.started', metrics);
       let phase = 'headers';
       let phaseStarted = started;
       try {
@@ -456,6 +463,9 @@ export class PlatformAgentClient {
         metrics.parseMs = performance.now() - phaseStarted;
         phase = 'complete';
         if (endpoint === '/agents/sessions') metrics.agentSessionId = providerId(result.id);
+        if (submission) diagnosticEvent('provider.submit.acknowledged', { ...metrics, knownOutcome: 'http_acknowledged' });
+        if (endpoint === '/responses/:responseId' || endpoint === '/responses/:responseId/cancel' ||
+            endpoint === '/agents/sessions/:sessionId/turns/:turnId') diagnosticProviderResponse(result, 'platform');
         const agent = object(result.agent);
         const model = agent?.model ?? result.model;
         if (documentedModel(model)) {
@@ -464,6 +474,7 @@ export class PlatformAgentClient {
         const entries = Array.isArray(result.data) ? result.data : [];
         if (endpoint.endsWith('/turns')) for (const raw of entries) {
           const turn = object(raw);
+          diagnosticProviderResponse(turn, 'platform');
           diagnosticEvent('provider.turn.observed', { agentTurnId: providerId(turn?.id),
             remoteStatus: known(turn?.status, remoteStatuses),
             ...reportedErrorFields(turn?.error) });
@@ -478,6 +489,7 @@ export class PlatformAgentClient {
         metrics.outcome = 'success';
         return result;
       } catch (error) {
+        if (submission) diagnosticEvent('provider.submit.outcome', { ...metrics, knownOutcome: 'unknown', aborted: signal?.aborted === true });
         if (phase !== 'complete') metrics[`${phase}Ms`] = performance.now() - phaseStarted;
         metrics.outcome = signal?.aborted ? 'aborted' : 'failure';
         diagnosticError('provider.http.failure', error, { ...metrics, stage: phase,
@@ -486,7 +498,7 @@ export class PlatformAgentClient {
       } finally {
         diagnosticEvent('provider.http.response', { ...metrics, durationMs: performance.now() - started });
       }
-    }, { method, endpoint });
+    }, fields);
   }
 
   async run(input: { message: string; sessionId?: string; idempotencyKey: string; signal?: AbortSignal;
