@@ -117,8 +117,18 @@ function embedScript(baseUrl: string) {
   function showLauncherImage() {
     if (launcherImage.naturalWidth) launcherImage.style.display = 'block';
   }
+  function useBackupImage() {
+    if (managerPhoto || launcherImage.dataset.backupTried === '1') return;
+    launcherImage.dataset.backupTried = '1';
+    launcherImage.src = trimTrailingSlashes(baseUrl) + '/assets/equipment-v4-' + equipmentType + '.png';
+  }
   launcherImage.addEventListener('load', showLauncherImage);
-  if (launcherImage.complete) showLauncherImage();
+  launcherImage.addEventListener('error', useBackupImage);
+  window.setTimeout(function () { if (!launcherImage.naturalWidth) useBackupImage(); }, 3000);
+  if (launcherImage.complete) {
+    if (launcherImage.naturalWidth) showLauncherImage();
+    else useBackupImage();
+  }
 
   var panel = document.createElement('div');
   panel.id = 'bakaut-ai-widget-panel';
