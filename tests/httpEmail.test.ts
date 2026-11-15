@@ -95,9 +95,85 @@ describe('sendLeadEmail', () => {
   afterEach(() => {
     vi.resetModules();
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
     restoreEnv();
   });
 
+  it.each([
+    ['https://api.resend.com/emails', 'ascii'], ['https://api.resend.com/emails', 'unicode'],
+    ['https://mail-gateway.example.test/send', 'ascii'], ['https://mail-gateway.example.test/send', 'unicode']
+  ])('keeps the full agreed %s question in visible email text (%s) without sending', async (url, style) => {
+    const blocked = vi.fn(async () => { throw new Error('Network forbidden in formatter regression'); });
+    vi.stubGlobal('fetch', blocked); vi.doMock('undici', () => ({ fetch: blocked }));
+    clearEmailEnv(); Object.assign(process.env, { EMAIL_HTTP_URL: url, EMAIL_HTTP_METHOD: 'POST',
+      EMAIL_FROM: 'fixture@example.org', LEADS_TO_EMAIL: 'manager@example.org' });
+    const tail = 'CRITICAL: NOT FOR INDOOR USE; EXHAUST MUST STAY OUTSIDE';
+    const question = style === 'ascii' ? 'Context '.repeat(140) + tail
+      : 'A'.repeat(1800) + '🛠'.repeat(600) + '\nDO NOT CALL; EMAIL ONLY; ' + tail;
+    const historyCanary = 'PRIVATE_UNRELATED_HISTORY_CANARY';
+    const { prepareLeadEmailRequest } = await import('../src/email/httpEmail.js');
+    const snapshot = prepareLeadEmailRequest(lead({ question }), { session: session(),
+      messages: [...messages(), { ...messages()[0], content: 'Old context '.repeat(100) + historyCanary }],
+      handoff: { buyerQuestion: question, preferredContact: 'message', purpose: 'Уточнение задачи' } });
+    expect('version' in snapshot).toBe(true); if (!('version' in snapshot)) throw new Error('Missing local snapshot');
+    const wire = JSON.parse(snapshot.body);
+    expect(wire.text).toContain(`Исходный вопрос покупателя: ${question}`);
+    expect(wire.text).toContain(tail); expect(wire.text).not.toContain(historyCanary);
+    expect(wire.text).toContain('SUMMARY:'); expect(wire.text).toContain('Предпочтительный способ связи: написать');
+    if (snapshot.provider === 'resend') expect(Object.keys(wire).sort()).toEqual(['from', 'subject', 'text', 'to']);
+    expect(blocked).not.toHaveBeenCalled();
+  });
+
+  it('preserves full outbox scope in the real wire snapshot and reuses its bytes on retry', async () => {
+    const blocked = vi.fn(async () => { throw new Error('External network and SQL forbidden'); });
+    vi.stubGlobal('fetch', blocked);
+    vi.doMock('../src/db/pool.js', () => ({ pool: { query: blocked, connect: blocked } }));
+    let attempts = 0;
+    const fetchMock = vi.fn(async (_url: string, _request: RequestInit) => {
+      if (++attempts === 1) throw new Error('Offline first delivery interrupted');
+      return Response.json({ id: 'offline-provider-id' });
+    });
+    vi.doMock('undici', () => ({ fetch: fetchMock }));
+    clearEmailEnv(); Object.assign(process.env, { EMAIL_HTTP_URL: 'https://api.resend.com/emails', EMAIL_HTTP_METHOD: 'POST',
+      EMAIL_FROM: 'fixture@example.org', LEADS_TO_EMAIL: 'manager@example.org' });
+    const { processLeadOutboxItem } = await import('../src/ai/leadOutbox.js');
+    const question = 'A'.repeat(1800) + '🛠'.repeat(600) + '\nCRITICAL: NOT FOR INDOOR USE; EXHAUST MUST STAY OUTSIDE; EMAIL ONLY';
+    const productIds = ['a'.repeat(24), 'b'.repeat(24)];
+    let saved: import('../src/email/httpEmail.js').LeadEmailRequestSnapshot | undefined;
+    const conversations = { getSession: vi.fn(async () => session()), listMessages: vi.fn(async () => messages()) };
+    const leads = {
+      getLead: vi.fn(async () => lead({ question })),
+      prepareLeadOutboxDispatch: vi.fn(async (input: { snapshot: import('../src/email/httpEmail.js').LeadEmailRequestSnapshot }) => {
+        saved ??= structuredClone(input.snapshot); return { requestSnapshot: structuredClone(saved) };
+      }),
+      markLeadOutboxFailed: vi.fn(async () => ({ id: 'outbox' })), markLeadOutboxSent: vi.fn(async () => ({ id: 'outbox' }))
+    };
+    const item = { id: 'outbox', leadId: 'lead-1', sessionId: 'session-1', turnId: 'turn-1', destination: 'lead_email',
+      payload: { question, productIds, purpose: 'availability', preferredContact: 'message' }, status: 'sending', attemptCount: 1, leaseToken: 'lease-1',
+      createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
+    const run = (current: unknown) => processLeadOutboxItem({ item: current as never, conversations: conversations as never, leads: leads as never });
+    expect(await run(item)).toMatchObject({ ok: false, committed: true });
+    expect(saved).toBeDefined();
+    const original = structuredClone(saved!);
+    expect(original.productIds).toEqual(productIds);
+    expect(JSON.parse(original.body).text).toContain(`Исходный вопрос покупателя: ${question}`);
+    expect(JSON.parse(original.body).text).toContain(`Товары заявки (ID каталога):\n- ${productIds[0]}\n- ${productIds[1]}`);
+    expect(Object.keys(JSON.parse(original.body)).sort()).toEqual(['from', 'subject', 'text', 'to']);
+    expect(leads.prepareLeadOutboxDispatch.mock.invocationCallOrder[0]).toBeLessThan(fetchMock.mock.invocationCallOrder[0]);
+    const { config } = await import('../src/config.js'); config.EMAIL_FROM = 'changed@example.org';
+    leads.getLead.mockResolvedValue(lead({ question: 'Changed lead must not rebuild the snapshot' }));
+    conversations.listMessages.mockResolvedValue([{ ...messages()[0], content: 'Changed history' }]);
+    expect(await run({ ...item, attemptCount: 2, firstAttemptAt: new Date().toISOString(), leaseToken: 'lease-2',
+      requestSnapshot: structuredClone(original), payload: { question: 'Changed payload', productIds: ['not-a-catalog-id'] } })).toEqual({ ok: true });
+    expect(saved).toEqual(original);
+    expect(leads.getLead).toHaveBeenCalledTimes(1); expect(conversations.listMessages).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    for (const [, request] of fetchMock.mock.calls) {
+      expect(request.body).toBe(original.body);
+      expect(request.headers).toMatchObject({ 'Idempotency-Key': original.idempotencyKey });
+    }
+    expect(blocked).not.toHaveBeenCalled();
+  });
   it('treats an empty EMAIL_HTTP_URL as not configured', async () => {
     const fetchMock = vi.fn();
     vi.doMock('undici', () => ({ fetch: fetchMock }));

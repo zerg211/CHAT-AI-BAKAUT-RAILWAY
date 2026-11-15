@@ -27,6 +27,7 @@ interface EmailMessageContext {
 }
 
 interface EmailHandoffContext {
+  productIds?: string[];
   purpose?: string | null;
   buyerQuestion?: string | null;
   preferredContact?: 'message' | 'call' | null;
@@ -175,7 +176,8 @@ function leadText(
     `Email: ${lead.email || 'не указан'}`,
     contactPreference ? `Предпочтительный способ связи: ${contactPreference}` : null,
     handoff?.purpose ? `Цель обращения: ${compactText(handoff.purpose, 500)}` : null,
-    handoff?.buyerQuestion ? `Исходный вопрос покупателя: ${compactText(handoff.buyerQuestion, 700)}` : null,
+    handoff?.buyerQuestion ? `Исходный вопрос покупателя: ${handoff.buyerQuestion}` : null,
+    handoff?.productIds?.length ? `Товары заявки (ID каталога):\n${handoff.productIds.map(id => `- ${id}`).join('\n')}` : null,
     '',
     `SUMMARY: ${summary}`,
     '',
@@ -193,6 +195,7 @@ function leadText(
 }
 
 export interface LeadEmailRequestSnapshot {
+  productIds?: string[];
   version: 1;
   url: string;
   method: string;
@@ -260,7 +263,8 @@ export function prepareLeadEmailRequest(
 
   return {version: 1, url: config.EMAIL_HTTP_URL, method: config.EMAIL_HTTP_METHOD,
     body: JSON.stringify(body), idempotencyKey: `bakaut-lead-${lead.id}`,
-    provider: isResendEndpoint(config.EMAIL_HTTP_URL) ? 'resend' : 'other'};
+    provider: isResendEndpoint(config.EMAIL_HTTP_URL) ? 'resend' : 'other',
+    ...(context.handoff?.productIds ? { productIds: [...context.handoff.productIds] } : {})};
 }
 
 export async function sendPreparedLeadEmail(snapshot: LeadEmailRequestSnapshot): Promise<EmailResult> {

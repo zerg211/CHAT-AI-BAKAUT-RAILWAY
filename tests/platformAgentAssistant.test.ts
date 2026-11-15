@@ -2,6 +2,7 @@ import { runWithDiagnostics, type DiagnosticEvent } from '../src/observability/d
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { acceptCatalogReview, reviewContext } from '../src/ai/catalogReviewState.js';
+import { AgentAnswerRejectedError } from '../src/ai/agentAnswerRejected.js';
 
 const state = vi.hoisted(() => ({
   price: vi.fn(), history: vi.fn(), run: vi.fn(), wait: vi.fn(), settle: vi.fn(), submit: vi.fn(), full: vi.fn(), prefetch: vi.fn(), known: vi.fn(), recheck: vi.fn(), checkpoints: vi.fn(), renew: vi.fn(), query: vi.fn(), transactionQuery: vi.fn(), release: vi.fn(),
@@ -925,6 +926,141 @@ describe('site chat and platform agent', () => {
     expect(response.availabilityReceipt).toMatchObject({ outcome: 'offered', warehouseChecked: false });
     expect(state.controlledSubmit).toHaveBeenCalledOnce();
     expect(state.run).not.toHaveBeenCalled();
+  });
+  it('propagates invalid availability to the orchestrator and rolls back without publishing a false result', async () => {
+    vi.stubGlobal('fetch', async () => { throw new Error('Network forbidden in availability rejection test'); });
+    const onDelta = vi.fn();
+    state.run.mockResolvedValueOnce({ sessionId: 'agent-session', turnId: 'response-invalid', model: 'gpt-6-luna',
+      usage: { input_tokens: 100, output_tokens: 20, total_tokens: 120 },
+      answer: JSON.stringify({ answer_contract: 'consultation_receipt_v1', answer: 'Консультация.', selected: [], rejected: [], uncertain: [],
+        selection_snapshots: [], availability: { action: 'capture', continueRequest: false, consentGranted: true,
+          consentQuote: 'Свяжитесь со мной', requestSummary: 'x'.repeat(3001), productIds: [], preferredContact: null } }) });
+    try {
+      await expect(new PlatformAgentAssistant(repo).generateAnswer({ sessionId: 'chat', turnId: '00000000-0000-4000-8000-000000000009',
+        userMessage: 'Свяжитесь со мной +7 900 000-10-03', onDelta })).rejects.toBeInstanceOf(AgentAnswerRejectedError);
+      expect(state.transactionQuery.mock.calls.map(call => call[0])).toContain('ROLLBACK');
+      expect(state.transactionQuery.mock.calls.map(call => call[0])).not.toContain('COMMIT');
+      expect(state.transactionQuery.mock.calls.some(([sql]) => String(sql).startsWith('SAVEPOINT'))).toBe(false);
+      expect(state.commitMessage).not.toHaveBeenCalled(); expect(state.createLead).not.toHaveBeenCalled(); expect(onDelta).not.toHaveBeenCalled();
+      expect(recordOpenAIUsageOnce).toHaveBeenCalledWith('platform_agent', 'gpt-6-luna', expect.objectContaining({ id: 'response-invalid' }));
+    } finally { vi.unstubAllGlobals(); }
+  });
+  it('reaches retained v2 decisions from real category discovery and recovers the same continuation response', async () => {
+    const { PlatformAgentClient: AgentClient } = await vi.importActual<typeof import('../src/ai/platformAgentClient.js')>('../src/ai/platformAgentClient.js');
+    const { ControlledResponsesClient: ResponsesClient } = await vi.importActual<typeof import('../src/ai/controlledResponsesClient.js')>('../src/ai/controlledResponsesClient.js');
+    const { ControlledWebSearchProvider: WebClient } = await vi.importActual<typeof import('../src/ai/controlledWebSearchProvider.js')>('../src/ai/controlledWebSearchProvider.js');
+    const fixture = JSON.parse(readFileSync(new URL('./fixtures/catalog-review-132.json', import.meta.url), 'utf8'));
+    const items = fixture.candidates.map((candidate: { id: string; name: string; facts: string[] }) => ({
+      product_id: candidate.id, name: candidate.name, price_rub: 100, attributes: { facts: candidate.facts },
+      description: 'Offline fixture card', documents: [], original_card: candidate }));
+    const ids = items.map((item: { product_id: string }) => item.product_id) as string[];
+    expect(ids).toHaveLength(132);
+    const entries = new Map<string, any>();
+    const previous = { BAKAUT_MCP_TOKEN: config.BAKAUT_MCP_TOKEN,
+      CONTROLLED_WEB_SEARCH_ENABLED: config.CONTROLLED_WEB_SEARCH_ENABLED, CONTROLLED_WEB_SEARCH_FEES_APPROVED: config.CONTROLLED_WEB_SEARCH_FEES_APPROVED };
+    Object.assign(config, { BAKAUT_MCP_TOKEN: 'offline-token', CONTROLLED_WEB_SEARCH_ENABLED: true, CONTROLLED_WEB_SEARCH_FEES_APPROVED: true });
+    state.query.mockResolvedValue({ rows: [] });
+    state.known.mockImplementation(async context => {
+      expect(context).toEqual({ source_revision: 'rev', product_ids: ids });
+      return { source_revision: 'rev', completeness: 'full', items: structuredClone(items) };
+    });
+    state.checkpoints.mockImplementation(async () => [...entries].map(([checkpoint, payload]) => ({ checkpoint, payload: structuredClone(payload) })));
+    vi.mocked(repo.upsertTurnCheckpoint).mockImplementation(async entry => { entries.set(entry.checkpoint, structuredClone(entry.payload)); return undefined as never; });
+    const globalTransport = vi.fn(async (url: string | URL, init?: RequestInit) => {
+      if (String(url) === 'https://catalog-search-production.up.railway.app/health' && !init?.method) return Response.json({ status: 'ok', revision: 'rev' });
+      throw new Error('External network forbidden in orchestration regression');
+    });
+    vi.stubGlobal('fetch', globalTransport);
+    const common = { answer_contract: 'consultation_receipt_v1', answer: 'Предварительный вывод по задаче.', comparison_ids: [],
+      recommendation_status: 'confirmed', selection_snapshots: [], availability: null,
+      answer_review: { verdict: 'complete', publication: 'ready', rationale: 'Готовый ответ.' } };
+    const message = (body: unknown) => ({ type: 'message', role: 'assistant', status: 'completed',
+      content: [{ type: 'output_text', text: JSON.stringify(body) }] });
+    const response = (id: string, output: unknown[]) => Response.json({ id, model: 'gpt-6-luna', status: 'completed', output,
+      usage: { input_tokens: 100, output_tokens: 20, total_tokens: 120 } });
+    const requests: any[] = []; let deltaReads = 0;
+    const transport = vi.fn(async (url: string | URL, init?: RequestInit) => {
+      const path = new URL(url).pathname;
+      if (path === '/v1/agents/agent-test') return Response.json({ model: 'gpt-6-luna', instructions: 'Offline saved agent' });
+      if (path === '/v1/agents/sessions' && init?.method === 'POST') return Response.json({ id: 'session_fixture' });
+      if (path === '/v1/agents/sessions/session_fixture') return Response.json({ agent: { model: 'gpt-6-luna' } });
+      if (path.endsWith('/session_fixture/turns')) return Response.json({ data: [{ id: 'turn_discovery', status: 'completed' }] });
+      if (path.endsWith('/turn_discovery/items')) return Response.json({ data: [
+        { type: 'mcp_call', turn_id: 'turn_discovery', server_label: 'bakaut_catalog', name: 'semantic_select_products', status: 'completed',
+          output: { status: 'ok', source_revision: 'rev', selection_mode: 'candidate_discovery', complete: true,
+            suitability_decided: false, candidate_ids: ids, candidate_count: ids.length } },
+        { ...message({ ...common, selected: [], rejected: [], uncertain: [], recommendation_status: 'not_confirmed' }), turn_id: 'turn_discovery' }] });
+      if (path === '/v1/responses/input_tokens') return Response.json({ object: 'response.input_tokens', input_tokens: 100 });
+      if (path === '/v1/responses' && init?.method === 'POST') {
+        const body = JSON.parse(String(init.body)); requests.push(body);
+        const id = body.tools?.some((tool: { type: string }) => tool.type === 'web_search') ? 'resp_source'
+          : body.text.format.schema.properties.candidate_updates ? 'resp_delta' : 'resp_facts';
+        return Response.json({ id, model: 'gpt-6-luna', status: 'queued' });
+      }
+      if (path === '/v1/responses/resp_facts') return response('resp_facts', [message({ ...common,
+        candidate_decisions: Object.fromEntries(items.map((item: { product_id: string; name: string }, index: number) => [item.product_id,
+          { product_name: item.name, basis: `Исходная тестовая оценка ${item.product_id}`, decision: index === 0 ? 'selected' : index === 1 ? 'rejected' : 'uncertain' }])),
+        web_search_intent: { query: 'Применимые документы для задачи', rationale: 'Проверить решающие факты' } })]);
+      if (path === '/v1/responses/resp_source') return response('resp_source', [{ type: 'web_search_call', status: 'completed' },
+        { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'Offline source findings', annotations: [
+          { type: 'url_citation', url: 'https://manufacturer.example/manual', title: 'Offline source' }] }] }]);
+      if (path === '/v1/responses/resp_delta') {
+        if (++deltaReads === 1) throw new Error('Offline continuation read interrupted');
+        const base = entries.get('controlled_web_continuation').plan.review.base;
+        return response('resp_delta', [message({ ...common, base_digest: base.digest,
+          source_review: [{ response_id: 'resp_source', assessment: 'Тестовая оценка применимости источника' }],
+          candidate_updates: items.slice(0, 2).map((item: { product_id: string; name: string }, index: number) => ({
+            product_id: item.product_id, product_name: item.name, basis: `Пересмотренная тестовая оценка ${item.product_id}`,
+            decision: index === 0 ? 'rejected' : 'selected' })), web_search_intent: null })]);
+      }
+      throw new Error(`Unexpected offline transport path: ${path}`);
+    }) as unknown as typeof fetch;
+    try {
+      const agent = new AgentClient('offline-key', 'agent-test', [], transport);
+      const client = new ResponsesClient('offline-key', 'agent-test', transport);
+      const web = new WebClient('offline-key', 'gpt-6-luna', 1000, transport);
+      state.run.mockImplementation(agent.run.bind(agent));
+      state.controlledPrepare.mockImplementation(client.prepare.bind(client));
+      state.controlledSubmit.mockImplementation(client.submit.bind(client));
+      state.controlledWait.mockImplementation(client.wait.bind(client));
+      state.webSubmit.mockImplementation(web.submit); state.webRead.mockImplementation(web.read);
+      const assistant = new PlatformAgentAssistant(repo);
+      await expect(assistant.generateAnswer({ sessionId: 'chat', turnId: 'turn', userMessage: 'Подберите генераторы под задачу' }))
+        .rejects.toThrow('transport outcome is unknown');
+      expect(state.prefetch).toHaveBeenCalledWith('Подберите генераторы под задачу', undefined);
+      expect(entries.get('platform_agent_submission')).toMatchObject({ phase: 'catalog_recompose',
+        repair: { reason: 'category_review', correctedIds: ids }, plan: { manifest: { classification_format: 'identity_facts_v1' } } });
+      const base = entries.get('catalog_review:resp_facts').state;
+      expect(Object.keys(base.decisions)).toHaveLength(132);
+      const continuation = entries.get('controlled_web_continuation');
+      expect(continuation).toMatchObject({ responseId: 'resp_delta', attempted: true,
+        plan: { manifest: { classification_format: 'identity_updates_v2', classification_ids: ids }, review: { base } } });
+      expect(state.commitMessage).not.toHaveBeenCalled();
+      const posts = requests.length; state.getTurn.mockResolvedValue({ id: 'turn', status: 'answering', deadlineAt: null });
+      const result = await assistant.recoverTurn({ sessionId: 'chat', turnId: 'turn' });
+      expect(requests).toHaveLength(posts); expect(deltaReads).toBe(2);
+      expect(state.controlledWait.mock.calls.map(call => call[1])).toEqual(['resp_facts', 'resp_delta', 'resp_delta']);
+      const final = result.metadata!.catalogReviewState as typeof base;
+      expect(final).toEqual(entries.get('catalog_review:resp_delta').state);
+      expect(final.sources.map((source: { response_id: string }) => source.response_id)).toEqual(['resp_source']);
+      expect(final.decisions[ids[0]].decision).toBe('rejected'); expect(final.decisions[ids[1]].decision).toBe('selected');
+      for (const id of ids.slice(2)) expect(final.decisions[id]).toEqual(base.decisions[id]);
+      expect(Object.keys(final.decisions)).toEqual(ids);
+      expect(result.productCards.map(card => card.id)).toEqual(ids.slice(1));
+      expect(result.cardDisplay).toMatchObject({ initialVisibleCount: 10, hasMore: false });
+      expect(state.commitMessage).toHaveBeenCalledOnce();
+      expect(state.commitMessage.mock.calls[0][0].metadata.catalogReviewState).toEqual(final);
+      expect(requests.filter(body => body.tools?.some((tool: { type: string }) => tool.type === 'web_search'))).toHaveLength(1);
+      const delta = requests.find(body => body.text?.format?.schema?.properties?.candidate_updates);
+      const facts = requests.find(body => body.text?.format?.schema?.properties?.candidate_decisions);
+      expect(Object.keys(facts.text.format.schema.properties.candidate_decisions.properties)).toEqual(ids);
+      expect(JSON.stringify(delta.input)).toContain(base.digest);
+      expect(delta.text.format.schema.properties.candidate_updates.items.properties.product_id.enum).toEqual(ids);
+      expect(globalTransport.mock.calls.every(([url]) => String(url) === 'https://catalog-search-production.up.railway.app/health')).toBe(true);
+    } finally {
+      Object.assign(config, previous); vi.unstubAllGlobals();
+      vi.mocked(repo.upsertTurnCheckpoint).mockImplementation(async () => undefined as never);
+    }
   });
   it('drives the real controlled client, parser and assistant together through one original-preserving generation', async () => {
     const { ControlledResponsesClient: RealClient } = await vi.importActual<typeof import('../src/ai/controlledResponsesClient.js')>('../src/ai/controlledResponsesClient.js');
